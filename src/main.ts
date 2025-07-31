@@ -13,10 +13,10 @@ app.mount('#app')
 if ('serviceWorker' in navigator && window.location.protocol === 'https:') {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/service-worker.js')
-      .then(registration => {
+      .then((registration: ServiceWorkerRegistration) => {
         console.log('ServiceWorker registration successful:', registration.scope);
       })
-      .catch(err => {
+      .catch((err: Error) => {
         console.log('ServiceWorker registration failed:', err);
       });
   });

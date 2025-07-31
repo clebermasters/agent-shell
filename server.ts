@@ -1,13 +1,25 @@
-const express = require('express');
-const https = require('https');
-const fs = require('fs');
-const WebSocket = require('ws');
-const pty = require('node-pty');
-const { spawn, exec } = require('child_process');
-const path = require('path');
-const cors = require('cors');
-const os = require('os');
-const { promisify } = require('util');
+import express, { Request, Response } from 'express';
+import https from 'https';
+import fs from 'fs';
+import WebSocket from 'ws';
+import * as pty from 'node-pty';
+import { spawn, exec } from 'child_process';
+import path from 'path';
+import cors from 'cors';
+import os from 'os';
+import { promisify } from 'util';
+import type { IPty } from 'node-pty';
+import type { Server } from 'http';
+import type { 
+  WebSocketMessage,
+  TmuxSession,
+  TmuxWindow,
+  CreateSessionRequest,
+  RenameSessionRequest,
+  CreateWindowRequest,
+  RenameWindowRequest,
+  SystemStats
+} from './backend-types';
 
 const execAsync = promisify(exec);
 
@@ -16,9 +28,14 @@ const port = 3000;
 const httpsPort = 3443;
 
 // HTTPS configuration
-const httpsOptions = {
-  key: fs.readFileSync(path.join(__dirname, 'certs', 'key.pem')),
-  cert: fs.readFileSync(path.join(__dirname, 'certs', 'cert.pem'))
+// When running from dist/, certs will be in the parent directory
+const certsDir = process.env.NODE_ENV === 'development' 
+  ? path.join(__dirname, 'certs')
+  : path.join(__dirname, '..', 'certs');
+
+const httpsOptions: https.ServerOptions = {
+  key: fs.readFileSync(path.join(certsDir, 'key.pem')),
+  cert: fs.readFileSync(path.join(certsDir, 'cert.pem'))
 };
 
 app.use(cors());
@@ -26,19 +43,19 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // System stats endpoint
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', (_req: Request, res: Response) => {
   const cpus = os.cpus();
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
   const usedMem = totalMem - freeMem;
   const loadAvg = os.loadavg();
   
-  res.json({
+  const stats: SystemStats = {
     cpu: {
       cores: cpus.length,
       model: cpus[0].model,
       usage: loadAvg[0],
-      loadAvg: loadAvg
+      loadAvg: loadAvg as [number, number, number]
     },
     memory: {
       total: totalMem,
@@ -50,11 +67,13 @@ app.get('/api/stats', (req, res) => {
     hostname: os.hostname(),
     platform: os.platform(),
     arch: os.arch()
-  });
+  };
+
+  res.json(stats);
 });
 
 // REST API endpoints
-app.get('/api/sessions', async (req, res) => {
+app.get('/api/sessions', async (_req: Request, res: Response) => {
   // First check if tmux server is running
   try {
     await execAsync('tmux list-sessions 2>/dev/null');
@@ -78,7 +97,7 @@ app.get('/api/sessions', async (req, res) => {
       return;
     }
     
-    const sessions = output.trim().split('\n').filter(line => line)
+    const sessions: TmuxSession[] = output.trim().split('\n').filter(line => line)
       .map(line => {
         const [name, attached, created, windows, dimensions] = line.split(':');
         return { 
@@ -94,7 +113,7 @@ app.get('/api/sessions', async (req, res) => {
   });
 });
 
-app.post('/api/sessions/:name/kill', (req, res) => {
+app.post('/api/sessions/:name/kill', (req: Request, res: Response) => {
   const { name } = req.params;
   const killCmd = spawn('tmux', ['kill-session', '-t', name]);
 
@@ -107,7 +126,7 @@ app.post('/api/sessions/:name/kill', (req, res) => {
   });
 });
 
-app.post('/api/sessions/:name/rename', (req, res) => {
+app.post('/api/sessions/:name/rename', (req: Request<{ name: string }, any, RenameSessionRequest>, res: Response) => {
   const { name } = req.params;
   const { newName } = req.body;
   
@@ -122,7 +141,7 @@ app.post('/api/sessions/:name/rename', (req, res) => {
   });
 });
 
-app.post('/api/sessions', async (req, res) => {
+app.post('/api/sessions', async (req: Request<any, any, CreateSessionRequest>, res: Response) => {
   const { name } = req.body;
   const sessionName = name || `session-${Date.now()}`;
   
@@ -154,7 +173,7 @@ app.post('/api/sessions', async (req, res) => {
 });
 
 // Window management endpoints
-app.get('/api/sessions/:name/windows', (req, res) => {
+app.get('/api/sessions/:name/windows', (req: Request, res: Response) => {
   const { name } = req.params;
   const listCmd = spawn('tmux', ['list-windows', '-t', name, '-F', '#{window_index}:#{window_name}:#{window_active}:#{window_panes}']);
 
@@ -170,7 +189,7 @@ app.get('/api/sessions/:name/windows', (req, res) => {
       return;
     }
     
-    const windows = output.trim().split('\n').filter(line => line)
+    const windows: TmuxWindow[] = output.trim().split('\n').filter(line => line)
       .map(line => {
         const [index, name, active, panes] = line.split(':');
         return { 
@@ -185,7 +204,7 @@ app.get('/api/sessions/:name/windows', (req, res) => {
   });
 });
 
-app.post('/api/sessions/:name/windows', (req, res) => {
+app.post('/api/sessions/:name/windows', (req: Request<{ name: string }, any, CreateWindowRequest>, res: Response) => {
   const { name } = req.params;
   const { windowName } = req.body;
   
@@ -205,7 +224,7 @@ app.post('/api/sessions/:name/windows', (req, res) => {
   });
 });
 
-app.delete('/api/sessions/:sessionName/windows/:windowIndex', (req, res) => {
+app.delete('/api/sessions/:sessionName/windows/:windowIndex', (req: Request, res: Response) => {
   const { sessionName, windowIndex } = req.params;
   const killCmd = spawn('tmux', ['kill-window', '-t', `${sessionName}:${windowIndex}`]);
 
@@ -218,7 +237,7 @@ app.delete('/api/sessions/:sessionName/windows/:windowIndex', (req, res) => {
   });
 });
 
-app.post('/api/sessions/:sessionName/windows/:windowIndex/rename', (req, res) => {
+app.post('/api/sessions/:sessionName/windows/:windowIndex/rename', (req: Request<{ sessionName: string, windowIndex: string }, any, RenameWindowRequest>, res: Response) => {
   const { sessionName, windowIndex } = req.params;
   const { newName } = req.body;
   
@@ -233,7 +252,7 @@ app.post('/api/sessions/:sessionName/windows/:windowIndex/rename', (req, res) =>
   });
 });
 
-app.post('/api/sessions/:sessionName/windows/:windowIndex/select', (req, res) => {
+app.post('/api/sessions/:sessionName/windows/:windowIndex/select', (req: Request, res: Response) => {
   const { sessionName, windowIndex } = req.params;
   
   const selectCmd = spawn('tmux', ['select-window', '-t', `${sessionName}:${windowIndex}`]);
@@ -248,7 +267,7 @@ app.post('/api/sessions/:sessionName/windows/:windowIndex/select', (req, res) =>
 });
 
 // Start HTTP server (for development/redirect)
-const server = app.listen(port, '0.0.0.0', () => {
+const server: Server = app.listen(port, '0.0.0.0', () => {
   console.log(`WebMux HTTP server running on port ${port}`);
   console.log(`  Local:    http://localhost:${port}`);
   console.log(`  Network:  http://0.0.0.0:${port}`);
@@ -268,15 +287,16 @@ httpsServer.listen(httpsPort, '0.0.0.0', () => {
 const wss = new WebSocket.Server({ server, path: '/ws' });
 const wssHttps = new WebSocket.Server({ server: httpsServer, path: '/ws' });
 
-const sessions = new Map();
+// Session management
+const sessions = new Map<WebSocket, IPty>();
 
 // WebSocket connection handler (shared between HTTP and HTTPS)
-function handleWebSocketConnection(ws) {
+function handleWebSocketConnection(ws: WebSocket): void {
   console.log('New WebSocket connection established');
   
-  ws.on('message', (message) => {
+  ws.on('message', (message: WebSocket.RawData) => {
     try {
-      const data = JSON.parse(message);
+      const data = JSON.parse(message.toString()) as WebSocketMessage;
       
       switch (data.type) {
         case 'list-sessions':
@@ -290,14 +310,14 @@ function handleWebSocketConnection(ws) {
         
         case 'input':
           if (sessions.has(ws)) {
-            const ptyProcess = sessions.get(ws);
+            const ptyProcess = sessions.get(ws)!;
             ptyProcess.write(data.data);
           }
           break;
           
         case 'resize':
           if (sessions.has(ws)) {
-            const ptyProcess = sessions.get(ws);
+            const ptyProcess = sessions.get(ws)!;
             ptyProcess.resize(data.cols, data.rows);
           }
           break;
@@ -326,7 +346,7 @@ function handleWebSocketConnection(ws) {
   ws.on('close', () => {
     console.log('WebSocket connection closed');
     if (sessions.has(ws)) {
-      const ptyProcess = sessions.get(ws);
+      const ptyProcess = sessions.get(ws)!;
       console.log('Killing PTY process for closed connection');
       ptyProcess.kill();
       sessions.delete(ws);
@@ -339,7 +359,7 @@ function handleWebSocketConnection(ws) {
 wss.on('connection', handleWebSocketConnection);
 wssHttps.on('connection', handleWebSocketConnection);
 
-async function listTmuxSessions(ws) {
+async function listTmuxSessions(ws: WebSocket): Promise<void> {
   // First check if tmux server is running
   try {
     await execAsync('tmux list-sessions 2>/dev/null');
@@ -360,7 +380,7 @@ async function listTmuxSessions(ws) {
     output += data.toString();
   });
 
-  listCmd.on('close', (code) => {
+  listCmd.on('close', (_code) => {
     const sessions = output.trim().split('\n').filter(line => line)
       .map(line => {
         const [name, attached, created] = line.split(':');
@@ -374,12 +394,12 @@ async function listTmuxSessions(ws) {
   });
 }
 
-function attachToSession(ws, sessionName, cols = 120, rows = 40) {
+function attachToSession(ws: WebSocket, sessionName: string, cols: number = 120, rows: number = 40): void {
   console.log(`Attaching to session '${sessionName}'`);
   
   // Check if we already have a PTY for this connection
   if (sessions.has(ws)) {
-    const ptyProcess = sessions.get(ws);
+    const ptyProcess = sessions.get(ws)!;
     console.log('Reusing existing PTY connection');
     
     // Just send the tmux switch command
@@ -405,7 +425,7 @@ function attachToSession(ws, sessionName, cols = 120, rows = 40) {
   createNewPtySession(ws, sessionName, cols, rows);
 }
 
-function createNewPtySession(ws, sessionName, cols, rows) {
+function createNewPtySession(ws: WebSocket, sessionName: string, cols: number, rows: number): void {
   console.log('Creating initial PTY session for:', sessionName);
 
   // Create a new shell that will attach to the tmux session
@@ -429,7 +449,7 @@ function createNewPtySession(ws, sessionName, cols, rows) {
   ptyProcess.write(`tmux attach-session -t '${sessionName}' || tmux new-session -s '${sessionName}'\r`);
 
   // Simple direct output - no buffering to avoid state issues
-  ptyProcess.onData((data) => {
+  ptyProcess.onData((data: string) => {
     if (ws.readyState === WebSocket.OPEN) {
       try {
         // Send data directly, but limit size to prevent issues
@@ -481,7 +501,7 @@ function createNewPtySession(ws, sessionName, cols, rows) {
   }
 }
 
-function listSessionWindows(ws, sessionName) {
+function listSessionWindows(ws: WebSocket, sessionName: string): void {
   const listCmd = spawn('tmux', ['list-windows', '-t', sessionName, '-F', '#{window_index}:#{window_name}:#{window_active}']);
 
   let output = '';
@@ -516,7 +536,7 @@ function listSessionWindows(ws, sessionName) {
   });
 }
 
-function selectWindow(ws, sessionName, windowIndex) {
+function selectWindow(ws: WebSocket, sessionName: string, windowIndex: number): void {
   console.log(`Switching to window ${windowIndex} in session ${sessionName}`);
   console.log('WebSocket readyState:', ws.readyState);
   console.log('Sessions map size:', sessions.size);
@@ -532,7 +552,7 @@ function selectWindow(ws, sessionName, windowIndex) {
     return;
   }
 
-  const ptyProcess = sessions.get(ws);
+  const ptyProcess = sessions.get(ws)!;
   
   // Use tmux command directly instead of keyboard shortcuts
   // This is more reliable and doesn't depend on the prefix key

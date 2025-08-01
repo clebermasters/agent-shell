@@ -1,16 +1,18 @@
+import type { WsMessage } from '@/types'
+
+type MessageHandler<T = any> = (data: T) => void
+
 // Singleton WebSocket manager to ensure single connection
 class WebSocketManager {
-  constructor() {
-    this.ws = null
-    this.isConnected = false
-    this.messageHandlers = new Map()
-    this.connectionPromise = null
-    this.pingInterval = null
-    this.reconnectAttempts = 0
-    this.maxReconnectAttempts = 5
-  }
+  private ws: WebSocket | null = null
+  public isConnected: boolean = false
+  private messageHandlers: Map<string, MessageHandler[]> = new Map()
+  private connectionPromise: Promise<void> | null = null
+  private pingInterval: number | null = null
+  private reconnectAttempts: number = 0
+  private readonly maxReconnectAttempts: number = 5
 
-  connect() {
+  connect(): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return Promise.resolve()
     }
@@ -23,7 +25,7 @@ class WebSocketManager {
       // Always use the current host for WebSocket connections
       // This works for localhost, network IPs, and Tailscale IPs
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      let wsUrl
+      let wsUrl: string
       
       if (import.meta.env.DEV) {
         // In development, always use the Vite server's proxy
@@ -33,6 +35,8 @@ class WebSocketManager {
         // Production mode - use same host and port as current page
         wsUrl = `${protocol}//${window.location.host}/ws`
       }
+      
+      console.log('Connecting to WebSocket:', wsUrl)
       this.ws = new WebSocket(wsUrl)
       
       this.ws.onopen = () => {
@@ -48,7 +52,7 @@ class WebSocketManager {
       }
       
       this.ws.onmessage = (event) => {
-        const data = JSON.parse(event.data)
+        const data = JSON.parse(event.data) as WsMessage
         const handlers = this.messageHandlers.get(data.type) || []
         handlers.forEach(handler => handler(data))
       }
@@ -67,7 +71,7 @@ class WebSocketManager {
         // Only reconnect if we haven't exceeded max attempts
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
           this.reconnectAttempts++
-          const delay = event.code === 1000 ? 3000 : 1000; // 1s for errors, 3s for normal close
+          const delay = event.code === 1000 ? 3000 : 1000 // 1s for errors, 3s for normal close
           console.log(`Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`)
           setTimeout(() => this.connect(), delay)
         } else {
@@ -79,7 +83,7 @@ class WebSocketManager {
     return this.connectionPromise
   }
 
-  send(data) {
+  send(data: WsMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(data))
@@ -95,16 +99,22 @@ class WebSocketManager {
     }
   }
 
-  onMessage(type, handler) {
+  onMessage<T = any>(type: string, handler: MessageHandler<T>): void {
     if (!this.messageHandlers.has(type)) {
       this.messageHandlers.set(type, [])
     }
-    this.messageHandlers.get(type).push(handler)
+    this.messageHandlers.get(type)!.push(handler)
   }
 
-  offMessage(type, handler) {
+  offMessage<T = any>(type: string, handler?: MessageHandler<T>): void {
+    if (!handler) {
+      // Remove all handlers for this type
+      this.messageHandlers.delete(type)
+      return
+    }
+    
     if (this.messageHandlers.has(type)) {
-      const handlers = this.messageHandlers.get(type)
+      const handlers = this.messageHandlers.get(type)!
       const index = handlers.indexOf(handler)
       if (index > -1) {
         handlers.splice(index, 1)
@@ -112,9 +122,9 @@ class WebSocketManager {
     }
   }
 
-  startPing() {
+  private startPing(): void {
     this.stopPing()
-    this.pingInterval = setInterval(() => {
+    this.pingInterval = window.setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         try {
           this.ws.send(JSON.stringify({ type: 'ping' }))
@@ -126,21 +136,21 @@ class WebSocketManager {
     }, 30000) // Ping every 30 seconds
   }
   
-  stopPing() {
+  private stopPing(): void {
     if (this.pingInterval) {
       clearInterval(this.pingInterval)
       this.pingInterval = null
     }
   }
   
-  close() {
+  close(): void {
     this.stopPing()
     if (this.ws) {
       this.ws.close()
     }
   }
   
-  ensureConnected() {
+  ensureConnected(): Promise<void> {
     if (this.isConnected) {
       return Promise.resolve()
     }

@@ -1,8 +1,32 @@
-const { spawn } = require('child_process');
-const EventEmitter = require('events');
+import { spawn } from 'child_process';
+import { EventEmitter } from 'events';
+
+interface TmuxHandlerEvents {
+  output: (data: string) => void;
+  error: (error: Error) => void;
+}
+
+declare interface TmuxHandler {
+  on<U extends keyof TmuxHandlerEvents>(
+    event: U, listener: TmuxHandlerEvents[U]
+  ): this;
+  
+  emit<U extends keyof TmuxHandlerEvents>(
+    event: U, ...args: Parameters<TmuxHandlerEvents[U]>
+  ): boolean;
+}
 
 class TmuxHandler extends EventEmitter {
-  constructor(sessionName, cols = 120, rows = 40) {
+  private sessionName: string;
+  private cols: number;
+  private rows: number;
+  private pollInterval: NodeJS.Timeout | null;
+  private lastContent: string;
+  private isActive: boolean;
+  private inputQueue: string[];
+  private isProcessingInput: boolean;
+
+  constructor(sessionName: string, cols: number = 120, rows: number = 40) {
     super();
     this.sessionName = sessionName;
     this.cols = cols;
@@ -14,7 +38,7 @@ class TmuxHandler extends EventEmitter {
     this.isProcessingInput = false;
   }
 
-  start() {
+  start(): void {
     if (this.isActive) return;
     this.isActive = true;
     
@@ -28,7 +52,7 @@ class TmuxHandler extends EventEmitter {
     this.capturePane();
   }
 
-  stop() {
+  stop(): void {
     this.isActive = false;
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
@@ -36,7 +60,7 @@ class TmuxHandler extends EventEmitter {
     }
   }
 
-  capturePane() {
+  private capturePane(): void {
     if (!this.isActive) return;
     
     const capture = spawn('tmux', [
@@ -67,13 +91,13 @@ class TmuxHandler extends EventEmitter {
 
     capture.on('error', (err) => {
       // Silently handle errors to avoid spamming
-      if (err.code !== 'ENOENT') {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         this.emit('error', err);
       }
     });
   }
 
-  sendInput(data) {
+  sendInput(data: string): void {
     if (!this.isActive) return;
     
     // Add to queue
@@ -81,13 +105,13 @@ class TmuxHandler extends EventEmitter {
     this.processInputQueue();
   }
 
-  async processInputQueue() {
+  private async processInputQueue(): Promise<void> {
     if (this.isProcessingInput || this.inputQueue.length === 0) return;
     
     this.isProcessingInput = true;
     
     while (this.inputQueue.length > 0) {
-      const data = this.inputQueue.shift();
+      const data = this.inputQueue.shift()!;
       await this.sendSingleInput(data);
       // Small delay between inputs to prevent overwhelming
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -96,11 +120,11 @@ class TmuxHandler extends EventEmitter {
     this.isProcessingInput = false;
   }
 
-  sendSingleInput(data) {
+  private sendSingleInput(data: string): Promise<void> {
     return new Promise((resolve) => {
       // Handle each character individually for better compatibility
       const chars = data.split('');
-      let args = ['send-keys', '-t', this.sessionName];
+      const args: string[] = ['send-keys', '-t', this.sessionName];
       
       for (const char of chars) {
         const code = char.charCodeAt(0);
@@ -135,13 +159,13 @@ class TmuxHandler extends EventEmitter {
     });
   }
 
-  resize(cols, rows) {
+  resize(cols: number, rows: number): void {
     this.cols = cols;
     this.rows = rows;
     this.setWindowSize(cols, rows);
   }
 
-  setWindowSize(cols, rows) {
+  private setWindowSize(cols: number, rows: number): void {
     const resize = spawn('tmux', [
       'resize-window',
       '-t', this.sessionName,
@@ -149,7 +173,7 @@ class TmuxHandler extends EventEmitter {
       '-y', rows.toString()
     ]);
 
-    resize.on('error', (err) => {
+    resize.on('error', (_err) => {
       // Try alternative resize method
       spawn('tmux', [
         'resize-pane',
@@ -161,7 +185,7 @@ class TmuxHandler extends EventEmitter {
   }
 
   // Get cursor position for better terminal emulation
-  getCursorPosition() {
+  getCursorPosition(): Promise<{ x: number; y: number }> {
     const cursor = spawn('tmux', [
       'display-message',
       '-t', this.sessionName,
@@ -181,4 +205,4 @@ class TmuxHandler extends EventEmitter {
   }
 }
 
-module.exports = TmuxHandler;
+export default TmuxHandler;

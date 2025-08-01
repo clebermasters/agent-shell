@@ -1,7 +1,10 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import path from 'path'
-import fs from 'fs'
+import path from 'node:path'
+import fs from 'node:fs'
+import { fileURLToPath, URL } from 'node:url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   plugins: [vue()],
@@ -14,12 +17,17 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'https://localhost:3443',
+        target: 'https://0.0.0.0:3443',
         changeOrigin: true,
-        secure: false // Accept self-signed certificates
+        secure: false, // Accept self-signed certificates
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            console.log('proxy error', err);
+          });
+        }
       },
       '/ws': {
-        target: 'wss://localhost:3443',
+        target: 'wss://0.0.0.0:3443',
         ws: true,
         changeOrigin: true,
         secure: false // Accept self-signed certificates
@@ -28,7 +36,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src')
+      '@': fileURLToPath(new URL('./src', import.meta.url))
     }
   }
 })

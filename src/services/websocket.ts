@@ -1,50 +1,107 @@
+import { ref, watch } from 'vue'
 import type { WsMessage } from '@/types'
+import { hostManager } from './hostManager'
+
+// HARDCODED BACKEND FOR TESTING - change this to your server IP:port
+const HARDCODED_BACKEND = '192.168.0.76:4010' // TODO: remove this after testing
 
 type MessageHandler<T extends WsMessage = WsMessage> = (data: T) => void
 type DisconnectHandler = () => void
+type ErrorHandler = (error: string) => void
 
 // Singleton WebSocket manager to ensure single connection
 class WebSocketManager {
   private ws: WebSocket | null = null
-  public isConnected: boolean = false
+  public isConnected = ref(false)
+  public connectionError = ref<string | null>(null)
+  public lastError = ref<string | null>(null)
   private messageHandlers: Map<string, MessageHandler[]> = new Map()
   private disconnectHandlers: DisconnectHandler[] = []
+  private errorHandlers: ErrorHandler[] = []
   private connectionPromise: Promise<void> | null = null
   private pingInterval: number | null = null
   private reconnectAttempts: number = 0
   private readonly maxReconnectAttempts: number = 5
 
+  constructor() {
+    // Watch for host changes and reconnect
+    watch(() => hostManager.selectedHostId.value, () => {
+      console.log('Host changed, reconnecting...')
+      this.reconnect()
+    })
+  }
+
+  reconnect(): void {
+    this.close()
+    this.connect()
+  }
+
+  private setError(message: string): void {
+    this.connectionError.value = message
+    this.lastError.value = message
+    console.error('Connection error:', message)
+    // Notify all error handlers
+    this.errorHandlers.forEach(handler => handler(message))
+  }
+
+  private clearError(): void {
+    this.connectionError.value = null
+  }
+
+  onError(handler: ErrorHandler): void {
+    this.errorHandlers.push(handler)
+  }
+
+  offError(handler: ErrorHandler): void {
+    const index = this.errorHandlers.indexOf(handler)
+    if (index > -1) {
+      this.errorHandlers.splice(index, 1)
+    }
+  }
+
   connect(): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log('WebSocket already connected')
+      this.clearError()
       return Promise.resolve()
     }
 
     if (this.connectionPromise) {
+      console.log('WebSocket connection in progress...')
       return this.connectionPromise
     }
 
-    this.connectionPromise = new Promise((resolve) => {
-      // Always use the current host for WebSocket connections
-      // This works for localhost, network IPs, and Tailscale IPs
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      let wsUrl: string
+    this.clearError()
+    this.connectionPromise = new Promise((resolve, reject) => {
+      // Always use hardcoded backend for testing
+      const wsUrl = `ws://${HARDCODED_BACKEND}/ws`
+      console.log('Using HARDCODED backend:', wsUrl)
       
-      if (import.meta.env.DEV) {
-        // In development, always use the Vite server's proxy
-        // This ensures mobile connections work through the same port
-        wsUrl = `${protocol}//${window.location.host}/ws`
-      } else {
-        // Production mode - use same host and port as current page
-        wsUrl = `${protocol}//${window.location.host}/ws`
-      }
+      console.log('Creating WebSocket to:', wsUrl)
       
-      console.log('Connecting to WebSocket:', wsUrl)
-      this.ws = new WebSocket(wsUrl)
+      // Test if we can reach the server first
+      fetch(`http://${HARDCODED_BACKEND}/api/clients`, { mode: 'no-cors' })
+        .then(() => console.log('HTTP connectivity test: OK'))
+        .catch((err) => console.log('HTTP connectivity test failed:', err.message))
       
-      this.ws.onopen = () => {
-        this.isConnected = true
+      const ws = new WebSocket(wsUrl)
+      this.ws = ws
+      
+      const connectionTimeout = setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          console.error('Connection timeout')
+          ws.close()
+          this.setError(`Connection timeout to ${HARDCODED_BACKEND}. Is the server running?`)
+          reject(new Error('Connection timeout'))
+        }
+      }, 10000) // 10 second timeout
+      
+      ws.onopen = () => {
+        clearTimeout(connectionTimeout)
+        this.isConnected.value = true
         this.connectionPromise = null
         this.reconnectAttempts = 0
+        this.clearError()
         console.log('WebSocket connected')
         
         // Start ping to keep connection alive
@@ -71,13 +128,14 @@ class WebSocketManager {
         }
       }
       
-      this.ws.onerror = (error) => {
+      ws.onerror = (error) => {
         console.error('WebSocket error:', error)
+        this.setError(`Failed to connect to ${HARDCODED_BACKEND}. Check if the server is running.`)
       }
       
-      this.ws.onclose = (event) => {
+      ws.onclose = (event) => {
         console.log('WebSocket disconnected:', event.code, event.reason)
-        this.isConnected = false
+        this.isConnected.value = false
         this.ws = null
         this.connectionPromise = null
         this.stopPing()
@@ -85,14 +143,21 @@ class WebSocketManager {
         // Notify disconnect handlers
         this.disconnectHandlers.forEach(handler => handler())
         
+        // Set error message
+        if (event.code !== 1000) {
+          this.setError(`Disconnected (code: ${event.code}). ${event.reason || 'Connection failed'}`)
+        }
+        
         // Only reconnect if we haven't exceeded max attempts
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
           this.reconnectAttempts++
-          const delay = event.code === 1000 ? 3000 : 1000 // 1s for errors, 3s for normal close
+          const delay = event.code === 1000 ? 3000 : 5000 // 5s for errors
           console.log(`Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`)
           setTimeout(() => this.connect(), delay)
         } else {
-          console.error('Max reconnection attempts reached')
+          const errorMsg = `Failed to connect after ${this.maxReconnectAttempts} attempts. Server may be offline.`
+          this.setError(errorMsg)
+          console.error(errorMsg)
         }
       }
     })
@@ -168,7 +233,7 @@ class WebSocketManager {
   }
   
   ensureConnected(): Promise<void> {
-    if (this.isConnected) {
+    if (this.isConnected.value) {
       return Promise.resolve()
     }
     return this.connect()

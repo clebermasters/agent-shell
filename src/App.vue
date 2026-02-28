@@ -1,9 +1,17 @@
 <template>
   <div class="min-h-screen" style="background: var(--bg-primary)">
+    <!-- Connection Error Banner -->
+    <div v-if="ws.connectionError.value" 
+         class="px-3 py-2 text-sm text-center"
+         style="background: #dc2626; color: white">
+      <span>{{ ws.connectionError.value }}</span>
+      <button @click="retryConnection" class="ml-2 underline">(Retry)</button>
+    </div>
+    
     <header class="border-b safe-area-top" style="background: var(--bg-secondary); border-color: var(--border-primary)">
-      <div class="px-4 safe-area-left safe-area-right">
-        <div class="flex items-center justify-between h-12">
-          <div class="flex items-center space-x-3 md:space-x-6">
+      <div class="px-2 xs:px-3 safe-area-left safe-area-right">
+        <div class="flex items-center justify-between h-12          ">
+<div class="flex items-center space-x-2 xs:space-x-3 md:space-x-6">
             <button
               @click="toggleSidebar"
               class="p-1.5 hover-bg rounded ml-1"
@@ -13,12 +21,12 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
-            <h1 class="text-sm font-medium">webmux</h1>
-            <div class="hidden sm:flex items-center space-x-4 text-xs" style="color: var(--text-secondary)">
-              <span class="hidden md:inline">{{ stats.hostname }}</span>
+            <h1 class="text-xs xs:text-sm font-medium">webmux</h1>
+            <div class="hidden md:flex items-center space-x-4 text-xs" style="color: var(--text-secondary)">
+              <span>{{ stats.hostname }}</span>
               <span>{{ stats.platform }}/{{ stats.arch }}</span>
             </div>
-            <div class="view-toggle">
+            <div class="view-toggle hidden xs:block">
               <button
                 :class="{ active: viewMode === 'terminal' }"
                 @click="viewMode = 'terminal'"
@@ -30,8 +38,8 @@
             </div>
           </div>
 
-          <!-- Search Bar - Center section with fixed max width -->
-          <div class="flex-1 flex justify-center px-2">
+          <!-- Search Bar - Hidden on xs, visible on sm+ -->
+          <div class="hidden xs:flex flex-1 justify-center px-2">
             <div class="relative w-full max-w-xs">
               <input
                 v-model="searchQuery"
@@ -89,30 +97,60 @@
             </div>
           </div>
           
-          <div class="flex items-center space-x-3 md:space-x-6 text-xs">
-            <div class="flex items-center space-x-2 md:space-x-4">
-              <div class="flex items-center space-x-1 md:space-x-2">
-                <span class="hidden sm:inline" style="color: var(--text-tertiary)">CPU</span>
+          <!-- Right side - Stats (hidden on xs), Time (hidden on xs), HostSelector, Install -->
+          <div class="flex items-center space-x-1 xs:space-x-2 md:space-x-4 text-xs">
+            <!-- Stats - hidden on xs and sm -->
+            <div class="hidden md:flex items-center space-x-3">
+              <div class="flex items-center space-x-1">
+                <span style="color: var(--text-tertiary)">CPU</span>
                 <span class="stat-badge">{{ stats.cpu.loadAvg?.[0]?.toFixed(2) || '0.00' }}</span>
               </div>
-              <div class="flex items-center space-x-1 md:space-x-2">
-                <span class="hidden sm:inline" style="color: var(--text-tertiary)">MEM</span>
+              <div class="flex items-center space-x-1">
+                <span style="color: var(--text-tertiary)">MEM</span>
                 <span class="stat-badge">{{ formatBytes(stats.memory.used) }}</span>
-                <span class="hidden md:inline" style="color: var(--text-tertiary)">/ {{ formatBytes(stats.memory.total) }}</span>
+                <span style="color: var(--text-tertiary)">/ {{ formatBytes(stats.memory.total) }}</span>
                 <span class="text-xs" style="color: var(--text-tertiary)">({{ stats.memory.percent }}%)</span>
               </div>
-              <div class="hidden sm:flex items-center space-x-2">
+              <div class="flex items-center space-x-1">
                 <span style="color: var(--text-tertiary)">UP</span>
                 <span class="stat-badge">{{ formatUptime(stats.uptime) }}</span>
               </div>
             </div>
-            <div class="text-xs pr-1" style="color: var(--text-tertiary)">
+            
+            <!-- Time - hidden on xs -->
+            <div class="hidden xs:block text-xs pr-1" style="color: var(--text-tertiary)">
               {{ currentTime }}
             </div>
+            
+            <HostSelector />
+            
+            <!-- Debug button - always visible for testing -->
+            <button
+              @click="showDebug = true"
+              class="p-1.5 rounded hover-bg"
+              style="color: var(--text-tertiary)"
+              title="Debug"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </button>
+            
+            <!-- Install button - hidden on xs -->
+            <button
+              @click="installApp"
+              class="hidden xs:block px-2 py-1 text-xs rounded font-medium transition-colors"
+              style="background: var(--accent-primary); color: var(--bg-primary)"
+            >
+              {{ isPWAInstalled ? 'Installed' : 'Install' }}
+            </button>
           </div>
         </div>
       </div>
     </header>
+
+    <!-- Debug Screen Modal -->
+    <DebugScreen v-if="showDebug" @close="showDebug = false" />
 
     <div class="flex h-[calc(100vh-3rem)]">
       <!-- Mobile: Backdrop when sidebar is open -->
@@ -176,6 +214,8 @@ import { websocketApi } from './api/websocket-api'
 import SessionList from './components/SessionList.vue'
 import TerminalView from './components/TerminalView.vue'
 import ChatView from './components/ChatView.vue'
+import HostSelector from './components/HostSelector.vue'
+import DebugScreen from './components/DebugScreen.vue'
 import type { TmuxSession, SystemStats, SessionsListMessage, WindowSelectedMessage, TmuxWindow } from './types'
 
 const queryClient = useQueryClient()
@@ -186,6 +226,68 @@ const sidebarCollapsed = ref<boolean>(false)
 const windowWidth = ref<number>(window.innerWidth)
 const ws = useWebSocket()
 const currentTime = ref<string>('')
+const showDebug = ref(false)
+
+// PWA Install prompt
+const deferredPrompt = ref<Event | null>(null)
+const isPWAInstalled = ref(false)
+
+const checkInstalled = (): void => {
+  if (window.matchMedia('(display-mode: standalone)').matches) {
+    isPWAInstalled.value = true
+  }
+}
+
+const handleBeforeInstallPrompt = (e: Event): void => {
+  e.preventDefault()
+  deferredPrompt.value = e
+  console.log('✅ Install prompt captured:', e)
+}
+
+const installApp = async (): Promise<void> => {
+  if (deferredPrompt.value) {
+    const promptEvent = deferredPrompt.value as any
+    promptEvent.prompt()
+    const { outcome } = await promptEvent.userChoice
+    console.log('Install prompt outcome:', outcome)
+    deferredPrompt.value = null
+  } else {
+    // Prompt not available - try direct navigation approach
+    console.log('Install prompt not available, trying workarounds')
+    
+    // Method 1: Try to access via intent URL (Android)
+    const isAndroid = /android/i.test(navigator.userAgent)
+    const isChrome = /chrome/i.test(navigator.userAgent)
+    
+    if (isAndroid && isChrome) {
+      // On Android Chrome, try opening the standalone URL
+      try {
+        window.location.href = 'webmux://install'
+        setTimeout(() => {
+          // If that didn't work, prompt user manually
+          promptManualInstall()
+        }, 1000)
+      } catch (e) {
+        promptManualInstall()
+      }
+    } else {
+      promptManualInstall()
+    }
+  }
+}
+
+const promptManualInstall = (): void => {
+  const isAndroid = /android/i.test(navigator.userAgent)
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+  
+  if (isIOS) {
+    alert('To install:\n1. Tap the Share button (□↑)\n2. Scroll down and tap "Add to Home Screen"\n3. Tap "Add"')
+  } else if (isAndroid) {
+    alert('To install:\n1. Tap the menu (⋮) in the top right\n2. Tap "Add to Home Screen" or "Install App"')
+  } else {
+    alert('To install:\n1. Look for the install icon in the address bar\n2. Click "Install"')
+  }
+}
 
 // Search functionality
 const searchQuery = ref('')
@@ -259,7 +361,9 @@ onMounted(() => {
   // Initialize sidebar state - collapsed on mobile, expanded on desktop
   sidebarCollapsed.value = isMobile.value
   
+  checkInstalled()
   fetchStats()
+  
   // Update time every second
   updateInterval = setInterval(() => {
     currentTime.value = new Date().toLocaleTimeString('en-US', { 
@@ -290,6 +394,20 @@ onMounted(() => {
     windowWidth.value = window.innerWidth
   }
   window.addEventListener('resize', handleResize)
+  
+  // Debug: log browser info
+  console.log('User Agent:', navigator.userAgent)
+  console.log('Protocol:', window.location.protocol)
+  console.log('Display mode:', window.matchMedia('(display-mode: standalone)').matches ? 'standalone' : 'browser')
+  
+  // Listen for PWA install prompt
+  window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+  
+  // Also listen for app installed event
+  window.addEventListener('appinstalled', () => {
+    console.log('App installed!')
+    isPWAInstalled.value = true
+  })
 })
 
 onUnmounted(() => {
@@ -473,6 +591,11 @@ ws.onMessage<WindowSelectedMessage>('window-selected', (data) => {
 
 const toggleSidebar = (): void => {
   sidebarCollapsed.value = !sidebarCollapsed.value
+}
+
+const retryConnection = (): void => {
+  ws.connectionError.value = null
+  ws.reconnect()
 }
 
 // Close sidebar when session is selected (only on mobile)

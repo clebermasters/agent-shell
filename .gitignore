@@ -122,3 +122,6 @@ tramp
 *.temp
 .tmp/
 .temp/
+
+node_modules/
+dist/

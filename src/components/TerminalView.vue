@@ -153,6 +153,38 @@
         >
           Paste
         </button>
+        <!-- Mode toggle: Terminal <-> Chat -->
+        <button 
+          @click="toggleInputMode" 
+          class="px-3 py-1.5 rounded hover-bg"
+          :style="inputMode === 'chat' ? 'background: #10b981; color: white' : 'background: var(--bg-tertiary); color: var(--text-primary)'"
+        >
+          {{ inputMode === 'chat' ? 'Chat' : 'Term' }}
+        </button>
+      </div>
+    </div>
+    
+    <!-- Chat Input Bar (only shown in chat mode on mobile) -->
+    <div v-if="isMobile && inputMode === 'chat'" class="flex-shrink-0 border-t px-2 py-2"
+         style="background: var(--bg-secondary); border-color: var(--border-primary);">
+      <div class="flex items-center space-x-2">
+        <input
+          ref="chatInputRef"
+          v-model="chatInput"
+          type="text"
+          class="flex-1 px-3 py-2 rounded-lg text-sm"
+          style="background: var(--bg-tertiary); color: var(--text-primary); border: none;"
+          placeholder="Type command..."
+          inputmode="none"
+          @keyup.enter="sendChatInput"
+        />
+        <button
+          @click="sendChatInput"
+          class="px-4 py-2 rounded-lg text-sm font-medium"
+          style="background: var(--accent-primary); color: var(--bg-primary)"
+        >
+          Send
+        </button>
       </div>
     </div>
     
@@ -192,6 +224,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const terminalContainer = ref<HTMLDivElement | null>(null)
+const chatInputRef = ref<HTMLInputElement | null>(null)
 const terminal = shallowRef<Terminal | null>(null)
 const fitAddon = shallowRef<FitAddon | null>(null)
 const terminalSize = ref<TerminalSize>({ cols: 80, rows: 24 })
@@ -200,17 +233,18 @@ const isMobile = computed(() => window.innerWidth < 768)
 const isDragging = ref<boolean>(false)
 const keyboardHeight = ref(0)
 const isKeyboardVisible = ref(false)
+const inputMode = ref<'terminal' | 'chat'>('terminal')
+const chatInput = ref('')
 let dragCounter = 0
 
-// Computed style for terminal container to handle keyboard
+// Computed style for terminal container
 const terminalContainerStyle = computed(() => {
   let style = 'background: #000;'
   if (isMobile.value) {
     style += ' padding-top: 48px;'
   }
-  if (keyboardHeight.value > 0) {
-    style += ` padding-bottom: ${keyboardHeight.value}px;`
-  }
+  // Note: Don't add keyboard padding - causes screen jumping
+  // In chat mode, the input bar handles input separately
   return style
 })
 
@@ -493,25 +527,8 @@ const handleResize = (): void => {
       // Get container dimensions
       const rect = terminalContainer.value.getBoundingClientRect()
       
-      // Account for keyboard height on mobile
-      let availableHeight = rect.height
-      if (isMobile.value && keyboardHeight.value > 0) {
-        availableHeight = window.innerHeight - keyboardHeight.value
-      }
-      
-      if (rect.width > 0 && availableHeight > 0) {
-        // Temporarily adjust container height to fit above keyboard
-        const originalHeight = terminalContainer.value.style.height
-        if (isMobile.value && keyboardHeight.value > 0) {
-          terminalContainer.value.style.height = `${availableHeight}px`
-        }
-        
+      if (rect.width > 0 && rect.height > 0) {
         fitAddon.value.fit()
-        
-        // Restore original height
-        if (isMobile.value && keyboardHeight.value > 0) {
-          terminalContainer.value.style.height = originalHeight
-        }
         
         // Send the new dimensions to the server
         const dimensions = fitAddon.value.proposeDimensions()
@@ -557,18 +574,12 @@ const handleVisualViewportResize = (): void => {
     keyboardHeight.value = 0
     isKeyboardVisible.value = false
   }
-  
-  // Resize terminal to fit above keyboard
-  setTimeout(() => {
-    handleResize()
-  }, 100)
+  // Note: Don't resize terminal here - causes screen jumping
+  // Terminal mode handles input differently than chat mode
 }
 
 const handleVisualViewportScroll = (): void => {
-  // Keep terminal in view when keyboard opens
-  if (isKeyboardVisible.value && terminalContainer.value) {
-    terminalContainer.value.scrollIntoView({ behavior: 'smooth' })
-  }
+  // No-op - let browser handle scrolling naturally
 }
 
 const focusTerminal = (): void => {
@@ -649,6 +660,40 @@ const toggleCtrl = (): void => {
       ctrlPressed.value = false
     }, 5000)
   }
+}
+
+// Toggle between terminal input and chat input mode
+const toggleInputMode = (): void => {
+  inputMode.value = inputMode.value === 'terminal' ? 'chat' : 'terminal'
+  
+  if (inputMode.value === 'chat') {
+    // Focus chat input - use setTimeout to avoid keyboard appearing immediately
+    setTimeout(() => {
+      chatInputRef.value?.focus()
+    }, 100)
+  } else {
+    // Switch back to terminal mode - focus terminal
+    focusTerminal()
+  }
+}
+
+// Send chat input to terminal
+const sendChatInput = (): void => {
+  const text = chatInput.value.trim()
+  if (!text || !props.ws.isConnected.value) return
+  
+  // Send the text as input to terminal (add newline at end)
+  const message: InputMessage = {
+    type: 'input',
+    data: text + '\n'
+  }
+  props.ws.send(message)
+  
+  // Clear input
+  chatInput.value = ''
+  
+  // Keep focus on chat input for continuous typing
+  chatInputRef.value?.focus()
 }
 
 const splitHorizontal = (): void => {

@@ -54,9 +54,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     super.initState();
     _inputController = TextEditingController();
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
-    
-    // We don't rely on terminal.onOutput anymore for native keyboard
-    // Instead we use our own TextField to get full control.
   }
 
   @override
@@ -69,13 +66,14 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   void _handleTextFieldInput(String value) {
     if (value.isEmpty) return;
 
-    // Process all characters in the string
+    // We only process characters that were ADDED
+    // This is more robust against keyboards that send full strings
     for (int i = 0; i < value.length; i++) {
       _processInputChar(value[i]);
     }
 
-    // Clear the text field so we can get new input
-    _inputController.clear();
+    // Always keep it empty to catch the next character
+    _inputController.value = TextEditingValue.empty;
   }
 
   void _processInputChar(String char) {
@@ -86,27 +84,24 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
       wasModified = true;
 
-      // 1. Apply Shift
+      // 1. Apply Shift (only if it's a character that can be shifted)
       if (widget.shiftActive) {
         if (_shiftMap.containsKey(char)) {
-          char = _shiftMap[char]!;
+          finalData = _shiftMap[char]!;
         } else {
-          char = char.toUpperCase();
+          finalData = char.toUpperCase();
         }
       }
 
       // 2. Apply Ctrl
       if (widget.ctrlActive) {
-        int code = char.toUpperCase().codeUnitAt(0);
+        int code = finalData.toUpperCase().codeUnitAt(0);
         if (code >= 64 && code <= 95) {
           finalData = String.fromCharCode(code - 64);
-        } else if (char == ' ') {
+        } else if (finalData == ' ') {
           finalData = '\x00';
-        } else {
-          finalData = char;
         }
-      } else {
-        finalData = char;
+        // If not a standard letter, finalData remains as is (or shifted)
       }
 
       // 3. Apply Alt (Meta)
@@ -132,66 +127,69 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     }
   }
 
-  void _onKeyEvent(KeyEvent event) {
-    if (event is KeyDownEvent || event is KeyRepeatEvent) {
-      final key = event.logicalKey;
-      String? sequence;
+  // RawKeyboardListener handles special keys like Backspace, Enter, Tab
+  // which might not trigger onChanged in TextField on some Android keyboards
+  void _onKey(RawKeyEvent event) {
+    if (event is! RawKeyDownEvent) return;
 
-      // Track hardware modifier states
-      if (key == LogicalKeyboardKey.controlLeft || key == LogicalKeyboardKey.controlRight) {
-        _localHardwareCtrlPressed = true;
-      } else if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
-        _localHardwareAltPressed = true;
-      } else if (key == LogicalKeyboardKey.shiftLeft || key == LogicalKeyboardKey.shiftRight) {
-        _localHardwareShiftPressed = true;
-      }
+    final key = event.logicalKey;
+    String? sequence;
 
-      // Hardware combinations (Zoom)
-      if (_localHardwareCtrlPressed) {
-        if (key == LogicalKeyboardKey.equal || key == LogicalKeyboardKey.add) {
-          _zoomIn();
-          return;
-        } else if (key == LogicalKeyboardKey.minus) {
-          _zoomOut();
-          return;
-        }
-      }
+    // Track hardware modifier states
+    if (key == LogicalKeyboardKey.controlLeft || key == LogicalKeyboardKey.controlRight) {
+      _localHardwareCtrlPressed = true;
+    } else if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
+      _localHardwareAltPressed = true;
+    } else if (key == LogicalKeyboardKey.shiftLeft || key == LogicalKeyboardKey.shiftRight) {
+      _localHardwareShiftPressed = true;
+    }
 
-      // Hardware control keys (for physical keyboard)
-      if (key == LogicalKeyboardKey.f1) sequence = '\x1bOP';
-      else if (key == LogicalKeyboardKey.f2) sequence = '\x1bOQ';
-      else if (key == LogicalKeyboardKey.f3) sequence = '\x1bOR';
-      else if (key == LogicalKeyboardKey.f4) sequence = '\x1bOS';
-      else if (key == LogicalKeyboardKey.f5) sequence = '\x1b[15~';
-      else if (key == LogicalKeyboardKey.arrowUp) sequence = '\x1b[A';
-      else if (key == LogicalKeyboardKey.arrowDown) sequence = '\x1b[B';
-      else if (key == LogicalKeyboardKey.arrowRight) sequence = '\x1b[C';
-      else if (key == LogicalKeyboardKey.arrowLeft) sequence = '\x1b[D';
-      else if (key == LogicalKeyboardKey.enter) sequence = '\r';
-      else if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
-      else if (key == LogicalKeyboardKey.tab) sequence = '\t';
-      else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
-      else if (key == LogicalKeyboardKey.home) sequence = '\x1b[H';
-      else if (key == LogicalKeyboardKey.end) sequence = '\x1b[F';
-      else if (key == LogicalKeyboardKey.pageUp) sequence = '\x1b[5~';
-      else if (key == LogicalKeyboardKey.pageDown) sequence = '\x1b[6~';
-      else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
+    // Handle hardware combinations (Zoom)
+    if (_localHardwareCtrlPressed) {
+      if (key == LogicalKeyboardKey.equal || key == LogicalKeyboardKey.add) {
+        _zoomIn();
+        return;
+      } else if (key == LogicalKeyboardKey.minus) {
+        _zoomOut();
+        return;
+      }
+    }
 
-      if (sequence != null) {
-        widget.onInput(sequence);
-        if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
-          widget.onModifiersReset();
-        }
+    // Handle special keys that TextField might miss
+    if (key == LogicalKeyboardKey.backspace) {
+      sequence = '\x7f';
+    } else if (key == LogicalKeyboardKey.enter) {
+      sequence = '\r';
+    } else if (key == LogicalKeyboardKey.tab) {
+      sequence = '\t';
+    } else if (key == LogicalKeyboardKey.escape) {
+      sequence = '\x1b';
+    } else if (key == LogicalKeyboardKey.arrowUp) {
+      sequence = '\x1b[A';
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      sequence = '\x1b[B';
+    } else if (key == LogicalKeyboardKey.arrowLeft) {
+      sequence = '\x1b[D';
+    } else if (key == LogicalKeyboardKey.arrowRight) {
+      sequence = '\x1b[C';
+    }
+
+    if (sequence != null) {
+      // Apply soft modifiers even to these special keys if applicable
+      // (Though usually you don't Ctrl+Backspace, but Ctrl+Tab is a thing)
+      String finalData = sequence;
+      bool wasModified = false;
+
+      if (widget.altActive) {
+        finalData = '\x1b$finalData';
+        wasModified = true;
       }
-    } else if (event is KeyUpEvent) {
-      final key = event.logicalKey;
-      if (key == LogicalKeyboardKey.controlLeft || key == LogicalKeyboardKey.controlRight) {
-        _localHardwareCtrlPressed = false;
-      } else if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
-        _localHardwareAltPressed = false;
-      } else if (key == LogicalKeyboardKey.shiftLeft || key == LogicalKeyboardKey.shiftRight) {
-        _localHardwareShiftPressed = false;
-      }
+      
+      // Ctrl+Special is rarer but handled by terminal sequences usually
+      // For now, just send the sequence
+
+      widget.onInput(finalData);
+      if (wasModified) widget.onModifiersReset();
     }
   }
 
@@ -233,9 +231,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
 
   @override
   Widget build(BuildContext context) {
-    return KeyboardListener(
-      focusNode: FocusNode(), // Node for physical keyboard
-      onKeyEvent: _onKeyEvent,
+    return RawKeyboardListener(
+      focusNode: FocusNode(), // Local node for raw events
+      onKey: _onKey,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final size = Size(constraints.maxWidth, constraints.maxHeight);
@@ -260,37 +258,35 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
               child: Stack(
                 children: [
                   // Hidden TextField to capture native keyboard input
-                  Opacity(
-                    opacity: 0,
+                  Positioned(
+                    left: -100,
+                    top: 0,
                     child: SizedBox(
-                      width: 1,
-                      height: 1,
+                      width: 10,
+                      height: 10,
                       child: TextField(
                         controller: _inputController,
                         focusNode: widget.focusNode,
                         autofocus: true,
-                        keyboardType: TextInputType.visiblePassword, // Disable autocorrect/suggestions
+                        keyboardType: TextInputType.visiblePassword,
                         autocorrect: false,
                         enableSuggestions: false,
                         onChanged: _handleTextFieldInput,
-                        onSubmitted: (val) {
-                          _processInputChar('\r');
-                          widget.focusNode.requestFocus(); // Keep focus
-                        },
                       ),
                     ),
                   ),
 
-                  // The terminal view itself
-                  // We use readOnly: true because we handle input via our own TextField
-                  TerminalView(
-                    widget.terminal,
-                    readOnly: true,
-                    textStyle: TerminalStyle(
-                      fontSize: _fontSize,
-                      fontFamily: 'JetBrains Mono',
+                  // The terminal view
+                  IgnorePointer(
+                    child: TerminalView(
+                      widget.terminal,
+                      readOnly: true,
+                      textStyle: TerminalStyle(
+                        fontSize: _fontSize,
+                        fontFamily: 'JetBrains Mono',
+                      ),
+                      padding: EdgeInsets.zero,
                     ),
-                    padding: EdgeInsets.zero,
                   ),
                   
                   // Visual indicator for active soft modifiers

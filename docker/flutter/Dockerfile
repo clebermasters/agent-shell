@@ -10,11 +10,16 @@ WORKDIR /app
 # Copy Flutter project files
 COPY flutter/ ./
 
-# Get dependencies - use local pub cache from host
-RUN flutter pub get
+# Get dependencies
+RUN --mount=type=cache,target=/root/.pub-cache \
+    flutter pub get
 
 # Build debug APK with parallel compilation and build cache
-RUN flutter build apk --debug
+# CRITICAL: We MUST include the .pub-cache mount here too, otherwise the compiler can't find the packages!
+RUN --mount=type=cache,target=/root/.pub-cache \
+    --mount=type=cache,target=/root/.gradle \
+    --mount=type=cache,target=/app/flutter/build \
+    flutter build apk --debug
 
 # Create output directory
 RUN mkdir -p /output

@@ -12,6 +12,7 @@ class TerminalViewWidget extends StatefulWidget {
   final bool ctrlActive;
   final bool altActive;
   final bool shiftActive;
+  final bool isSelectionMode;
   final VoidCallback onModifiersReset;
 
   const TerminalViewWidget({
@@ -24,6 +25,7 @@ class TerminalViewWidget extends StatefulWidget {
     this.ctrlActive = false,
     this.altActive = false,
     this.shiftActive = false,
+    this.isSelectionMode = false,
     required this.onModifiersReset,
   });
 
@@ -36,54 +38,19 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
   bool _initialized = false;
   int _lastCols = 0;
   int _lastRows = 0;
-  
-  late FocusNode _wrapperFocusNode;
-  late FocusNode _dummyNode;
-  late TextEditingController _inputController;
-
-  final Map<String, String> _shiftMap = {
-    '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
-    '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
-    '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|',
-    ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?',
-    '`': '~',
-  };
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
-    _dummyNode = FocusNode(debugLabel: 'TerminalDummy');
-    _inputController = TextEditingController();
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
-    widget.terminal.addListener(_onTerminalChange);
-  }
-
-  @override
-  void didUpdateWidget(TerminalViewWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.terminal != widget.terminal) {
-      oldWidget.terminal.removeListener(_onTerminalChange);
-      widget.terminal.addListener(_onTerminalChange);
-    }
   }
 
   @override
   void dispose() {
-    widget.terminal.removeListener(_onTerminalChange);
     WidgetsBinding.instance.removeObserver(this);
-    _wrapperFocusNode.dispose();
-    _dummyNode.dispose();
-    _inputController.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
-  }
-
-  void _onTerminalChange() {
-    if (mounted) {
-      setState(() {});
-    }
   }
 
   @override
@@ -107,90 +74,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
       _zoomIn();
     } else if (event == VolumeKey.down) {
       _zoomOut();
-    }
-  }
-
-  void _handleTextFieldInput(String value) {
-    if (value.isEmpty) return;
-
-    for (int i = 0; i < value.length; i++) {
-      String char = value[i];
-      if (char == '\n') {
-        _processInputChar('\r');
-      } else {
-        _processInputChar(char);
-      }
-    }
-
-    _inputController.value = TextEditingValue.empty;
-  }
-
-  void _processInputChar(String char) {
-    String finalData = char;
-    bool wasModified = false;
-
-    if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
-      wasModified = true;
-
-      if (widget.shiftActive) {
-        if (_shiftMap.containsKey(char)) {
-          finalData = _shiftMap[char]!;
-        } else {
-          finalData = char.toUpperCase();
-        }
-      }
-
-      if (widget.ctrlActive) {
-        int code = finalData.toUpperCase().codeUnitAt(0);
-        if (code >= 64 && code <= 95) {
-          finalData = String.fromCharCode(code - 64);
-        } else if (finalData == ' ') {
-          finalData = '\x00';
-        }
-      }
-
-      if (widget.altActive) {
-        finalData = '\x1b$finalData';
-      }
-    }
-
-    widget.onInput(finalData);
-
-    if (wasModified) {
-      widget.onModifiersReset();
-    }
-  }
-
-  void _onKey(RawKeyEvent event) {
-    if (event is! RawKeyDownEvent) return;
-
-    final key = event.logicalKey;
-    String? sequence;
-
-    if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
-    else if (key == LogicalKeyboardKey.tab) sequence = '\t';
-    else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
-    else if (key == LogicalKeyboardKey.arrowUp) sequence = '\x1b[A';
-    else if (key == LogicalKeyboardKey.arrowDown) sequence = '\x1b[B';
-    else if (key == LogicalKeyboardKey.arrowLeft) sequence = '\x1b[D';
-    else if (key == LogicalKeyboardKey.arrowRight) sequence = '\x1b[C';
-    else if (key == LogicalKeyboardKey.home) sequence = '\x1b[H';
-    else if (key == LogicalKeyboardKey.end) sequence = '\x1b[F';
-    else if (key == LogicalKeyboardKey.pageUp) sequence = '\x1b[5~';
-    else if (key == LogicalKeyboardKey.pageDown) sequence = '\x1b[6~';
-    else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
-
-    if (sequence != null) {
-      String finalData = sequence;
-      bool wasModified = false;
-
-      if (widget.altActive) {
-        finalData = '\x1b$finalData';
-        wasModified = true;
-      }
-      
-      widget.onInput(finalData);
-      if (wasModified) widget.onModifiersReset();
     }
   }
 
@@ -251,86 +134,73 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
           });
         }
 
-        return Focus(
-          focusNode: _wrapperFocusNode,
-          onKey: (node, event) {
-            _onKey(event);
-            return KeyEventResult.ignored;
-          },
-          child: GestureDetector(
-            onTap: () {
-              widget.focusNode.requestFocus();
-              SystemChannels.textInput.invokeMethod('TextInput.show');
-              widget.controller?.clearSelection(); // Optional, clear selection on tap
-            },
-            onDoubleTap: _zoomIn,
-            onLongPress: _zoomOut,
-            behavior: HitTestBehavior.translucent,
-            child: Container(
-              color: Colors.black,
-              width: constraints.maxWidth,
-              height: constraints.maxHeight,
-              child: Stack(
-                children: [
-                  // Bottom layer: Actual TerminalView
-                  TerminalView(
-                    widget.terminal,
-                    controller: widget.controller,
-                    focusNode: _dummyNode, // Dummy node to prevent it from stealing focus
-                    readOnly: true, // Prevents native input processing, allows selection gestures
-                    cursorType: TerminalCursorType.block,
-                    textStyle: TerminalStyle(
-                      fontSize: _fontSize,
-                      fontFamily: 'JetBrains Mono',
-                    ),
-                    padding: EdgeInsets.zero,
-                  ),
-
-                  // Top layer: Hidden TextField for capturing input
-                  Positioned(
-                    top: 0,
-                    left: -100, // Keep it completely offscreen so it doesn't block touches
-                    child: SizedBox(
-                      width: 10,
-                      height: 10,
-                      child: TextField(
-                        controller: _inputController,
-                        focusNode: widget.focusNode,
-                        autofocus: true,
-                        keyboardType: TextInputType.multiline,
-                        textInputAction: TextInputAction.newline,
-                        maxLines: null,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        onChanged: _handleTextFieldInput,
-                      ),
-                    ),
-                  ),
-                  
-                  // Visual indicator for active soft modifiers
-                  if (widget.ctrlActive || widget.altActive || widget.shiftActive)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withOpacity(0.8),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+        return Container(
+          color: Colors.black,
+          width: constraints.maxWidth,
+          height: constraints.maxHeight,
+          child: Stack(
+            children: [
+              // Pure TerminalView handles native keyboard, hardware keyboard, and text selection natively.
+              // We removed the outer GestureDetector's `onLongPress` because it was swallowing 
+              // the long-press event needed for xterm's text selection.
+              TerminalView(
+                widget.terminal,
+                controller: widget.controller,
+                focusNode: widget.focusNode,
+                autofocus: true,
+                readOnly: widget.isSelectionMode, // Only readOnly when strictly selecting
+                cursorType: TerminalCursorType.block,
+                textStyle: TerminalStyle(
+                  fontSize: _fontSize,
+                  fontFamily: 'JetBrains Mono',
+                ),
+                padding: EdgeInsets.zero,
               ),
-            ),
+              
+              // Modifiers Visual Indicator
+              if (widget.ctrlActive || widget.altActive || widget.shiftActive)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.8),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                
+              // Selection Mode Indicator
+              if (widget.isSelectionMode)
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.8),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'SELECTION MODE',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         );
       },

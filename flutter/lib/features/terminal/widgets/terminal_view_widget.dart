@@ -52,6 +52,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     '`': '~',
   };
 
+  Offset? _pointerDownPos;
+
   @override
   void initState() {
     super.initState();
@@ -304,8 +306,17 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
                 ),
 
                 // Layer 2: TERMINAL VIEW (On top, captures ALL gestures)
-                GestureDetector(
-                  onTap: widget.onTap,
+                Listener(
+                  onPointerDown: (e) => _pointerDownPos = e.position,
+                  onPointerUp: (e) {
+                    if (_pointerDownPos != null) {
+                      final distance = (e.position - _pointerDownPos!).distance;
+                      // If the pointer moved less than 10 pixels, treat it as a tap
+                      if (distance < 10) {
+                        if (widget.onTap != null) widget.onTap!();
+                      }
+                    }
+                  },
                   behavior: HitTestBehavior.translucent,
                   child: TerminalView(
                     widget.terminal,

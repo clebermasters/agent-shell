@@ -366,21 +366,18 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                         shiftActive: _shiftActive,
                         onTap: () {
                           if (!_showCustomKeyboard && !_isSelectionMode) {
-                            if (_focusNode.hasFocus) {
-                              // If it already thinks it has focus but keyboard is hidden, 
-                              // we must drop focus and wait long enough for the framework 
-                              // to register the detach before re-attaching.
-                              _focusNode.unfocus();
-                              Future.delayed(const Duration(milliseconds: 100), () {
-                                if (mounted) {
-                                  _focusNode.requestFocus();
-                                  SystemChannels.textInput.invokeMethod('TextInput.show');
-                                }
-                              });
-                            } else {
-                              _focusNode.requestFocus();
-                              SystemChannels.textInput.invokeMethod('TextInput.show');
-                            }
+                            // Aggressively clear focus across the entire app
+                            // This ensures the current TextInputConnection is killed.
+                            FocusManager.instance.primaryFocus?.unfocus();
+                            
+                            // Wait for the framework to process the unfocus event
+                            // and detach the old connection before requesting a new one.
+                            Future.delayed(const Duration(milliseconds: 150), () {
+                              if (mounted) {
+                                _focusNode.requestFocus();
+                                SystemChannels.textInput.invokeMethod('TextInput.show');
+                              }
+                            });
                           }
                         },
                         onModifiersReset: () {

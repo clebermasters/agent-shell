@@ -12,6 +12,7 @@ class TerminalViewWidget extends StatefulWidget {
   final bool ctrlActive;
   final bool altActive;
   final bool shiftActive;
+  final bool isSelectionMode;
   final VoidCallback onModifiersReset;
 
   const TerminalViewWidget({
@@ -24,6 +25,7 @@ class TerminalViewWidget extends StatefulWidget {
     this.ctrlActive = false,
     this.altActive = false,
     this.shiftActive = false,
+    this.isSelectionMode = false,
     required this.onModifiersReset,
   });
 
@@ -38,22 +40,12 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
   int _lastRows = 0;
   
   late FocusNode _wrapperFocusNode;
-  late TextEditingController _inputController;
-
-  final Map<String, String> _shiftMap = {
-    '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
-    '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
-    '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|',
-    ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?',
-    '`': '~',
-  };
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
-    _inputController = TextEditingController();
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
     widget.terminal.addListener(_onTerminalChange);
   }
@@ -72,7 +64,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     widget.terminal.removeListener(_onTerminalChange);
     WidgetsBinding.instance.removeObserver(this);
     _wrapperFocusNode.dispose();
-    _inputController.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
@@ -107,64 +98,14 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     }
   }
 
-  void _handleTextFieldInput(String value) {
-    if (value.isEmpty) return;
-
-    for (int i = 0; i < value.length; i++) {
-      String char = value[i];
-      if (char == '\n') {
-        _processInputChar('\r');
-      } else {
-        _processInputChar(char);
-      }
-    }
-
-    _inputController.value = TextEditingValue.empty;
-  }
-
-  void _processInputChar(String char) {
-    String finalData = char;
-    bool wasModified = false;
-
-    if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
-      wasModified = true;
-
-      if (widget.shiftActive) {
-        if (_shiftMap.containsKey(char)) {
-          finalData = _shiftMap[char]!;
-        } else {
-          finalData = char.toUpperCase();
-        }
-      }
-
-      if (widget.ctrlActive) {
-        int code = finalData.toUpperCase().codeUnitAt(0);
-        if (code >= 64 && code <= 95) {
-          finalData = String.fromCharCode(code - 64);
-        } else if (finalData == ' ') {
-          finalData = '\x00';
-        }
-      }
-
-      if (widget.altActive) {
-        finalData = '\x1b$finalData';
-      }
-    }
-
-    widget.onInput(finalData);
-
-    if (wasModified) {
-      widget.onModifiersReset();
-    }
-  }
-
   void _onKey(RawKeyEvent event) {
     if (event is! RawKeyDownEvent) return;
+    if (widget.isSelectionMode) return; // Ignore keys in selection mode
 
     final key = event.logicalKey;
     String? sequence;
 
-    // Handle special keys that TextField might miss (including Backspace)
+    // Special hardware keys
     if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
     else if (key == LogicalKeyboardKey.tab) sequence = '\t';
     else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
@@ -179,16 +120,10 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
 
     if (sequence != null) {
-      String finalData = sequence;
-      bool wasModified = false;
-
-      if (widget.altActive) {
-        finalData = '\x1b$finalData';
-        wasModified = true;
+      widget.onInput(sequence);
+      if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
+        widget.onModifiersReset();
       }
-      
-      widget.onInput(finalData);
-      if (wasModified) widget.onModifiersReset();
     }
   }
 
@@ -249,13 +184,18 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
           });
         }
 
-        return RawKeyboardListener(
-          focusNode: _wrapperFocusNode, // Wrapper node for RawKeyboardListener
-          onKey: _onKey,
+        return Focus(
+          focusNode: _wrapperFocusNode,
+          onKey: (node, event) {
+            _onKey(event);
+            return KeyEventResult.ignored;
+          },
           child: GestureDetector(
             onTap: () {
-              widget.focusNode.requestFocus();
-              SystemChannels.textInput.invokeMethod('TextInput.show');
+              if (!widget.isSelectionMode) {
+                widget.focusNode.requestFocus();
+                SystemChannels.textInput.invokeMethod('TextInput.show');
+              }
             },
             onDoubleTap: _zoomIn,
             onLongPress: _zoomOut,
@@ -265,38 +205,20 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
               height: constraints.maxHeight,
               child: Stack(
                 children: [
-                  // Actual terminal rendering (readOnly: true because we handle input via TextField)
+                  // Terminal rendering
+                  // In selection mode, we allow TerminalView to handle its own gestures
                   TerminalView(
                     widget.terminal,
                     controller: widget.controller,
-                    readOnly: true,
+                    focusNode: widget.focusNode,
+                    autofocus: !widget.isSelectionMode,
+                    readOnly: !widget.isSelectionMode,
+                    cursorType: TerminalCursorType.block,
                     textStyle: TerminalStyle(
                       fontSize: _fontSize,
                       fontFamily: 'JetBrains Mono',
                     ),
                     padding: EdgeInsets.zero,
-                  ),
-
-                  // Overlay TextField to capture native keyboard input
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: 0.01,
-                      child: TextField(
-                        controller: _inputController,
-                        focusNode: widget.focusNode,
-                        autofocus: true,
-                        keyboardType: TextInputType.multiline,
-                        textInputAction: TextInputAction.newline,
-                        maxLines: null,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        onChanged: _handleTextFieldInput,
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                      ),
-                    ),
                   ),
                   
                   if (widget.ctrlActive || widget.altActive || widget.shiftActive)
@@ -312,6 +234,28 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
                         child: Text(
                           '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
                           style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    
+                  // Warning for selection mode
+                  if (widget.isSelectionMode)
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.8),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'SELECTION MODE',
+                          style: TextStyle(
                             color: Colors.white,
                             fontSize: 10,
                             fontWeight: FontWeight.bold,

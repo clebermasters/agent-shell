@@ -1,11 +1,16 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/tmux_session.dart';
 import '../../../data/services/websocket_service.dart';
-import '../../../core/config/app_config.dart';
+import '../../hosts/providers/hosts_provider.dart';
 
 final sharedWebSocketServiceProvider = Provider<WebSocketService>((ref) {
   final service = WebSocketService();
-  service.connect(AppConfig.wsBaseUrl);
+  
+  final hostsState = ref.watch(hostsProvider);
+  if (hostsState.selectedHost != null) {
+    service.connect('${hostsState.selectedHost!.wsUrl}/ws');
+  }
+  
   ref.onDispose(() => service.dispose());
   return service;
 });

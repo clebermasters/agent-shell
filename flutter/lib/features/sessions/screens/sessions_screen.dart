@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/tmux_session.dart';
 import '../providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
+import '../../hosts/screens/host_selection_screen.dart';
+import '../../hosts/providers/hosts_provider.dart';
 
 class SessionsScreen extends ConsumerStatefulWidget {
   const SessionsScreen({super.key});
@@ -23,11 +25,31 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
   @override
   Widget build(BuildContext context) {
     final sessionsState = ref.watch(sessionsProvider);
+    final hostsState = ref.watch(hostsProvider);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sessions'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Sessions'),
+            if (hostsState.selectedHost != null)
+              Text(
+                hostsState.selectedHost!.name,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+          ],
+        ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.dns),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const HostSelectionScreen()),
+              );
+            },
+            tooltip: 'Servers',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {

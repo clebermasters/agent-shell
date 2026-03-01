@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../../data/models/cron_job.dart';
 import '../../../data/services/websocket_service.dart';
+import '../../sessions/providers/sessions_provider.dart';
 
 class CronState {
   final List<CronJob> jobs;
@@ -87,6 +88,7 @@ class CronNotifier extends StateNotifier<CronState> {
 }
 
 final cronProvider = StateNotifierProvider<CronNotifier, CronState>((ref) {
-  final wsService = WebSocketService();
+  // Use the shared web socket service instead of creating a new disconnected one
+  final wsService = ref.watch(sharedWebSocketServiceProvider);
   return CronNotifier(wsService);
 });

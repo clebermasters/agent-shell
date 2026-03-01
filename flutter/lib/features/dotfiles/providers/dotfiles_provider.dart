@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/dotfile.dart';
 import '../../../data/services/websocket_service.dart';
+import '../../sessions/providers/sessions_provider.dart';
 
 class DotfilesState {
   final List<DotFile> files;
@@ -83,7 +84,10 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
   }
 }
 
-final dotfilesProvider = StateNotifierProvider<DotfilesNotifier, DotfilesState>((ref) {
-  final wsService = WebSocketService();
-  return DotfilesNotifier(wsService);
-});
+final dotfilesProvider = StateNotifierProvider<DotfilesNotifier, DotfilesState>(
+  (ref) {
+    // Use the shared web socket service instead of creating a new disconnected one
+    final wsService = ref.watch(sharedWebSocketServiceProvider);
+    return DotfilesNotifier(wsService);
+  },
+);

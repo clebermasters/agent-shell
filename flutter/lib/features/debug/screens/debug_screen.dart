@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_config.dart';
 import '../../../data/services/websocket_service.dart';
 import '../../sessions/providers/sessions_provider.dart';
+import '../../hosts/providers/hosts_provider.dart';
 
 class DebugScreen extends ConsumerStatefulWidget {
   const DebugScreen({super.key});
@@ -13,7 +14,7 @@ class DebugScreen extends ConsumerStatefulWidget {
 }
 
 class _DebugScreenState extends ConsumerState<DebugScreen> {
-  final _urlController = TextEditingController(text: AppConfig.wsBaseUrl);
+  late final TextEditingController _urlController;
   final List<String> _logs = [];
   bool _isConnected = false;
   StreamSubscription? _logSubscription;
@@ -22,6 +23,8 @@ class _DebugScreenState extends ConsumerState<DebugScreen> {
   @override
   void initState() {
     super.initState();
+    final selectedHost = ref.read(hostsProvider).selectedHost;
+    _urlController = TextEditingController(text: selectedHost != null ? '${selectedHost.wsUrl}/ws' : '');
     _connect();
   }
 

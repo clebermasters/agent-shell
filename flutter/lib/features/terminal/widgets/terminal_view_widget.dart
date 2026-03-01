@@ -258,39 +258,42 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
             _onKey(event);
             return KeyEventResult.ignored;
           },
-          child: GestureDetector(
-            onTap: () {
-              if (!widget.isSelectionMode) {
-                widget.focusNode.requestFocus();
-                SystemChannels.textInput.invokeMethod('TextInput.show');
-              }
-            },
-            onDoubleTap: _zoomIn,
-            onLongPress: _zoomOut,
-            child: Container(
-              color: Colors.black,
-              width: constraints.maxWidth,
-              height: constraints.maxHeight,
-              child: Stack(
-                children: [
-                  // Actual terminal rendering
-                  // In normal mode (not selection), we use readOnly: true because we capture input via TextField
-                  TerminalView(
-                    widget.terminal,
-                    controller: widget.controller,
-                    readOnly: !widget.isSelectionMode,
-                    cursorType: TerminalCursorType.block,
-                    textStyle: TerminalStyle(
-                      fontSize: _fontSize,
-                      fontFamily: 'JetBrains Mono',
-                    ),
-                    padding: EdgeInsets.zero,
+          child: Container(
+            color: Colors.black,
+            width: constraints.maxWidth,
+            height: constraints.maxHeight,
+            child: Stack(
+              children: [
+                // 1. Bottom layer: Actual TerminalView
+                TerminalView(
+                  widget.terminal,
+                  controller: widget.controller,
+                  focusNode: widget.focusNode,
+                  autofocus: !widget.isSelectionMode,
+                  // readOnly logic: 
+                  // Selection Mode: readOnly false so xterm handles gestures
+                  // Normal Mode: readOnly true so our TextField handles typing
+                  readOnly: !widget.isSelectionMode,
+                  cursorType: TerminalCursorType.block,
+                  textStyle: TerminalStyle(
+                    fontSize: _fontSize,
+                    fontFamily: 'JetBrains Mono',
                   ),
+                  padding: EdgeInsets.zero,
+                ),
 
-                  // Overlay TextField to capture native keyboard input
-                  // Active ONLY in normal mode (not selection mode)
-                  if (!widget.isSelectionMode)
-                    Positioned.fill(
+                // 2. Middle layer: Overlay TextField (Input Mode only)
+                if (!widget.isSelectionMode)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onTap: () {
+                        widget.focusNode.requestFocus();
+                        SystemChannels.textInput.invokeMethod('TextInput.show');
+                      },
+                      onDoubleTap: _zoomIn,
+                      onLongPress: _zoomOut,
+                      // We use transparent behavior to pass through what we don't catch
+                      behavior: HitTestBehavior.translucent,
                       child: Opacity(
                         opacity: 0.01,
                         child: TextField(
@@ -310,51 +313,51 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
                         ),
                       ),
                     ),
+                  ),
+                
+                // 3. Top layer: Indicators
+                if (widget.ctrlActive || widget.altActive || widget.shiftActive)
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
                   
-                  if (widget.ctrlActive || widget.altActive || widget.shiftActive)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withOpacity(0.8),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
+                if (widget.isSelectionMode)
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Text(
+                        'SELECTION MODE',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
-                    
-                  // Warning for selection mode
-                  if (widget.isSelectionMode)
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.8),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'SELECTION MODE',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+                  ),
+              ],
             ),
           ),
         );

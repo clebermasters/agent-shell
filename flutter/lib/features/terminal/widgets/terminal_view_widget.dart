@@ -212,7 +212,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
                     controller: widget.controller,
                     focusNode: widget.focusNode,
                     autofocus: !widget.isSelectionMode,
-                    readOnly: !widget.isSelectionMode,
+                    readOnly: widget.isSelectionMode,
                     cursorType: TerminalCursorType.block,
                     textStyle: TerminalStyle(
                       fontSize: _fontSize,

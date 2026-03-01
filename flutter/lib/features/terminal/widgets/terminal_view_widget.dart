@@ -35,7 +35,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
   int _lastCols = 0;
   int _lastRows = 0;
   
-  // Use a separate FocusNode for the wrapper to avoid recursion
   late FocusNode _wrapperFocusNode;
 
   @override
@@ -44,24 +43,32 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     WidgetsBinding.instance.addObserver(this);
     _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
+    
+    // Listen to terminal changes to force UI updates if needed
+    widget.terminal.addListener(_onTerminalChange);
   }
 
   @override
   void dispose() {
+    widget.terminal.removeListener(_onTerminalChange);
     WidgetsBinding.instance.removeObserver(this);
     _wrapperFocusNode.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
 
+  void _onTerminalChange() {
+    if (mounted) {
+      // Forcing a rebuild when terminal changes ensures the cursor 
+      // follows typing and Enter key correctly.
+      setState(() {});
+    }
+  }
+
   @override
   void didChangeMetrics() {
-    // Force a resize check when window metrics change (e.g. keyboard show/hide)
-    // We use a small delay to let the layout settle
     Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) {
-        // This will trigger a rebuild if constraints changed, 
-        // but we can also manually trigger a size update if we have the context
         _forceResizeCheck();
       }
     });
@@ -88,7 +95,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     final key = event.logicalKey;
     String? sequence;
 
-    // Special hardware keys
     if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
     else if (key == LogicalKeyboardKey.tab) sequence = '\t';
     else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
@@ -160,8 +166,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
             _updateTerminalSize(size);
           });
         } else {
-          // Check for size changes during build
-          // We wrap in addPostFrameCallback to avoid "setState() or markNeedsBuild() called during build"
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) {
               _updateTerminalSize(size);

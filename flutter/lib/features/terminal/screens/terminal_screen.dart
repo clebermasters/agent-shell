@@ -68,9 +68,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   }
 
   void _onFocusChange() {
-    // If we gain focus, ensure we are in a state to show keyboard
     if (_focusNode.hasFocus && !_showCustomKeyboard) {
-      // Just a logging or debug point if needed
+      // Logic handled by focusNode itself usually
     }
   }
 
@@ -86,15 +85,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      // Remember keyboard state
       _wasKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
     } else if (state == AppLifecycleState.resumed) {
-      // Restore focus and keyboard
       if (_wasKeyboardVisible && !_showCustomKeyboard) {
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted) {
             _focusNode.requestFocus();
-            // Force keyboard show
             SystemChannels.textInput.invokeMethod('TextInput.show');
           }
         });
@@ -177,8 +173,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   void _toggleKeyboardType() {
     setState(() {
       _showCustomKeyboard = !_showCustomKeyboard;
-      if (!_showCustomKeyboard) {
+      if (_showCustomKeyboard) {
+        // Close native keyboard
+        _focusNode.unfocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      } else {
+        // Show native keyboard
         _focusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.show');
       }
     });
   }
@@ -263,8 +265,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
               child: terminalState.terminal != null
                   ? GestureDetector(
                       onTap: () {
-                        _focusNode.requestFocus();
-                        SystemChannels.textInput.invokeMethod('TextInput.show');
+                        if (!_showCustomKeyboard) {
+                          _focusNode.requestFocus();
+                          SystemChannels.textInput.invokeMethod('TextInput.show');
+                        }
                       },
                       onDoubleTap: _toggleFullscreen,
                       onLongPress: () {
@@ -298,6 +302,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                 onKeyPressed: _handleInput,
                 onToggleKeyboard: () {
                   _focusNode.unfocus();
+                  SystemChannels.textInput.invokeMethod('TextInput.hide');
                 },
                 isCtrlActive: _ctrlActive,
                 isAltActive: _altActive,

@@ -34,15 +34,20 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   bool _initialized = false;
   int _lastCols = 0;
   int _lastRows = 0;
+  
+  // Use a separate FocusNode for the wrapper to avoid recursion
+  late FocusNode _wrapperFocusNode;
 
   @override
   void initState() {
     super.initState();
+    _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
   }
 
   @override
   void dispose() {
+    _wrapperFocusNode.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
@@ -132,10 +137,13 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
           });
         }
 
-        // Use RawKeyboardListener to catch special keys while TerminalView handles text
-        return RawKeyboardListener(
-          focusNode: widget.focusNode,
-          onKey: _onKey,
+        // We wrap everything in a Focus to handle hardware keys without conflicting with TerminalView's focus
+        return Focus(
+          focusNode: _wrapperFocusNode,
+          onKey: (node, event) {
+            _onKey(event);
+            return KeyEventResult.ignored;
+          },
           child: GestureDetector(
             onTap: () {
               widget.focusNode.requestFocus();
@@ -148,7 +156,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
               height: constraints.maxHeight,
               child: Stack(
                 children: [
-                  // Actual terminal rendering and standard text input handling
                   TerminalView(
                     widget.terminal,
                     focusNode: widget.focusNode,
@@ -160,7 +167,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
                     padding: EdgeInsets.zero,
                   ),
                   
-                  // Visual indicator for active soft modifiers
                   if (widget.ctrlActive || widget.altActive || widget.shiftActive)
                     Positioned(
                       top: 8,

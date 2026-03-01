@@ -18,6 +18,39 @@ A high-performance web-based TMUX session viewer built with Rust and Vue.js. Acc
 - **Network Accessible**: Access via local network or Tailscale IPs
 - **Session Isolation**: Alternative session manager to avoid attachment conflicts
 
+## Android App (Flutter)
+
+WebMux now includes a high-performance **Android application** built with Flutter. This app allows you to control your Tmux sessions directly from your phone **without needing SSH**, providing a more secure and mobile-optimized experience than traditional terminal emulators.
+
+### Key Features
+
+- **SSH-Free Access**: Connect directly to the WebMux backend via WebSocket.
+- **Terminal Accessory Bar**: A horizontally scrollable bar featuring `CTRL`, `ALT`, `ESC`, `TAB`, arrow keys, and `F1-F12` for effortless Tmux shortcuts.
+- **Enhanced Native Keyboard**: Optimized support for the native Android keyboard, including "sticky" modifiers (e.g., tap `CTRL` then `l` to clear screen).
+- **Session Persistence**: The app remembers your active session and navigation tab, automatically restoring them even after app restarts or screen-off events.
+- **Real-time Synchronization**: High-performance terminal rendering with instant cursor updates.
+- **Built-in Docker Build**: Easy compilation process using a pre-configured Docker environment.
+
+### Download
+
+You can download the latest debug APK here:
+[Download WebMux Android APK](https://images.bitslovers.com/temp/webmux-flutter-debug.apk)
+
+### Building from Source
+
+If you want to build the APK yourself:
+
+1.  Ensure Docker is installed and running.
+2.  Navigate to the `flutter` directory:
+    ```bash
+    cd flutter
+    ```
+3.  Run the build script:
+    ```bash
+    ./build.sh
+    ```
+4.  The generated APK will be available in the project root as `webmux-flutter-debug.apk`.
+
 ## Prerequisites
 
 - Node.js (v14 or higher)

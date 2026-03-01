@@ -12,7 +12,7 @@ class TerminalService {
   final StreamController<String> _outputController =
       StreamController<String>.broadcast();
   
-  // Custom input processor to handle modifiers
+  // Custom input processor to handle modifiers globally
   Function(String session, String data)? _inputProcessor;
 
   TerminalService(this._wsService);
@@ -29,7 +29,6 @@ class TerminalService {
     _terminals[sessionName] = terminal;
 
     // Set up terminal callbacks
-    // Use a local closure to ensure we don't lose the processor if the terminal instance changes
     terminal.onOutput = (data) {
       if (_inputProcessor != null) {
         _inputProcessor!(sessionName, data);

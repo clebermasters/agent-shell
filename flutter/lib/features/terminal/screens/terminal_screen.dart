@@ -25,6 +25,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   bool _showStatus = true;
   bool _wasKeyboardVisible = false;
   
+  // Selection Mode state
+  bool _isSelectionMode = false;
+  bool _hasSelection = false;
+  
   // Modifier states for accessory bar + native keyboard
   bool _ctrlActive = false;
   bool _altActive = false;
@@ -52,6 +56,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
       
       terminalNotifier.terminalService.setInputProcessor(_processInput);
       
+      // Listen for selection changes
+      terminalNotifier.state.controller?.addListener(_onSelectionChange);
+      
       _persistActiveSession();
       
       Future.delayed(const Duration(seconds: 3), () {
@@ -67,14 +74,29 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     });
   }
 
+  void _onSelectionChange() {
+    final controller = ref.read(terminalProvider).controller;
+    if (controller != null) {
+      final hasSelection = controller.selection != null;
+      if (hasSelection != _hasSelection) {
+        setState(() {
+          _hasSelection = hasSelection;
+        });
+      }
+    }
+  }
+
   void _onFocusChange() {
-    if (_focusNode.hasFocus && !_showCustomKeyboard) {
+    // If we gain focus, ensure we are in a state to show keyboard
+    if (_focusNode.hasFocus && !_showCustomKeyboard && !_isSelectionMode) {
+      // Logic handled by focusNode itself usually
     }
   }
 
   @override
   void dispose() {
     _focusNode.removeListener(_onFocusChange);
+    ref.read(terminalProvider).controller?.removeListener(_onSelectionChange);
     WidgetsBinding.instance.removeObserver(this);
     _clearActiveSession();
     _focusNode.dispose();
@@ -84,12 +106,15 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
+      // Remember keyboard state
       _wasKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
     } else if (state == AppLifecycleState.resumed) {
-      if (_wasKeyboardVisible && !_showCustomKeyboard) {
+      // Restore focus and keyboard
+      if (_wasKeyboardVisible && !_showCustomKeyboard && !_isSelectionMode) {
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted) {
             _focusNode.requestFocus();
+            // Force keyboard show
             SystemChannels.textInput.invokeMethod('TextInput.show');
           }
         });
@@ -98,9 +123,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   }
 
   void _processInput(String session, String data) {
+    // In selection mode, we ignore output from the terminal (user typing)
+    // although TerminalView is set to readOnly: true anyway.
+    if (_isSelectionMode) return;
+
     String finalData = data;
     bool wasModified = false;
 
+    // Apply soft modifiers for single character inputs (from native keyboard)
     if (data.length == 1 && (_ctrlActive || _altActive || _shiftActive)) {
       String char = data;
       wasModified = true;
@@ -127,8 +157,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
       }
     }
 
+    // Send to backend via terminal provider
     ref.read(terminalProvider.notifier).sendData(session, finalData);
 
+    // Reset soft modifiers if they were used
     if (wasModified) {
       setState(() {
         _ctrlActive = false;
@@ -155,6 +187,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   }
 
   void _handleInput(String data) {
+    // This is called from our widgets (AccessoryBar, MobileKeyboard)
+    // We send directly since they handle their own modifiers
     ref.read(terminalProvider.notifier).sendData(widget.sessionName, data);
   }
 
@@ -176,12 +210,56 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
         // Close native keyboard
         _focusNode.unfocus();
         SystemChannels.textInput.invokeMethod('TextInput.hide');
+        _isSelectionMode = false; // Disable selection mode when virtual keyboard is on
       } else {
         // Show native keyboard
         _focusNode.requestFocus();
         SystemChannels.textInput.invokeMethod('TextInput.show');
       }
     });
+  }
+
+  void _toggleSelectionMode() {
+    setState(() {
+      _isSelectionMode = !_isSelectionMode;
+      if (_isSelectionMode) {
+        // Hide keyboard when entering selection mode
+        _focusNode.unfocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      } else {
+        // Show keyboard when leaving selection mode
+        _focusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.show');
+      }
+    });
+  }
+
+  void _handleCopy() async {
+    final terminalState = ref.read(terminalProvider);
+    final controller = terminalState.controller;
+    final terminal = terminalState.terminal;
+    
+    if (controller != null && terminal != null && controller.selection != null) {
+      final text = terminal.buffer.getText(controller.selection!);
+      await Clipboard.setData(ClipboardData(text: text));
+      
+      // Provide feedback
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Copied to clipboard'), duration: Duration(seconds: 1)),
+        );
+      }
+      
+      // Optional: auto-exit selection mode
+      // _toggleSelectionMode();
+    }
+  }
+
+  void _handlePaste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text != null) {
+      _handleInput(data!.text!);
+    }
   }
 
   @override
@@ -264,7 +342,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
               child: terminalState.terminal != null
                   ? GestureDetector(
                       onTap: () {
-                        if (!_showCustomKeyboard) {
+                        if (!_showCustomKeyboard && !_isSelectionMode) {
                           _focusNode.requestFocus();
                           SystemChannels.textInput.invokeMethod('TextInput.show');
                         }
@@ -284,6 +362,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                         ctrlActive: _ctrlActive,
                         altActive: _altActive,
                         shiftActive: _shiftActive,
+                        isSelectionMode: _isSelectionMode,
                         onModifiersReset: () {
                           setState(() {
                             _ctrlActive = false;
@@ -297,12 +376,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
             ),
 
             // Accessory Bar (for native keyboard)
-            if (!_showCustomKeyboard && isNativeKeyboardVisible)
+            if (!_showCustomKeyboard && (isNativeKeyboardVisible || _isSelectionMode))
               TerminalAccessoryBar(
                 onKeyPressed: _handleInput,
                 onToggleKeyboard: () {
-                  _focusNode.unfocus();
-                  SystemChannels.textInput.invokeMethod('TextInput.hide');
+                  if (_isSelectionMode) {
+                    _toggleSelectionMode();
+                  } else {
+                    _focusNode.unfocus();
+                    SystemChannels.textInput.invokeMethod('TextInput.hide');
+                  }
                 },
                 isCtrlActive: _ctrlActive,
                 isAltActive: _altActive,
@@ -314,6 +397,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                     if (mod == 'SHIFT') _shiftActive = !_shiftActive;
                   });
                 },
+                isSelectionMode: _isSelectionMode,
+                onToggleSelectionMode: _toggleSelectionMode,
+                onCopy: _handleCopy,
+                onPaste: _handlePaste,
+                hasSelection: _hasSelection,
               ),
 
             // Custom virtual keyboard

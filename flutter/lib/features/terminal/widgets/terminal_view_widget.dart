@@ -12,7 +12,6 @@ class TerminalViewWidget extends StatefulWidget {
   final bool ctrlActive;
   final bool altActive;
   final bool shiftActive;
-  final bool isSelectionMode;
   final VoidCallback onModifiersReset;
 
   const TerminalViewWidget({
@@ -25,7 +24,6 @@ class TerminalViewWidget extends StatefulWidget {
     this.ctrlActive = false,
     this.altActive = false,
     this.shiftActive = false,
-    this.isSelectionMode = false,
     required this.onModifiersReset,
   });
 
@@ -40,6 +38,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
   int _lastRows = 0;
   
   late FocusNode _wrapperFocusNode;
+  late FocusNode _dummyNode;
   late TextEditingController _inputController;
 
   final Map<String, String> _shiftMap = {
@@ -55,6 +54,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
+    _dummyNode = FocusNode(debugLabel: 'TerminalDummy');
     _inputController = TextEditingController();
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
     widget.terminal.addListener(_onTerminalChange);
@@ -74,6 +74,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     widget.terminal.removeListener(_onTerminalChange);
     WidgetsBinding.instance.removeObserver(this);
     _wrapperFocusNode.dispose();
+    _dummyNode.dispose();
     _inputController.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
@@ -162,12 +163,10 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
 
   void _onKey(RawKeyEvent event) {
     if (event is! RawKeyDownEvent) return;
-    if (widget.isSelectionMode) return; 
 
     final key = event.logicalKey;
     String? sequence;
 
-    // Special hardware keys
     if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
     else if (key == LogicalKeyboardKey.tab) sequence = '\t';
     else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
@@ -258,106 +257,79 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
             _onKey(event);
             return KeyEventResult.ignored;
           },
-          child: Container(
-            color: Colors.black,
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            child: Stack(
-              children: [
-                // 1. Bottom layer: Actual TerminalView
-                TerminalView(
-                  widget.terminal,
-                  controller: widget.controller,
-                  focusNode: widget.focusNode,
-                  autofocus: !widget.isSelectionMode,
-                  // readOnly logic: 
-                  // Selection Mode: readOnly false so xterm handles gestures
-                  // Normal Mode: readOnly true so our TextField handles typing
-                  readOnly: !widget.isSelectionMode,
-                  cursorType: TerminalCursorType.block,
-                  textStyle: TerminalStyle(
-                    fontSize: _fontSize,
-                    fontFamily: 'JetBrains Mono',
-                  ),
-                  padding: EdgeInsets.zero,
-                ),
-
-                // 2. Middle layer: Overlay TextField (Input Mode only)
-                if (!widget.isSelectionMode)
-                  Positioned.fill(
-                    child: GestureDetector(
-                      onTap: () {
-                        widget.focusNode.requestFocus();
-                        SystemChannels.textInput.invokeMethod('TextInput.show');
-                      },
-                      onDoubleTap: _zoomIn,
-                      onLongPress: _zoomOut,
-                      // We use transparent behavior to pass through what we don't catch
-                      behavior: HitTestBehavior.translucent,
-                      child: Opacity(
-                        opacity: 0.01,
-                        child: TextField(
-                          controller: _inputController,
-                          focusNode: widget.focusNode,
-                          autofocus: true,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.newline,
-                          maxLines: null,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          onChanged: _handleTextFieldInput,
-                          decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                      ),
+          child: GestureDetector(
+            onTap: () {
+              widget.focusNode.requestFocus();
+              SystemChannels.textInput.invokeMethod('TextInput.show');
+              widget.controller?.clearSelection(); // Optional, clear selection on tap
+            },
+            onDoubleTap: _zoomIn,
+            onLongPress: _zoomOut,
+            behavior: HitTestBehavior.translucent,
+            child: Container(
+              color: Colors.black,
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+              child: Stack(
+                children: [
+                  // Bottom layer: Actual TerminalView
+                  TerminalView(
+                    widget.terminal,
+                    controller: widget.controller,
+                    focusNode: _dummyNode, // Dummy node to prevent it from stealing focus
+                    readOnly: true, // Prevents native input processing, allows selection gestures
+                    cursorType: TerminalCursorType.block,
+                    textStyle: TerminalStyle(
+                      fontSize: _fontSize,
+                      fontFamily: 'JetBrains Mono',
                     ),
+                    padding: EdgeInsets.zero,
                   ),
-                
-                // 3. Top layer: Indicators
-                if (widget.ctrlActive || widget.altActive || widget.shiftActive)
+
+                  // Top layer: Hidden TextField for capturing input
                   Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.8),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
+                    top: 0,
+                    left: -100, // Keep it completely offscreen so it doesn't block touches
+                    child: SizedBox(
+                      width: 10,
+                      height: 10,
+                      child: TextField(
+                        controller: _inputController,
+                        focusNode: widget.focusNode,
+                        autofocus: true,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        maxLines: null,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        onChanged: _handleTextFieldInput,
                       ),
                     ),
                   ),
                   
-                if (widget.isSelectionMode)
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.8),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Text(
-                        'SELECTION MODE',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                  // Visual indicator for active soft modifiers
+                  if (widget.ctrlActive || widget.altActive || widget.shiftActive)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.8),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         );

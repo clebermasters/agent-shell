@@ -367,7 +367,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                         ctrlActive: _ctrlActive,
                         altActive: _altActive,
                         shiftActive: _shiftActive,
-                        isSelectionMode: _isSelectionMode,
                         onModifiersReset: () {
                           setState(() {
                             _ctrlActive = false;

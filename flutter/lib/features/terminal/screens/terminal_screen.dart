@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/terminal_provider.dart';
 import '../widgets/terminal_view_widget.dart';
 import '../widgets/mobile_keyboard.dart';
 import '../widgets/terminal_accessory_bar.dart';
+import '../../auth/providers/auth_provider.dart';
 
 class TerminalScreen extends ConsumerStatefulWidget {
   final String sessionName;
@@ -16,7 +18,7 @@ class TerminalScreen extends ConsumerStatefulWidget {
   ConsumerState<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends ConsumerState<TerminalScreen> {
+class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
   final FocusNode _focusNode = FocusNode();
   bool _showCustomKeyboard = false;
   bool _fullscreen = false;
@@ -30,10 +32,13 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     // Connect to the terminal session
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(terminalProvider.notifier).connect(widget.sessionName);
+      _persistActiveSession();
+      
       // Auto-hide status bar after 3 seconds
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) {
@@ -47,8 +52,35 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _clearActiveSession();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Restore focus when app is resumed (e.g. after screen off/on)
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (mounted && !_showCustomKeyboard) {
+          _focusNode.requestFocus();
+        }
+      });
+    }
+  }
+
+  Future<void> _persistActiveSession() async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setString('active_terminal_session', widget.sessionName);
+  }
+
+  Future<void> _clearActiveSession() async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    // Only clear if it's still this session (to avoid race conditions)
+    if (prefs.getString('active_terminal_session') == widget.sessionName) {
+      await prefs.remove('active_terminal_session');
+    }
   }
 
   void _handleResize(int cols, int rows) {
@@ -74,7 +106,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     setState(() {
       _showCustomKeyboard = !_showCustomKeyboard;
       if (!_showCustomKeyboard) {
-        // Request focus to show native keyboard when switching to accessory bar
         _focusNode.requestFocus();
       }
     });
@@ -118,100 +149,107 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 ),
               ],
             ),
-      body: Column(
-        children: [
-          // Connection status bar - shown briefly then auto-hides
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            height: _showStatus ? null : 0,
-            child: _showStatus
-                ? Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    color: terminalState.isConnected
-                        ? Colors.green
-                        : (terminalState.isLoading
-                              ? Colors.orange
-                              : Colors.red),
-                    child: Text(
-                      terminalState.isLoading
-                          ? 'Connecting...'
-                          : terminalState.isConnected
-                          ? 'Connected'
-                          : terminalState.error ?? 'Disconnected',
-                      style: const TextStyle(color: Colors.white),
-                      textAlign: TextAlign.center,
-                    ),
-                  )
-                : const SizedBox.shrink(),
-          ),
+      body: PopScope(
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop) {
+            _clearActiveSession();
+          }
+        },
+        child: Column(
+          children: [
+            // Connection status bar
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              height: _showStatus ? null : 0,
+              child: _showStatus
+                  ? Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      color: terminalState.isConnected
+                          ? Colors.green
+                          : (terminalState.isLoading
+                                ? Colors.orange
+                                : Colors.red),
+                      child: Text(
+                        terminalState.isLoading
+                            ? 'Connecting...'
+                            : terminalState.isConnected
+                            ? 'Connected'
+                            : terminalState.error ?? 'Disconnected',
+                        style: const TextStyle(color: Colors.white),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
 
-          // Terminal view
-          Expanded(
-            child: terminalState.terminal != null
-                ? GestureDetector(
-                    onTap: () {
-                      _focusNode.requestFocus();
-                    },
-                    onDoubleTap: _toggleFullscreen,
-                    onLongPress: () {
-                      setState(() {
-                        _showStatus = !_showStatus;
-                      });
-                    },
-                    child: TerminalViewWidget(
-                      terminal: terminalState.terminal!,
-                      onResize: _handleResize,
-                      onInput: _handleInput,
-                      focusNode: _focusNode,
-                      ctrlActive: _ctrlActive,
-                      altActive: _altActive,
-                      shiftActive: _shiftActive,
-                      onModifiersReset: () {
+            // Terminal view
+            Expanded(
+              child: terminalState.terminal != null
+                  ? GestureDetector(
+                      onTap: () {
+                        _focusNode.requestFocus();
+                      },
+                      onDoubleTap: _toggleFullscreen,
+                      onLongPress: () {
                         setState(() {
-                          _ctrlActive = false;
-                          _altActive = false;
-                          _shiftActive = false;
+                          _showStatus = !_showStatus;
                         });
                       },
-                    ),
-                  )
-                : const Center(child: CircularProgressIndicator()),
-          ),
-
-          // Accessory Bar (for native keyboard)
-          if (!_showCustomKeyboard && isNativeKeyboardVisible)
-            TerminalAccessoryBar(
-              onKeyPressed: _handleInput,
-              onToggleKeyboard: () {
-                _focusNode.unfocus();
-              },
-              isCtrlActive: _ctrlActive,
-              isAltActive: _altActive,
-              isShiftActive: _shiftActive,
-              onModifierTap: (mod) {
-                setState(() {
-                  if (mod == 'CTRL') _ctrlActive = !_ctrlActive;
-                  if (mod == 'ALT') _altActive = !_altActive;
-                  if (mod == 'SHIFT') _shiftActive = !_shiftActive;
-                });
-              },
+                      child: TerminalViewWidget(
+                        terminal: terminalState.terminal!,
+                        onResize: _handleResize,
+                        onInput: _handleInput,
+                        focusNode: _focusNode,
+                        ctrlActive: _ctrlActive,
+                        altActive: _altActive,
+                        shiftActive: _shiftActive,
+                        onModifiersReset: () {
+                          setState(() {
+                            _ctrlActive = false;
+                            _altActive = false;
+                            _shiftActive = false;
+                          });
+                        },
+                      ),
+                    )
+                  : const Center(child: CircularProgressIndicator()),
             ),
 
-          // Custom virtual keyboard
-          if (_showCustomKeyboard)
-            MobileKeyboard(
-              onKeyPressed: _handleInput,
-              onClose: () {
-                setState(() {
-                  _showCustomKeyboard = false;
-                });
-              },
-            ),
-        ],
+            // Accessory Bar (for native keyboard)
+            if (!_showCustomKeyboard && isNativeKeyboardVisible)
+              TerminalAccessoryBar(
+                onKeyPressed: _handleInput,
+                onToggleKeyboard: () {
+                  _focusNode.unfocus();
+                },
+                isCtrlActive: _ctrlActive,
+                isAltActive: _altActive,
+                isShiftActive: _shiftActive,
+                onModifierTap: (mod) {
+                  setState(() {
+                    if (mod == 'CTRL') _ctrlActive = !_ctrlActive;
+                    if (mod == 'ALT') _altActive = !_altActive;
+                    if (mod == 'SHIFT') _shiftActive = !_shiftActive;
+                  });
+                },
+              ),
+
+            // Custom virtual keyboard
+            if (_showCustomKeyboard)
+              MobileKeyboard(
+                onKeyPressed: _handleInput,
+                onClose: () {
+                  setState(() {
+                    _showCustomKeyboard = false;
+                  });
+                },
+              ),
+          ],
+        ),
       ),
     );
   }

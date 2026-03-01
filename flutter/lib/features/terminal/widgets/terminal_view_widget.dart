@@ -162,12 +162,14 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
 
   void _onKey(RawKeyEvent event) {
     if (event is! RawKeyDownEvent) return;
+    
+    // In selection mode, we might want to allow some keys, 
+    // but for now, we keep it simple.
     if (widget.isSelectionMode) return; 
 
     final key = event.logicalKey;
     String? sequence;
 
-    // Special hardware keys
     if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
     else if (key == LogicalKeyboardKey.tab) sequence = '\t';
     else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
@@ -244,12 +246,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _updateTerminalSize(size);
           });
-        } else {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              _updateTerminalSize(size);
-            }
-          });
         }
 
         return Focus(
@@ -264,93 +260,99 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
             height: constraints.maxHeight,
             child: Stack(
               children: [
-                // Layer 1: TerminalView (Read-only for rendering and selection)
-                TerminalView(
-                  widget.terminal,
-                  controller: widget.controller,
-                  readOnly: true, // Radical change: TerminalView never handles IME directly
-                  cursorType: TerminalCursorType.block,
-                  textStyle: TerminalStyle(
-                    fontSize: _fontSize,
-                    fontFamily: 'JetBrains Mono',
+                // Layer 1: GHOST INPUT (Underneath, captures keyboard only)
+                // We keep it focused but invisible and non-interactable via gestures
+                Positioned(
+                  left: -100, // Off-screen but active
+                  top: 0,
+                  width: 1,
+                  height: 1,
+                  child: Opacity(
+                    opacity: 0,
+                    child: TextField(
+                      controller: _inputController,
+                      focusNode: widget.focusNode,
+                      autofocus: true,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      maxLines: null,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      onChanged: _handleTextFieldInput,
+                    ),
                   ),
-                  padding: EdgeInsets.zero,
                 ),
 
-                // Layer 2: Input Overlay (Active ONLY in normal mode)
-                if (!widget.isSelectionMode)
-                  Positioned.fill(
-                    child: GestureDetector(
-                      onTap: () {
-                        widget.focusNode.requestFocus();
-                        SystemChannels.textInput.invokeMethod('TextInput.show');
-                      },
-                      onDoubleTap: _zoomIn,
-                      onLongPress: _zoomOut,
-                      behavior: HitTestBehavior.translucent,
-                      child: Opacity(
-                        opacity: 0.01,
-                        child: TextField(
-                          controller: _inputController,
-                          focusNode: widget.focusNode,
-                          autofocus: true,
-                          keyboardType: TextInputType.multiline,
-                          textInputAction: TextInputAction.newline,
-                          maxLines: null,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          onChanged: _handleTextFieldInput,
-                          decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.zero,
+                // Layer 2: TERMINAL VIEW (On top, captures ALL gestures)
+                GestureDetector(
+                  onTap: () {
+                    // Manual focus trigger for the keyboard
+                    widget.focusNode.requestFocus();
+                    SystemChannels.textInput.invokeMethod('TextInput.show');
+                  },
+                  onDoubleTap: _zoomIn,
+                  onLongPress: _zoomOut,
+                  behavior: HitTestBehavior.opaque,
+                  child: TerminalView(
+                    widget.terminal,
+                    controller: widget.controller,
+                    readOnly: true, // Crucial: xterm.dart shouldn't try to handle focus itself
+                    cursorType: TerminalCursorType.block,
+                    textStyle: TerminalStyle(
+                      fontSize: _fontSize,
+                      fontFamily: 'JetBrains Mono',
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+                ),
+
+                // Layer 3: Visual Indicators (Overlay)
+                IgnorePointer(
+                  child: Stack(
+                    children: [
+                      if (widget.ctrlActive || widget.altActive || widget.shiftActive)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(0.8),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                  ),
-                
-                // Layer 3: Visual Indicators
-                if (widget.ctrlActive || widget.altActive || widget.shiftActive)
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.8),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
+                      if (widget.isSelectionMode)
+                        Positioned(
+                          top: 8,
+                          left: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.withOpacity(0.8),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'SELECTION MODE',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
+                    ],
                   ),
-                  
-                if (widget.isSelectionMode)
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.8),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Text(
-                        'SELECTION MODE',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
+                ),
               ],
             ),
           ),

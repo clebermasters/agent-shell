@@ -268,10 +268,15 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
                         controller: _inputController,
                         focusNode: widget.focusNode,
                         autofocus: true,
-                        keyboardType: TextInputType.visiblePassword,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.none,
+                        maxLines: null,
                         autocorrect: false,
                         enableSuggestions: false,
                         onChanged: _handleTextFieldInput,
+                        onSubmitted: (val) {
+                          _processInputChar('\r');
+                        },
                       ),
                     ),
                   ),

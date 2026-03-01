@@ -31,13 +31,14 @@ class TerminalViewWidget extends StatefulWidget {
 
 class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   double _fontSize = 14.0;
-  bool _localCtrlPressed = false;
+  bool _localHardwareCtrlPressed = false;
+  bool _localHardwareAltPressed = false;
+  bool _localHardwareShiftPressed = false;
 
   int _lastCols = 0;
   int _lastRows = 0;
   bool _initialized = false;
 
-  // Improved shift map covering more common keys
   final Map<String, String> _shiftMap = {
     '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
     '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
@@ -49,22 +50,16 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   void initState() {
     super.initState();
-    _setupTerminalCallback();
+    // Intercept terminal input via Terminal.onOutput
+    // This catches everything sent to the terminal (native keyboard, etc.)
+    widget.terminal.onOutput = _handleTerminalOutput;
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
   }
 
   @override
   void didUpdateWidget(TerminalViewWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _setupTerminalCallback();
-  }
-
-  void _setupTerminalCallback() {
-    // Intercept terminal output to apply modifiers
-    // This is the core mechanism for native keyboard + accessory bar
-    widget.terminal.onOutput = (data) {
-      _processInput(data);
-    };
+    widget.terminal.onOutput = _handleTerminalOutput;
   }
 
   @override
@@ -73,16 +68,17 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     super.dispose();
   }
 
-  void _processInput(String data) {
+  // This is the CRITICAL part: it intercepts input from the TerminalView's internal text input
+  void _handleTerminalOutput(String data) {
     String finalData = data;
     bool wasModified = false;
 
-    // Apply modifiers from accessory bar for single character inputs
-    // (native keyboard usually sends one char at a time in this mode)
+    // Apply soft modifiers from our accessory bar
     if (data.length == 1 && (widget.ctrlActive || widget.altActive || widget.shiftActive)) {
       String char = data;
       wasModified = true;
 
+      // 1. Apply Shift
       if (widget.shiftActive) {
         if (_shiftMap.containsKey(char)) {
           char = _shiftMap[char]!;
@@ -91,31 +87,30 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
         }
       }
 
+      // 2. Apply Ctrl
       if (widget.ctrlActive) {
-        // Handle Ctrl combinations (map A-Z to 1-26)
         int code = char.toUpperCase().codeUnitAt(0);
         if (code >= 64 && code <= 95) {
           finalData = String.fromCharCode(code - 64);
         } else if (char == ' ') {
           finalData = '\x00';
         } else {
-          // If not a standard letter, keep it as is or try simple escape
           finalData = char;
         }
       } else {
         finalData = char;
       }
 
+      // 3. Apply Alt (Meta)
       if (widget.altActive) {
-        // Alt key (Meta) in terminal is ESC + character
         finalData = '\x1b$finalData';
       }
     }
 
-    // Always send the data to the provided onInput callback (backend)
+    // Send to backend
     widget.onInput(finalData);
 
-    // Reset modifiers in the parent state if we used them
+    // Reset soft modifiers if used
     if (wasModified) {
       widget.onModifiersReset();
     }
@@ -129,13 +124,23 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     }
   }
 
-  void _handleKeyEvent(KeyEvent event) {
+  // Handle hardware keys (and some native keyboard events)
+  void _onKeyEvent(KeyEvent event) {
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       final key = event.logicalKey;
       String? sequence;
 
-      // Handle local zoom with hardware Ctrl
-      if (_localCtrlPressed) {
+      // Track hardware modifier states
+      if (key == LogicalKeyboardKey.controlLeft || key == LogicalKeyboardKey.controlRight) {
+        _localHardwareCtrlPressed = true;
+      } else if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
+        _localHardwareAltPressed = true;
+      } else if (key == LogicalKeyboardKey.shiftLeft || key == LogicalKeyboardKey.shiftRight) {
+        _localHardwareShiftPressed = true;
+      }
+
+      // Hardware combinations (Zoom)
+      if (_localHardwareCtrlPressed) {
         if (key == LogicalKeyboardKey.equal || key == LogicalKeyboardKey.add) {
           _zoomIn();
           return;
@@ -145,19 +150,12 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
         }
       }
 
-      // Hardware key mappings (Function keys, arrows, etc.)
+      // Hardware control keys that don't produce characters
       if (key == LogicalKeyboardKey.f1) sequence = '\x1bOP';
       else if (key == LogicalKeyboardKey.f2) sequence = '\x1bOQ';
       else if (key == LogicalKeyboardKey.f3) sequence = '\x1bOR';
       else if (key == LogicalKeyboardKey.f4) sequence = '\x1bOS';
       else if (key == LogicalKeyboardKey.f5) sequence = '\x1b[15~';
-      else if (key == LogicalKeyboardKey.f6) sequence = '\x1b[17~';
-      else if (key == LogicalKeyboardKey.f7) sequence = '\x1b[18~';
-      else if (key == LogicalKeyboardKey.f8) sequence = '\x1b[19~';
-      else if (key == LogicalKeyboardKey.f9) sequence = '\x1b[20~';
-      else if (key == LogicalKeyboardKey.f10) sequence = '\x1b[21~';
-      else if (key == LogicalKeyboardKey.f11) sequence = '\x1b[23~';
-      else if (key == LogicalKeyboardKey.f12) sequence = '\x1b[24~';
       else if (key == LogicalKeyboardKey.arrowUp) sequence = '\x1b[A';
       else if (key == LogicalKeyboardKey.arrowDown) sequence = '\x1b[B';
       else if (key == LogicalKeyboardKey.arrowRight) sequence = '\x1b[C';
@@ -170,31 +168,23 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       else if (key == LogicalKeyboardKey.end) sequence = '\x1b[F';
       else if (key == LogicalKeyboardKey.pageUp) sequence = '\x1b[5~';
       else if (key == LogicalKeyboardKey.pageDown) sequence = '\x1b[6~';
-      else if (key == LogicalKeyboardKey.insert) sequence = '\x1b[2~';
       else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
-      else if (HardwareKeyboard.instance.isControlPressed) {
-        final code = key.keyLabel.toUpperCase().codeUnitAt(0);
-        if (code >= 65 && code <= 90) {
-          sequence = String.fromCharCode(code - 64);
-        } else if (key == LogicalKeyboardKey.bracketLeft) sequence = '\x1b';
-        else if (key == LogicalKeyboardKey.backslash) sequence = '\x1c';
-        else if (key == LogicalKeyboardKey.bracketRight) sequence = '\x1d';
-        else if (key == LogicalKeyboardKey.space) sequence = '\x00';
-      } else if (HardwareKeyboard.instance.isAltPressed) {
-        final char = event.character;
-        if (char != null) sequence = '\x1b$char';
-      } else if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
-        setState(() { _localCtrlPressed = !_localCtrlPressed; });
-        return;
-      }
 
+      // If we identified a hardware special key sequence, send it and reset soft modifiers
       if (sequence != null) {
         widget.onInput(sequence);
+        if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
+          widget.onModifiersReset();
+        }
       }
     } else if (event is KeyUpEvent) {
       final key = event.logicalKey;
-      if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
-        setState(() { _localCtrlPressed = false; });
+      if (key == LogicalKeyboardKey.controlLeft || key == LogicalKeyboardKey.controlRight) {
+        _localHardwareCtrlPressed = false;
+      } else if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
+        _localHardwareAltPressed = false;
+      } else if (key == LogicalKeyboardKey.shiftLeft || key == LogicalKeyboardKey.shiftRight) {
+        _localHardwareShiftPressed = false;
       }
     }
   }
@@ -238,8 +228,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   Widget build(BuildContext context) {
     return KeyboardListener(
-      focusNode: FocusNode(), // Local focus node for hardware keys
-      onKeyEvent: _handleKeyEvent,
+      focusNode: FocusNode(),
+      onKeyEvent: _onKeyEvent,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final size = Size(constraints.maxWidth, constraints.maxHeight);
@@ -273,7 +263,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
                     padding: EdgeInsets.zero,
                   ),
                   
-                  // Visual indicator for active modifiers
+                  // Visual indicator for active soft modifiers
                   if (widget.ctrlActive || widget.altActive || widget.shiftActive)
                     Positioned(
                       top: 8,
@@ -281,7 +271,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: Colors.blue.withOpacity(0.7),
+                          color: Colors.red.withOpacity(0.8),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(

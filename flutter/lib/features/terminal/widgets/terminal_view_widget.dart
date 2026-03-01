@@ -38,12 +38,22 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
   int _lastRows = 0;
   
   late FocusNode _wrapperFocusNode;
+  late TextEditingController _inputController;
+
+  final Map<String, String> _shiftMap = {
+    '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
+    '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+    '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|',
+    ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?',
+    '`': '~',
+  };
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
+    _inputController = TextEditingController();
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
     widget.terminal.addListener(_onTerminalChange);
   }
@@ -62,6 +72,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     widget.terminal.removeListener(_onTerminalChange);
     WidgetsBinding.instance.removeObserver(this);
     _wrapperFocusNode.dispose();
+    _inputController.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
@@ -96,13 +107,64 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     }
   }
 
+  void _handleTextFieldInput(String value) {
+    if (value.isEmpty) return;
+
+    for (int i = 0; i < value.length; i++) {
+      String char = value[i];
+      if (char == '\n') {
+        _processInputChar('\r');
+      } else {
+        _processInputChar(char);
+      }
+    }
+
+    _inputController.value = TextEditingValue.empty;
+  }
+
+  void _processInputChar(String char) {
+    String finalData = char;
+    bool wasModified = false;
+
+    if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
+      wasModified = true;
+
+      if (widget.shiftActive) {
+        if (_shiftMap.containsKey(char)) {
+          finalData = _shiftMap[char]!;
+        } else {
+          finalData = char.toUpperCase();
+        }
+      }
+
+      if (widget.ctrlActive) {
+        int code = finalData.toUpperCase().codeUnitAt(0);
+        if (code >= 64 && code <= 95) {
+          finalData = String.fromCharCode(code - 64);
+        } else if (finalData == ' ') {
+          finalData = '\x00';
+        }
+      }
+
+      if (widget.altActive) {
+        finalData = '\x1b$finalData';
+      }
+    }
+
+    widget.onInput(finalData);
+
+    if (wasModified) {
+      widget.onModifiersReset();
+    }
+  }
+
   void _onKey(RawKeyEvent event) {
     if (event is! RawKeyDownEvent) return;
 
     final key = event.logicalKey;
     String? sequence;
 
-    // Special hardware keys
+    // Handle special keys that TextField might miss (including Backspace)
     if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
     else if (key == LogicalKeyboardKey.tab) sequence = '\t';
     else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
@@ -117,10 +179,16 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
 
     if (sequence != null) {
-      widget.onInput(sequence);
-      if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
-        widget.onModifiersReset();
+      String finalData = sequence;
+      bool wasModified = false;
+
+      if (widget.altActive) {
+        finalData = '\x1b$finalData';
+        wasModified = true;
       }
+      
+      widget.onInput(finalData);
+      if (wasModified) widget.onModifiersReset();
     }
   }
 
@@ -181,12 +249,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
           });
         }
 
-        return Focus(
-          focusNode: _wrapperFocusNode,
-          onKey: (node, event) {
-            _onKey(event);
-            return KeyEventResult.ignored;
-          },
+        return RawKeyboardListener(
+          focusNode: _wrapperFocusNode, // Wrapper node for RawKeyboardListener
+          onKey: _onKey,
           child: GestureDetector(
             onTap: () {
               widget.focusNode.requestFocus();
@@ -200,17 +265,38 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
               height: constraints.maxHeight,
               child: Stack(
                 children: [
+                  // Actual terminal rendering (readOnly: true because we handle input via TextField)
                   TerminalView(
                     widget.terminal,
                     controller: widget.controller,
-                    focusNode: widget.focusNode,
-                    autofocus: true,
-                    cursorType: TerminalCursorType.block,
+                    readOnly: true,
                     textStyle: TerminalStyle(
                       fontSize: _fontSize,
                       fontFamily: 'JetBrains Mono',
                     ),
                     padding: EdgeInsets.zero,
+                  ),
+
+                  // Overlay TextField to capture native keyboard input
+                  Positioned.fill(
+                    child: Opacity(
+                      opacity: 0.01,
+                      child: TextField(
+                        controller: _inputController,
+                        focusNode: widget.focusNode,
+                        autofocus: true,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        maxLines: null,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        onChanged: _handleTextFieldInput,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ),
                   ),
                   
                   if (widget.ctrlActive || widget.altActive || widget.shiftActive)

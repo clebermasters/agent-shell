@@ -4,13 +4,24 @@ import '../../../data/models/tmux_session.dart';
 import '../providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
 
-class SessionsScreen extends ConsumerWidget {
-  final String host;
-
-  const SessionsScreen({super.key, required this.host});
+class SessionsScreen extends ConsumerStatefulWidget {
+  const SessionsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SessionsScreen> createState() => _SessionsScreenState();
+}
+
+class _SessionsScreenState extends ConsumerState<SessionsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      ref.read(sessionsProvider.notifier).refresh();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final sessionsState = ref.watch(sessionsProvider);
 
     return Scaffold(
@@ -28,82 +39,75 @@ class SessionsScreen extends ConsumerWidget {
       body: sessionsState.isLoading
           ? const Center(child: CircularProgressIndicator())
           : sessionsState.sessions.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.terminal,
-                        size: 64,
-                        color: Colors.grey[400],
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'No sessions',
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              color: Colors.grey[400],
-                            ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Create a new session to get started',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Colors.grey[500],
-                            ),
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.terminal, size: 64, color: Colors.grey[400]),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No sessions',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleLarge?.copyWith(color: Colors.grey[400]),
                   ),
-                )
-              : ListView.builder(
-                  itemCount: sessionsState.sessions.length,
-                  itemBuilder: (context, index) {
-                    final session = sessionsState.sessions[index];
-                    return _SessionTile(
-                      session: session,
-                      host: host,
-                      onAttach: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => TerminalScreen(
-                              host: host,
-                              sessionName: session.name,
-                            ),
-                          ),
-                        );
-                      },
-                      onKill: () async {
-                        final confirmed = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Kill Session'),
-                            content: Text(
-                              'Are you sure you want to kill "${session.name}"?',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: Colors.red,
-                                ),
-                                child: const Text('Kill'),
-                              ),
-                            ],
-                          ),
-                        );
-
-                        if (confirmed == true) {
-                          ref
-                              .read(sessionsProvider.notifier)
-                              .killSession(session.name);
-                        }
-                      },
+                  const SizedBox(height: 8),
+                  Text(
+                    'Create a new session to get started',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(color: Colors.grey[500]),
+                  ),
+                ],
+              ),
+            )
+          : ListView.builder(
+              itemCount: sessionsState.sessions.length,
+              itemBuilder: (context, index) {
+                final session = sessionsState.sessions[index];
+                return _SessionTile(
+                  session: session,
+                  onAttach: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            TerminalScreen(sessionName: session.name),
+                      ),
                     );
                   },
-                ),
+                  onKill: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Kill Session'),
+                        content: Text(
+                          'Are you sure you want to kill "${session.name}"?',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.red,
+                            ),
+                            child: const Text('Kill'),
+                          ),
+                        ],
+                      ),
+                    );
+
+                    if (confirmed == true) {
+                      ref
+                          .read(sessionsProvider.notifier)
+                          .killSession(session.name);
+                    }
+                  },
+                );
+              },
+            ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showCreateSessionDialog(context, ref),
         child: const Icon(Icons.add),
@@ -156,13 +160,11 @@ class SessionsScreen extends ConsumerWidget {
 
 class _SessionTile extends StatelessWidget {
   final TmuxSession session;
-  final String host;
   final VoidCallback onAttach;
   final VoidCallback onKill;
 
   const _SessionTile({
     required this.session,
-    required this.host,
     required this.onAttach,
     required this.onKill,
   });

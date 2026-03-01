@@ -39,6 +39,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   int _lastRows = 0;
   bool _initialized = false;
 
+  late TextEditingController _inputController;
+
   final Map<String, String> _shiftMap = {
     '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
     '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
@@ -50,32 +52,38 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   void initState() {
     super.initState();
-    // Intercept terminal input via Terminal.onOutput
-    // This catches everything sent to the terminal (native keyboard, etc.)
-    widget.terminal.onOutput = _handleTerminalOutput;
+    _inputController = TextEditingController();
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
-  }
-
-  @override
-  void didUpdateWidget(TerminalViewWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    widget.terminal.onOutput = _handleTerminalOutput;
+    
+    // We don't rely on terminal.onOutput anymore for native keyboard
+    // Instead we use our own TextField to get full control.
   }
 
   @override
   void dispose() {
+    _inputController.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
 
-  // This is the CRITICAL part: it intercepts input from the TerminalView's internal text input
-  void _handleTerminalOutput(String data) {
-    String finalData = data;
+  void _handleTextFieldInput(String value) {
+    if (value.isEmpty) return;
+
+    // Process all characters in the string
+    for (int i = 0; i < value.length; i++) {
+      _processInputChar(value[i]);
+    }
+
+    // Clear the text field so we can get new input
+    _inputController.clear();
+  }
+
+  void _processInputChar(String char) {
+    String finalData = char;
     bool wasModified = false;
 
     // Apply soft modifiers from our accessory bar
-    if (data.length == 1 && (widget.ctrlActive || widget.altActive || widget.shiftActive)) {
-      String char = data;
+    if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
       wasModified = true;
 
       // 1. Apply Shift
@@ -124,7 +132,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     }
   }
 
-  // Handle hardware keys (and some native keyboard events)
   void _onKeyEvent(KeyEvent event) {
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       final key = event.logicalKey;
@@ -150,7 +157,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
         }
       }
 
-      // Hardware control keys that don't produce characters
+      // Hardware control keys (for physical keyboard)
       if (key == LogicalKeyboardKey.f1) sequence = '\x1bOP';
       else if (key == LogicalKeyboardKey.f2) sequence = '\x1bOQ';
       else if (key == LogicalKeyboardKey.f3) sequence = '\x1bOR';
@@ -170,7 +177,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       else if (key == LogicalKeyboardKey.pageDown) sequence = '\x1b[6~';
       else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
 
-      // If we identified a hardware special key sequence, send it and reset soft modifiers
       if (sequence != null) {
         widget.onInput(sequence);
         if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
@@ -228,7 +234,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   Widget build(BuildContext context) {
     return KeyboardListener(
-      focusNode: FocusNode(),
+      focusNode: FocusNode(), // Node for physical keyboard
       onKeyEvent: _onKeyEvent,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -253,9 +259,33 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
               height: constraints.maxHeight,
               child: Stack(
                 children: [
+                  // Hidden TextField to capture native keyboard input
+                  Opacity(
+                    opacity: 0,
+                    child: SizedBox(
+                      width: 1,
+                      height: 1,
+                      child: TextField(
+                        controller: _inputController,
+                        focusNode: widget.focusNode,
+                        autofocus: true,
+                        keyboardType: TextInputType.visiblePassword, // Disable autocorrect/suggestions
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        onChanged: _handleTextFieldInput,
+                        onSubmitted: (val) {
+                          _processInputChar('\r');
+                          widget.focusNode.requestFocus(); // Keep focus
+                        },
+                      ),
+                    ),
+                  ),
+
+                  // The terminal view itself
+                  // We use readOnly: true because we handle input via our own TextField
                   TerminalView(
                     widget.terminal,
-                    focusNode: widget.focusNode,
+                    readOnly: true,
                     textStyle: TerminalStyle(
                       fontSize: _fontSize,
                       fontFamily: 'JetBrains Mono',

@@ -8,10 +8,9 @@ import '../../system/screens/system_screen.dart';
 import '../../debug/screens/debug_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
-  final String host;
   final bool showDebug;
 
-  const HomeScreen({super.key, required this.host, this.showDebug = false});
+  const HomeScreen({super.key, this.showDebug = false});
 
   @override
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
@@ -26,7 +25,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     _screens.addAll([
-      SessionsScreen(host: widget.host),
+      const SessionsScreen(),
       const ChatScreen(),
       const CronScreen(),
       const DotfilesScreen(),

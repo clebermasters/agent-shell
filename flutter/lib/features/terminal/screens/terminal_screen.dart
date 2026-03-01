@@ -89,7 +89,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   }
 
   void _onFocusChange() {
-    // Focus logic
   }
 
   @override
@@ -118,7 +117,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     }
   }
 
-  // This is the CRITICAL method that catches input from TerminalView
+  // This method catches input from TerminalView
   // and applies our custom modifiers before sending to backend.
   void _processInput(String session, String data) {
     if (_isSelectionMode) return;
@@ -225,12 +224,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     });
   }
 
-  void _handleSelectAll() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Select All not available in this version'), duration: Duration(seconds: 1)),
-    );
-  }
-
   void _handleCopy() async {
     final terminalState = ref.read(terminalProvider);
     final controller = terminalState.controller;
@@ -276,7 +269,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                   ),
                 IconButton(
                   icon: Icon(_isSelectionMode ? Icons.select_all : Icons.ads_click, size: 20),
-                  onPressed: _isSelectionMode ? null : _toggleSelectionMode,
+                  onPressed: _toggleSelectionMode,
                   color: _isSelectionMode ? Colors.orange : null,
                   tooltip: 'Selection Mode',
                 ),

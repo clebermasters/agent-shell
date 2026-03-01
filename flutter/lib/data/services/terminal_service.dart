@@ -12,16 +12,15 @@ class TerminalService {
   final StreamController<String> _outputController =
       StreamController<String>.broadcast();
   
-  // Multiple input processors allowed
-  final List<Function(String session, String data)> _inputProcessors = [];
+  // Custom input processor to handle modifiers
+  Function(String session, String data)? _inputProcessor;
 
   TerminalService(this._wsService);
 
   Stream<String> get outputStream => _outputController.stream;
 
   void setInputProcessor(Function(String session, String data) processor) {
-    _inputProcessors.clear();
-    _inputProcessors.add(processor);
+    _inputProcessor = processor;
   }
 
   Terminal createTerminal(String sessionName, {int cols = 80, int rows = 24}) {
@@ -30,10 +29,10 @@ class TerminalService {
     _terminals[sessionName] = terminal;
 
     // Set up terminal callbacks
+    // Use a local closure to ensure we don't lose the processor if the terminal instance changes
     terminal.onOutput = (data) {
-      if (_inputProcessors.isNotEmpty) {
-        // Use the last registered processor (usually the active TerminalScreen)
-        _inputProcessors.last(sessionName, data);
+      if (_inputProcessor != null) {
+        _inputProcessor!(sessionName, data);
       } else {
         _wsService.sendTerminalData(sessionName, data);
       }

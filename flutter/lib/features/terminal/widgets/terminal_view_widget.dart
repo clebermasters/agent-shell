@@ -40,7 +40,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   bool _initialized = false;
 
   late TextEditingController _inputController;
-  final FocusNode _rawKeyFocusNode = FocusNode();
 
   final Map<String, String> _shiftMap = {
     '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
@@ -60,7 +59,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   void dispose() {
     _inputController.dispose();
-    _rawKeyFocusNode.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
@@ -68,6 +66,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   void _handleTextFieldInput(String value) {
     if (value.isEmpty) return;
 
+    // Process characters added to the field
     for (int i = 0; i < value.length; i++) {
       String char = value[i];
       // CRITICAL: Map newline from multiline TextField to carriage return for terminal
@@ -78,7 +77,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       }
     }
 
-    // Always keep it empty to catch the next character
+    // Reset to empty to be ready for next characters
     _inputController.value = TextEditingValue.empty;
   }
 
@@ -147,35 +146,19 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       _localHardwareShiftPressed = true;
     }
 
-    // Handle hardware combinations (Zoom)
-    if (_localHardwareCtrlPressed) {
-      if (key == LogicalKeyboardKey.equal || key == LogicalKeyboardKey.add) {
-        _zoomIn();
-        return;
-      } else if (key == LogicalKeyboardKey.minus) {
-        _zoomOut();
-        return;
-      }
-    }
-
-    // Handle special keys
-    if (key == LogicalKeyboardKey.backspace) {
-      sequence = '\x7f';
-    } else if (key == LogicalKeyboardKey.enter) {
-      sequence = '\r';
-    } else if (key == LogicalKeyboardKey.tab) {
-      sequence = '\t';
-    } else if (key == LogicalKeyboardKey.escape) {
-      sequence = '\x1b';
-    } else if (key == LogicalKeyboardKey.arrowUp) {
-      sequence = '\x1b[A';
-    } else if (key == LogicalKeyboardKey.arrowDown) {
-      sequence = '\x1b[B';
-    } else if (key == LogicalKeyboardKey.arrowLeft) {
-      sequence = '\x1b[D';
-    } else if (key == LogicalKeyboardKey.arrowRight) {
-      sequence = '\x1b[C';
-    }
+    // Hardware special keys (not usually captured by TextField)
+    if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
+    else if (key == LogicalKeyboardKey.tab) sequence = '\t';
+    else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
+    else if (key == LogicalKeyboardKey.arrowUp) sequence = '\x1b[A';
+    else if (key == LogicalKeyboardKey.arrowDown) sequence = '\x1b[B';
+    else if (key == LogicalKeyboardKey.arrowLeft) sequence = '\x1b[D';
+    else if (key == LogicalKeyboardKey.arrowRight) sequence = '\x1b[C';
+    else if (key == LogicalKeyboardKey.home) sequence = '\x1b[H';
+    else if (key == LogicalKeyboardKey.end) sequence = '\x1b[F';
+    else if (key == LogicalKeyboardKey.pageUp) sequence = '\x1b[5~';
+    else if (key == LogicalKeyboardKey.pageDown) sequence = '\x1b[6~';
+    else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
 
     if (sequence != null) {
       String finalData = sequence;
@@ -229,8 +212,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
 
   @override
   Widget build(BuildContext context) {
+    // IMPORTANT: Shared FocusNode for both RawKeyboardListener and TextField
     return RawKeyboardListener(
-      focusNode: _rawKeyFocusNode,
+      focusNode: widget.focusNode,
       onKey: _onKey,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -255,7 +239,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
               height: constraints.maxHeight,
               child: Stack(
                 children: [
-                  // The terminal view
+                  // Terminal rendering (input ignored)
                   IgnorePointer(
                     child: TerminalView(
                       widget.terminal,
@@ -268,24 +252,19 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
                     ),
                   ),
 
-                  // Hidden TextField to capture native keyboard input
-                  // We place it at (0,0) but keep it invisible so it's "system visible" for focus
+                  // Actual focused input field (invisible but functionally active)
                   Opacity(
-                    opacity: 0,
-                    child: SizedBox(
-                      width: 1,
-                      height: 1,
-                      child: TextField(
-                        controller: _inputController,
-                        focusNode: widget.focusNode,
-                        autofocus: true,
-                        keyboardType: TextInputType.multiline,
-                        textInputAction: TextInputAction.newline,
-                        maxLines: null,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        onChanged: _handleTextFieldInput,
-                      ),
+                    opacity: 0.01, // Near zero but not 0 to satisfy some platform optimizations
+                    child: TextField(
+                      controller: _inputController,
+                      focusNode: widget.focusNode,
+                      autofocus: true,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      maxLines: null,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      onChanged: _handleTextFieldInput,
                     ),
                   ),
                   

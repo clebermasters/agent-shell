@@ -117,7 +117,7 @@ class WebSocketService {
   }
 
   void requestWindows(String sessionName) {
-    send({'type': 'list-windows', 'session': sessionName});
+    send({'type': 'list-windows', 'sessionName': sessionName});
   }
 
   void createSession(String name) {
@@ -125,52 +125,72 @@ class WebSocketService {
   }
 
   void killSession(String name) {
-    send({'type': 'kill-session', 'name': name});
+    send({'type': 'kill-session', 'sessionName': name});
   }
 
-  void attachSession(String name) {
-    send({'type': 'attach-session', 'name': name});
-  }
-
-  void createWindow(String sessionName, String windowName) {
-    send({'type': 'create-window', 'session': sessionName, 'name': windowName});
-  }
-
-  void killWindow(String sessionName, int windowId) {
-    send({'type': 'kill-window', 'session': sessionName, 'window': windowId});
-  }
-
-  void selectWindow(String sessionName, int windowId) {
-    send({'type': 'select-window', 'session': sessionName, 'window': windowId});
-  }
-
-  void sendTerminalData(String sessionName, String data) {
-    send({'type': 'terminal-data', 'session': sessionName, 'data': data});
-  }
-
-  void resizeTerminal(String sessionName, int cols, int rows) {
+  void attachSession(String name, {int cols = 80, int rows = 24}) {
     send({
-      'type': 'terminal-resize',
-      'session': sessionName,
+      'type': 'attach-session',
+      'sessionName': name,
       'cols': cols,
       'rows': rows,
     });
   }
 
+  void createWindow(String sessionName, String windowName) {
+    send({
+      'type': 'create-window',
+      'sessionName': sessionName,
+      'name': windowName,
+    });
+  }
+
+  void killWindow(String sessionName, int windowId) {
+    send({
+      'type': 'kill-window',
+      'sessionName': sessionName,
+      'windowIndex': windowId,
+    });
+  }
+
+  void selectWindow(String sessionName, int windowId) {
+    send({
+      'type': 'select-window',
+      'sessionName': sessionName,
+      'windowIndex': windowId,
+    });
+  }
+
+  void sendTerminalData(String sessionName, String data) {
+    send({'type': 'input', 'data': data});
+  }
+
+  void resizeTerminal(String sessionName, int cols, int rows) {
+    send({'type': 'resize', 'cols': cols, 'rows': rows});
+  }
+
   void requestCronJobs() {
-    send({'type': 'list-crons'});
+    send({'type': 'list-cron-jobs'});
   }
 
   void createCronJob(String schedule, String command) {
-    send({'type': 'create-cron', 'schedule': schedule, 'command': command});
+    send({
+      'type': 'create-cron-job',
+      'job': {
+        'name': 'New Job',
+        'schedule': schedule,
+        'command': command,
+        'enabled': true,
+      },
+    });
   }
 
   void deleteCronJob(String id) {
-    send({'type': 'delete-cron', 'id': id});
+    send({'type': 'delete-cron-job', 'id': id});
   }
 
   void toggleCronJob(String id, bool enabled) {
-    send({'type': 'toggle-cron', 'id': id, 'enabled': enabled});
+    send({'type': 'toggle-cron-job', 'id': id, 'enabled': enabled});
   }
 
   void requestDotfiles() {
@@ -178,11 +198,11 @@ class WebSocketService {
   }
 
   void requestDotfileContent(String path) {
-    send({'type': 'get-dotfile', 'path': path});
+    send({'type': 'read-dotfile', 'path': path});
   }
 
   void saveDotfile(String path, String content) {
-    send({'type': 'save-dotfile', 'path': path, 'content': content});
+    send({'type': 'write-dotfile', 'path': path, 'content': content});
   }
 
   void requestSystemStats() {

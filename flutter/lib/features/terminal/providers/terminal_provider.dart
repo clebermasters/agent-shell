@@ -1,37 +1,42 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:xterm/xterm.dart';
 import '../../../data/services/websocket_service.dart';
 import '../../../data/services/terminal_service.dart';
+import '../../sessions/providers/sessions_provider.dart';
 
 class TerminalState {
   final bool isConnected;
   final bool isLoading;
   final String? error;
+  final Terminal? terminal;
 
   const TerminalState({
     this.isConnected = false,
     this.isLoading = false,
     this.error,
+    this.terminal,
   });
 
   TerminalState copyWith({
     bool? isConnected,
     bool? isLoading,
     String? error,
+    Terminal? terminal,
   }) {
     return TerminalState(
       isConnected: isConnected ?? this.isConnected,
       isLoading: isLoading ?? this.isLoading,
       error: error,
+      terminal: terminal ?? this.terminal,
     );
   }
 }
 
 class TerminalNotifier extends StateNotifier<TerminalState> {
   final WebSocketService _wsService;
-  late final TerminalService _terminalService;
+  final Map<String, Terminal> _terminals = {};
 
   TerminalNotifier(this._wsService) : super(const TerminalState()) {
-    _terminalService = TerminalService(_wsService);
     _init();
   }
 
@@ -41,22 +46,58 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     });
   }
 
-  void connect(String host, String session) {
+  void connect(String sessionName) {
     state = state.copyWith(isLoading: true, error: null);
 
-    final url = '$host/terminal?session=$session';
-    _wsService.connect(url).then((_) {
-      state = state.copyWith(isLoading: false);
-    }).catchError((e) {
-      state = state.copyWith(
-        isLoading: false,
-        error: e.toString(),
-      );
-    });
+    // Create or get existing terminal for this session
+    if (!_terminals.containsKey(sessionName)) {
+      final terminal = Terminal(maxLines: 10000);
+      _terminals[sessionName] = terminal;
+
+      // Set up terminal output callback
+      terminal.onOutput = (data) {
+        _wsService.sendTerminalData(sessionName, data);
+      };
+
+      // Listen for incoming data from WebSocket
+      // Handle output messages - after attach, all output goes to this terminal
+      _wsService.messages.listen((message) {
+        final type = message['type'] as String?;
+        if (type == 'output') {
+          // For output messages, write directly to terminal (no session filter needed after attach)
+          final data = message['data'] as String?;
+          if (data != null) {
+            terminal.write(data);
+          }
+        }
+        // Also handle legacy terminal_data format
+        if (type == 'terminal_data') {
+          final msgSession =
+              message['session'] as String? ??
+              message['sessionName'] as String?;
+          if (msgSession == sessionName) {
+            final data = message['data'] as String?;
+            if (data != null) {
+              terminal.write(data);
+            }
+          }
+        }
+      });
+    }
+
+    // Send attach-session message using the existing shared WebSocket connection
+    // with terminal dimensions (using defaults, resize will update after view renders)
+    _wsService.attachSession(sessionName, cols: 80, rows: 24);
+
+    state = state.copyWith(
+      isLoading: false,
+      isConnected: _wsService.isConnected,
+      terminal: _terminals[sessionName],
+    );
   }
 
   void disconnect() {
-    _wsService.disconnect();
+    // Don't actually disconnect - just clear terminal
   }
 
   void sendData(String sessionName, String data) {
@@ -69,23 +110,14 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   @override
   void dispose() {
-    _terminalService.dispose();
+    _terminals.clear();
     super.dispose();
   }
 }
 
-final webSocketServiceProvider = Provider<WebSocketService>((ref) {
-  final service = WebSocketService();
-  ref.onDispose(() => service.dispose());
-  return service;
-});
-
-final terminalProvider = StateNotifierProvider<TerminalNotifier, TerminalState>((ref) {
-  final wsService = ref.watch(webSocketServiceProvider);
-  return TerminalNotifier(wsService);
-});
-
-final isTerminalConnectedProvider = Provider<bool>((ref) {
-  final terminalState = ref.watch(terminalProvider);
-  return terminalState.isConnected;
-});
+final terminalProvider = StateNotifierProvider<TerminalNotifier, TerminalState>(
+  (ref) {
+    final wsService = ref.watch(sharedWebSocketServiceProvider);
+    return TerminalNotifier(wsService);
+  },
+);

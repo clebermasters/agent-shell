@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../sessions/screens/sessions_screen.dart';
 import '../../chat/screens/chat_screen.dart';
 import '../../cron/screens/cron_screen.dart';
 import '../../dotfiles/screens/dotfiles_screen.dart';
 import '../../system/screens/system_screen.dart';
 import '../../debug/screens/debug_screen.dart';
+import '../../terminal/screens/terminal_screen.dart';
+import '../../auth/providers/auth_provider.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   final bool showDebug;
@@ -18,8 +21,8 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _currentIndex = 0;
-
   final List<Widget> _screens = [];
+  bool _initialized = false;
 
   @override
   void initState() {
@@ -31,6 +34,42 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       const DotfilesScreen(),
       const SystemScreen(),
     ]);
+    
+    _restoreState();
+  }
+
+  Future<void> _restoreState() async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    final savedIndex = prefs.getInt('home_index');
+    final activeSession = prefs.getString('active_terminal_session');
+
+    if (mounted) {
+      setState(() {
+        if (savedIndex != null && savedIndex < _screens.length) {
+          _currentIndex = savedIndex;
+        }
+        _initialized = true;
+      });
+
+      // If there was an active terminal session, restore it
+      if (activeSession != null) {
+        // Wait a bit for the UI to settle
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => TerminalScreen(sessionName: activeSession),
+              ),
+            );
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _saveIndex(int index) async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setInt('home_index', index);
   }
 
   void _openDebugScreen() {
@@ -41,6 +80,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_initialized) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     return Scaffold(
       body: IndexedStack(index: _currentIndex, children: _screens),
       bottomNavigationBar: NavigationBar(
@@ -49,6 +92,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           setState(() {
             _currentIndex = index;
           });
+          _saveIndex(index);
         },
         destinations: const [
           NavigationDestination(

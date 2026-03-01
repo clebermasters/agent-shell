@@ -37,6 +37,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   int _lastRows = 0;
   bool _initialized = false;
 
+  // Improved shift map covering more common keys
   final Map<String, String> _shiftMap = {
     '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
     '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
@@ -48,15 +49,22 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   void initState() {
     super.initState();
-    // Intercept terminal output to apply modifiers
-    widget.terminal.onOutput = _handleTerminalInput;
+    _setupTerminalCallback();
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
   }
 
   @override
   void didUpdateWidget(TerminalViewWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    widget.terminal.onOutput = _handleTerminalInput;
+    _setupTerminalCallback();
+  }
+
+  void _setupTerminalCallback() {
+    // Intercept terminal output to apply modifiers
+    // This is the core mechanism for native keyboard + accessory bar
+    widget.terminal.onOutput = (data) {
+      _processInput(data);
+    };
   }
 
   @override
@@ -65,14 +73,15 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     super.dispose();
   }
 
-  void _handleTerminalInput(String data) {
+  void _processInput(String data) {
     String finalData = data;
-    bool modified = false;
+    bool wasModified = false;
 
     // Apply modifiers from accessory bar for single character inputs
+    // (native keyboard usually sends one char at a time in this mode)
     if (data.length == 1 && (widget.ctrlActive || widget.altActive || widget.shiftActive)) {
       String char = data;
-      modified = true;
+      wasModified = true;
 
       if (widget.shiftActive) {
         if (_shiftMap.containsKey(char)) {
@@ -83,12 +92,14 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       }
 
       if (widget.ctrlActive) {
+        // Handle Ctrl combinations (map A-Z to 1-26)
         int code = char.toUpperCase().codeUnitAt(0);
         if (code >= 64 && code <= 95) {
           finalData = String.fromCharCode(code - 64);
         } else if (char == ' ') {
           finalData = '\x00';
         } else {
+          // If not a standard letter, keep it as is or try simple escape
           finalData = char;
         }
       } else {
@@ -96,13 +107,16 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       }
 
       if (widget.altActive) {
+        // Alt key (Meta) in terminal is ESC + character
         finalData = '\x1b$finalData';
       }
     }
 
+    // Always send the data to the provided onInput callback (backend)
     widget.onInput(finalData);
 
-    if (modified) {
+    // Reset modifiers in the parent state if we used them
+    if (wasModified) {
       widget.onModifiersReset();
     }
   }
@@ -118,9 +132,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   void _handleKeyEvent(KeyEvent event) {
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       final key = event.logicalKey;
-
       String? sequence;
 
+      // Handle local zoom with hardware Ctrl
       if (_localCtrlPressed) {
         if (key == LogicalKeyboardKey.equal || key == LogicalKeyboardKey.add) {
           _zoomIn();
@@ -131,81 +145,46 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
         }
       }
 
-      if (key == LogicalKeyboardKey.f1)
-        sequence = '\x1bOP';
-      else if (key == LogicalKeyboardKey.f2)
-        sequence = '\x1bOQ';
-      else if (key == LogicalKeyboardKey.f3)
-        sequence = '\x1bOR';
-      else if (key == LogicalKeyboardKey.f4)
-        sequence = '\x1bOS';
-      else if (key == LogicalKeyboardKey.f5)
-        sequence = '\x1b[15~';
-      else if (key == LogicalKeyboardKey.f6)
-        sequence = '\x1b[17~';
-      else if (key == LogicalKeyboardKey.f7)
-        sequence = '\x1b[18~';
-      else if (key == LogicalKeyboardKey.f8)
-        sequence = '\x1b[19~';
-      else if (key == LogicalKeyboardKey.f9)
-        sequence = '\x1b[20~';
-      else if (key == LogicalKeyboardKey.f10)
-        sequence = '\x1b[21~';
-      else if (key == LogicalKeyboardKey.f11)
-        sequence = '\x1b[23~';
-      else if (key == LogicalKeyboardKey.f12)
-        sequence = '\x1b[24~';
-      else if (key == LogicalKeyboardKey.arrowUp)
-        sequence = '\x1b[A';
-      else if (key == LogicalKeyboardKey.arrowDown)
-        sequence = '\x1b[B';
-      else if (key == LogicalKeyboardKey.arrowRight)
-        sequence = '\x1b[C';
-      else if (key == LogicalKeyboardKey.arrowLeft)
-        sequence = '\x1b[D';
-      else if (key == LogicalKeyboardKey.enter)
-        sequence = '\r';
-      else if (key == LogicalKeyboardKey.backspace)
-        sequence = '\x7f';
-      else if (key == LogicalKeyboardKey.tab)
-        sequence = '\t';
-      else if (key == LogicalKeyboardKey.escape)
-        sequence = '\x1b';
-      else if (key == LogicalKeyboardKey.home)
-        sequence = '\x1b[H';
-      else if (key == LogicalKeyboardKey.end)
-        sequence = '\x1b[F';
-      else if (key == LogicalKeyboardKey.pageUp)
-        sequence = '\x1b[5~';
-      else if (key == LogicalKeyboardKey.pageDown)
-        sequence = '\x1b[6~';
-      else if (key == LogicalKeyboardKey.insert)
-        sequence = '\x1b[2~';
-      else if (key == LogicalKeyboardKey.delete)
-        sequence = '\x1b[3~';
+      // Hardware key mappings (Function keys, arrows, etc.)
+      if (key == LogicalKeyboardKey.f1) sequence = '\x1bOP';
+      else if (key == LogicalKeyboardKey.f2) sequence = '\x1bOQ';
+      else if (key == LogicalKeyboardKey.f3) sequence = '\x1bOR';
+      else if (key == LogicalKeyboardKey.f4) sequence = '\x1bOS';
+      else if (key == LogicalKeyboardKey.f5) sequence = '\x1b[15~';
+      else if (key == LogicalKeyboardKey.f6) sequence = '\x1b[17~';
+      else if (key == LogicalKeyboardKey.f7) sequence = '\x1b[18~';
+      else if (key == LogicalKeyboardKey.f8) sequence = '\x1b[19~';
+      else if (key == LogicalKeyboardKey.f9) sequence = '\x1b[20~';
+      else if (key == LogicalKeyboardKey.f10) sequence = '\x1b[21~';
+      else if (key == LogicalKeyboardKey.f11) sequence = '\x1b[23~';
+      else if (key == LogicalKeyboardKey.f12) sequence = '\x1b[24~';
+      else if (key == LogicalKeyboardKey.arrowUp) sequence = '\x1b[A';
+      else if (key == LogicalKeyboardKey.arrowDown) sequence = '\x1b[B';
+      else if (key == LogicalKeyboardKey.arrowRight) sequence = '\x1b[C';
+      else if (key == LogicalKeyboardKey.arrowLeft) sequence = '\x1b[D';
+      else if (key == LogicalKeyboardKey.enter) sequence = '\r';
+      else if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
+      else if (key == LogicalKeyboardKey.tab) sequence = '\t';
+      else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
+      else if (key == LogicalKeyboardKey.home) sequence = '\x1b[H';
+      else if (key == LogicalKeyboardKey.end) sequence = '\x1b[F';
+      else if (key == LogicalKeyboardKey.pageUp) sequence = '\x1b[5~';
+      else if (key == LogicalKeyboardKey.pageDown) sequence = '\x1b[6~';
+      else if (key == LogicalKeyboardKey.insert) sequence = '\x1b[2~';
+      else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
       else if (HardwareKeyboard.instance.isControlPressed) {
         final code = key.keyLabel.toUpperCase().codeUnitAt(0);
         if (code >= 65 && code <= 90) {
           sequence = String.fromCharCode(code - 64);
-        } else if (key == LogicalKeyboardKey.bracketLeft) {
-          sequence = '\x1b';
-        } else if (key == LogicalKeyboardKey.backslash) {
-          sequence = '\x1c';
-        } else if (key == LogicalKeyboardKey.bracketRight) {
-          sequence = '\x1d';
-        } else if (key == LogicalKeyboardKey.space) {
-          sequence = '\x00';
-        }
+        } else if (key == LogicalKeyboardKey.bracketLeft) sequence = '\x1b';
+        else if (key == LogicalKeyboardKey.backslash) sequence = '\x1c';
+        else if (key == LogicalKeyboardKey.bracketRight) sequence = '\x1d';
+        else if (key == LogicalKeyboardKey.space) sequence = '\x00';
       } else if (HardwareKeyboard.instance.isAltPressed) {
         final char = event.character;
-        if (char != null) {
-          sequence = '\x1b$char';
-        }
-      } else if (key == LogicalKeyboardKey.altLeft ||
-          key == LogicalKeyboardKey.altRight) {
-        setState(() {
-          _localCtrlPressed = !_localCtrlPressed;
-        });
+        if (char != null) sequence = '\x1b$char';
+      } else if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
+        setState(() { _localCtrlPressed = !_localCtrlPressed; });
         return;
       }
 
@@ -214,11 +193,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       }
     } else if (event is KeyUpEvent) {
       final key = event.logicalKey;
-      if (key == LogicalKeyboardKey.altLeft ||
-          key == LogicalKeyboardKey.altRight) {
-        setState(() {
-          _localCtrlPressed = false;
-        });
+      if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
+        setState(() { _localCtrlPressed = false; });
       }
     }
   }
@@ -262,7 +238,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   Widget build(BuildContext context) {
     return KeyboardListener(
-      focusNode: FocusNode(),
+      focusNode: FocusNode(), // Local focus node for hardware keys
       onKeyEvent: _handleKeyEvent,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -276,20 +252,49 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
           }
 
           return GestureDetector(
+            onTap: () {
+              widget.focusNode.requestFocus();
+            },
             onDoubleTap: _zoomIn,
             onLongPress: _zoomOut,
             child: Container(
               color: Colors.black,
               width: constraints.maxWidth,
               height: constraints.maxHeight,
-              child: TerminalView(
-                widget.terminal,
-                focusNode: widget.focusNode,
-                textStyle: TerminalStyle(
-                  fontSize: _fontSize,
-                  fontFamily: 'JetBrains Mono',
-                ),
-                padding: EdgeInsets.zero,
+              child: Stack(
+                children: [
+                  TerminalView(
+                    widget.terminal,
+                    focusNode: widget.focusNode,
+                    textStyle: TerminalStyle(
+                      fontSize: _fontSize,
+                      fontFamily: 'JetBrains Mono',
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+                  
+                  // Visual indicator for active modifiers
+                  if (widget.ctrlActive || widget.altActive || widget.shiftActive)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           );

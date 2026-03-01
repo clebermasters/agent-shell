@@ -66,10 +66,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   void _handleTextFieldInput(String value) {
     if (value.isEmpty) return;
 
-    // Process characters added to the field
     for (int i = 0; i < value.length; i++) {
       String char = value[i];
-      // CRITICAL: Map newline from multiline TextField to carriage return for terminal
       if (char == '\n') {
         _processInputChar('\r');
       } else {
@@ -77,7 +75,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       }
     }
 
-    // Reset to empty to be ready for next characters
     _inputController.value = TextEditingValue.empty;
   }
 
@@ -85,11 +82,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     String finalData = char;
     bool wasModified = false;
 
-    // Apply soft modifiers from our accessory bar
     if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
       wasModified = true;
 
-      // 1. Apply Shift
       if (widget.shiftActive) {
         if (_shiftMap.containsKey(char)) {
           finalData = _shiftMap[char]!;
@@ -98,7 +93,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
         }
       }
 
-      // 2. Apply Ctrl
       if (widget.ctrlActive) {
         int code = finalData.toUpperCase().codeUnitAt(0);
         if (code >= 64 && code <= 95) {
@@ -108,16 +102,13 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
         }
       }
 
-      // 3. Apply Alt (Meta)
       if (widget.altActive) {
         finalData = '\x1b$finalData';
       }
     }
 
-    // Send to backend
     widget.onInput(finalData);
 
-    // Reset soft modifiers if used
     if (wasModified) {
       widget.onModifiersReset();
     }
@@ -137,7 +128,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     final key = event.logicalKey;
     String? sequence;
 
-    // Track hardware modifier states
     if (key == LogicalKeyboardKey.controlLeft || key == LogicalKeyboardKey.controlRight) {
       _localHardwareCtrlPressed = true;
     } else if (key == LogicalKeyboardKey.altLeft || key == LogicalKeyboardKey.altRight) {
@@ -146,7 +136,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       _localHardwareShiftPressed = true;
     }
 
-    // Hardware special keys (not usually captured by TextField)
     if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
     else if (key == LogicalKeyboardKey.tab) sequence = '\t';
     else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
@@ -212,22 +201,21 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
 
   @override
   Widget build(BuildContext context) {
-    // IMPORTANT: Shared FocusNode for both RawKeyboardListener and TextField
-    return RawKeyboardListener(
-      focusNode: widget.focusNode,
-      onKey: _onKey,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final size = Size(constraints.maxWidth, constraints.maxHeight);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = Size(constraints.maxWidth, constraints.maxHeight);
 
-          if (!_initialized) {
-            _initialized = true;
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _updateTerminalSize(size);
-            });
-          }
+        if (!_initialized) {
+          _initialized = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _updateTerminalSize(size);
+          });
+        }
 
-          return GestureDetector(
+        return RawKeyboardListener(
+          focusNode: widget.focusNode,
+          onKey: _onKey,
+          child: GestureDetector(
             onTap: () {
               widget.focusNode.requestFocus();
             },
@@ -239,32 +227,37 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
               height: constraints.maxHeight,
               child: Stack(
                 children: [
-                  // Terminal rendering (input ignored)
-                  IgnorePointer(
-                    child: TerminalView(
-                      widget.terminal,
-                      readOnly: true,
-                      textStyle: TerminalStyle(
-                        fontSize: _fontSize,
-                        fontFamily: 'JetBrains Mono',
-                      ),
-                      padding: EdgeInsets.zero,
+                  // Actual terminal rendering
+                  TerminalView(
+                    widget.terminal,
+                    readOnly: true, // We handle input manually via TextField
+                    textStyle: TerminalStyle(
+                      fontSize: _fontSize,
+                      fontFamily: 'JetBrains Mono',
                     ),
+                    padding: EdgeInsets.zero,
                   ),
 
-                  // Actual focused input field (invisible but functionally active)
-                  Opacity(
-                    opacity: 0.01, // Near zero but not 0 to satisfy some platform optimizations
-                    child: TextField(
-                      controller: _inputController,
-                      focusNode: widget.focusNode,
-                      autofocus: true,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      maxLines: null,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      onChanged: _handleTextFieldInput,
+                  // Position the TextField OVER the terminal but make it transparent
+                  // This ensures it captures taps and maintains focus
+                  Positioned.fill(
+                    child: Opacity(
+                      opacity: 0.01,
+                      child: TextField(
+                        controller: _inputController,
+                        focusNode: widget.focusNode,
+                        autofocus: true,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        maxLines: null,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        onChanged: _handleTextFieldInput,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
                     ),
                   ),
                   
@@ -292,9 +285,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
                 ],
               ),
             ),
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 }

@@ -367,8 +367,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                         onTap: () {
                           if (!_showCustomKeyboard && !_isSelectionMode) {
                             final isKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+
                             if (isKeyboardVisible) {
-                              // Keyboard is already up, tapping again should not bounce it
+                              // If keyboard is already visible, do nothing to prevent bouncing
                               return;
                             }
 
@@ -378,13 +379,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                               _focusNode.unfocus();
                               SystemChannels.textInput.invokeMethod('TextInput.hide');
                               
-                              Future.delayed(const Duration(milliseconds: 50), () {
+                              // We need a slightly longer delay for the framework to 
+                              // fully register the unfocus before we request it again.
+                              Future.delayed(const Duration(milliseconds: 150), () {
                                 if (mounted) {
                                   _focusNode.requestFocus();
                                   SystemChannels.textInput.invokeMethod('TextInput.show');
                                 }
                               });
                             } else {
+                              // Normal case: no focus, so just request it
                               _focusNode.requestFocus();
                               SystemChannels.textInput.invokeMethod('TextInput.show');
                             }

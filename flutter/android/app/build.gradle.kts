@@ -9,8 +9,8 @@ android {
     namespace = "com.example.webmux"
     compileSdk = flutter.compileSdkVersion
     
-    // Disable NDK for now - saves disk space during build
-    ndkVersion = ""
+    // NDK version required by flutter_pty and other plugins
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

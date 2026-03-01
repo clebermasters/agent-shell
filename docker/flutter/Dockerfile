@@ -13,7 +13,7 @@ COPY flutter/ ./
 # Get dependencies - use local pub cache from host
 RUN flutter pub get
 
-# Build debug APK with parallel compilation
+# Build debug APK with parallel compilation and build cache
 RUN flutter build apk --debug
 
 # Create output directory

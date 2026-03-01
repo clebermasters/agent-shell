@@ -37,7 +37,11 @@ RUN yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || tr
 RUN $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
     "platform-tools" \
     "platforms;android-34" \
-    "build-tools;34.0.0"
+    "platforms;android-35" \
+    "platforms;android-36" \
+    "build-tools;34.0.0" \
+    "build-tools;35.0.0" \
+    "ndk;27.0.12077973"
 
 # Clone and setup Flutter SDK
 RUN git clone https://github.com/flutter/flutter.git -b stable --depth 1 $FLUTTER_ROOT

@@ -7,12 +7,6 @@ class TerminalAccessoryBar extends StatefulWidget {
   final bool isAltActive;
   final bool isShiftActive;
   final Function(String mod) onModifierTap;
-  final bool isSelectionMode;
-  final VoidCallback onToggleSelectionMode;
-  final VoidCallback onCopy;
-  final VoidCallback onPaste;
-  final VoidCallback onSelectAll;
-  final bool hasSelection;
 
   const TerminalAccessoryBar({
     super.key,
@@ -22,12 +16,6 @@ class TerminalAccessoryBar extends StatefulWidget {
     required this.isAltActive,
     required this.isShiftActive,
     required this.onModifierTap,
-    required this.isSelectionMode,
-    required this.onToggleSelectionMode,
-    required this.onCopy,
-    required this.onPaste,
-    required this.onSelectAll,
-    this.hasSelection = false,
   });
 
   @override
@@ -86,51 +74,19 @@ class _TerminalAccessoryBarState extends State<TerminalAccessoryBar> {
       child: Row(
         children: [
           IconButton(
-            icon: Icon(
-              widget.isSelectionMode ? Icons.edit : Icons.keyboard_hide,
-              color: widget.isSelectionMode ? Colors.orange : null,
-            ),
+            icon: const Icon(Icons.keyboard_hide),
             onPressed: widget.onToggleKeyboard,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 40),
-            tooltip: widget.isSelectionMode ? 'Input Mode' : 'Hide Keyboard',
           ),
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  // Primary selection controls
-                  _buildSpecialKey(
-                    label: widget.isSelectionMode ? 'INPUT' : 'SELECT',
-                    onTap: widget.onToggleSelectionMode,
-                    color: widget.isSelectionMode ? Colors.orange[800] : Colors.green[800],
-                  ),
-                  _buildSpecialKey(
-                    label: 'ALL',
-                    onTap: widget.onSelectAll,
-                    color: Colors.teal[800],
-                  ),
-                  if (widget.hasSelection)
-                    _buildSpecialKey(
-                      label: 'COPY',
-                      onTap: widget.onCopy,
-                      color: Colors.blue[800],
-                    ),
-                  _buildSpecialKey(
-                    label: 'PASTE',
-                    onTap: widget.onPaste,
-                    color: Colors.blueGrey[800],
-                  ),
-                  
-                  const VerticalDivider(width: 10, indent: 10, endIndent: 10),
-
-                  // Modifiers
                   _buildModifierKey('CTRL', widget.isCtrlActive),
                   _buildModifierKey('ALT', widget.isAltActive),
                   _buildModifierKey('SHIFT', widget.isShiftActive),
-                  
-                  // Common keys
                   _buildKey('ESC'),
                   _buildKey('TAB'),
                   _buildKey('▲', 'UP'),
@@ -164,31 +120,6 @@ class _TerminalAccessoryBarState extends State<TerminalAccessoryBar> {
         borderRadius: BorderRadius.circular(4),
         child: InkWell(
           onTap: () => widget.onModifierTap(label),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            alignment: Alignment.center,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSpecialKey({required String label, required VoidCallback onTap, Color? color}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
-      child: Material(
-        color: color ?? Colors.grey[800],
-        borderRadius: BorderRadius.circular(4),
-        child: InkWell(
-          onTap: onTap,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             alignment: Alignment.center,

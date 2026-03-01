@@ -181,8 +181,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   }
 
   void _handleInput(String data) {
-    // This is called from our widgets (AccessoryBar, MobileKeyboard)
-    // We send directly since they handle their own modifiers
     ref.read(terminalProvider.notifier).sendData(widget.sessionName, data);
   }
 
@@ -205,7 +203,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
         SystemChannels.textInput.invokeMethod('TextInput.hide');
         _isSelectionMode = false;
       } else {
-        // Show native keyboard
         _focusNode.requestFocus();
         SystemChannels.textInput.invokeMethod('TextInput.show');
       }
@@ -221,17 +218,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
       } else {
         _focusNode.requestFocus();
         SystemChannels.textInput.invokeMethod('TextInput.show');
-        // Clear selection when leaving selection mode
         ref.read(terminalProvider).controller?.clearSelection();
       }
     });
-  }
-
-  void _handleSelectAll() {
-    // Temporarily disabled due to API incompatibilities in build
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Select All not yet implemented'), duration: Duration(seconds: 1)),
-    );
   }
 
   void _handleCopy() async {
@@ -271,9 +260,37 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
           : AppBar(
               title: Text(widget.sessionName),
               actions: [
+                // Selection / Copy / Paste Actions
+                if (_isSelectionMode)
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    onPressed: _toggleSelectionMode,
+                    tooltip: 'Exit Selection',
+                  ),
+                IconButton(
+                  icon: Icon(_isSelectionMode ? Icons.select_all : Icons.ads_click, size: 20),
+                  onPressed: _isSelectionMode ? null : _toggleSelectionMode,
+                  color: _isSelectionMode ? Colors.orange : null,
+                  tooltip: 'Selection Mode',
+                ),
+                if (_hasSelection)
+                  IconButton(
+                    icon: const Icon(Icons.copy, size: 20),
+                    onPressed: _handleCopy,
+                    tooltip: 'Copy',
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.paste, size: 20),
+                  onPressed: _handlePaste,
+                  tooltip: 'Paste',
+                ),
+                
+                const VerticalDivider(width: 8),
+
                 IconButton(
                   icon: Icon(
                     _showCustomKeyboard ? Icons.keyboard : Icons.keyboard_alt_outlined,
+                    size: 20,
                   ),
                   onPressed: _toggleKeyboardType,
                   tooltip: _showCustomKeyboard ? 'Use Native Keyboard' : 'Use Custom Keyboard',
@@ -281,18 +298,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                 IconButton(
                   icon: Icon(
                     _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                    size: 20,
                   ),
                   onPressed: _toggleFullscreen,
                   tooltip: _fullscreen ? 'Exit Fullscreen' : 'Fullscreen',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: () {
-                    ref
-                        .read(terminalProvider.notifier)
-                        .connect(widget.sessionName);
-                  },
-                  tooltip: 'Reconnect',
                 ),
               ],
             ),
@@ -376,12 +385,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
               TerminalAccessoryBar(
                 onKeyPressed: _handleInput,
                 onToggleKeyboard: () {
-                  if (_isSelectionMode) {
-                    _toggleSelectionMode();
-                  } else {
-                    _focusNode.unfocus();
-                    SystemChannels.textInput.invokeMethod('TextInput.hide');
-                  }
+                  _focusNode.unfocus();
+                  SystemChannels.textInput.invokeMethod('TextInput.hide');
                 },
                 isCtrlActive: _ctrlActive,
                 isAltActive: _altActive,
@@ -393,12 +398,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                     if (mod == 'SHIFT') _shiftActive = !_shiftActive;
                   });
                 },
-                isSelectionMode: _isSelectionMode,
-                onToggleSelectionMode: _toggleSelectionMode,
-                onCopy: _handleCopy,
-                onPaste: _handlePaste,
-                onSelectAll: _handleSelectAll,
-                hasSelection: _hasSelection,
               ),
 
             // Custom virtual keyboard

@@ -11,10 +11,17 @@ class TerminalService {
   final Map<String, Pty> _ptys = {};
   final StreamController<String> _outputController =
       StreamController<String>.broadcast();
+  
+  // Custom input processor to handle modifiers
+  Function(String session, String data)? _inputProcessor;
 
   TerminalService(this._wsService);
 
   Stream<String> get outputStream => _outputController.stream;
+
+  void setInputProcessor(Function(String session, String data) processor) {
+    _inputProcessor = processor;
+  }
 
   Terminal createTerminal(String sessionName, {int cols = 80, int rows = 24}) {
     final terminal = Terminal(maxLines: 10000);
@@ -23,12 +30,15 @@ class TerminalService {
 
     // Set up terminal callbacks
     terminal.onOutput = (data) {
-      _wsService.sendTerminalData(sessionName, data);
+      if (_inputProcessor != null) {
+        _inputProcessor!(sessionName, data);
+      } else {
+        _wsService.sendTerminalData(sessionName, data);
+      }
     };
 
     // Listen for incoming data from WebSocket
     _wsService.messages.listen((message) {
-      // Handle terminal output - Capacitor uses 'output', legacy uses 'terminal_data'
       final type = message['type'] as String?;
       if ((type == 'output' || type == 'terminal_data') &&
           message['session'] == sessionName) {
@@ -63,7 +73,6 @@ class TerminalService {
 
   void dispose() {
     for (final terminal in _terminals.values) {
-      // Terminal cleanup - xterm 4.0 doesn't have dispose
     }
     for (final pty in _ptys.values) {
       pty.kill();
@@ -87,7 +96,6 @@ class NativeTerminalService {
 
     _terminals[sessionName] = terminal;
 
-    // Connect terminal to PTY
     pty.output.listen((data) {
       terminal.write(utf8.decode(data));
     });

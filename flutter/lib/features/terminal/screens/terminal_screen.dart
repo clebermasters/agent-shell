@@ -29,6 +29,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   bool _altActive = false;
   bool _shiftActive = false;
 
+  final Map<String, String> _shiftMap = {
+    '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
+    '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+    '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|',
+    ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?',
+    '`': '~',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -36,10 +44,15 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
 
     // Connect to the terminal session
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(terminalProvider.notifier).connect(widget.sessionName);
+      final terminalNotifier = ref.read(terminalProvider.notifier);
+      terminalNotifier.connect(widget.sessionName);
+      
+      // Register custom input processor to handle sticky modifiers
+      terminalNotifier.terminalService.setInputProcessor(_processInput);
+      
       _persistActiveSession();
       
-      // Auto-hide status bar after 3 seconds
+      // Auto-hide status bar
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) {
           setState(() {
@@ -47,6 +60,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
           });
         }
       });
+
+      // Request focus to show native keyboard
+      _focusNode.requestFocus();
     });
   }
 
@@ -61,11 +77,56 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Restore focus when app is resumed (e.g. after screen off/on)
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted && !_showCustomKeyboard) {
           _focusNode.requestFocus();
         }
+      });
+    }
+  }
+
+  // This is the CRITICAL method that catches input from TerminalView
+  // and applies our custom modifiers before sending to backend.
+  void _processInput(String session, String data) {
+    String finalData = data;
+    bool wasModified = false;
+
+    // Apply soft modifiers for single character inputs (from native keyboard)
+    if (data.length == 1 && (_ctrlActive || _altActive || _shiftActive)) {
+      String char = data;
+      wasModified = true;
+
+      if (_shiftActive) {
+        if (_shiftMap.containsKey(char)) {
+          finalData = _shiftMap[char]!;
+        } else {
+          finalData = char.toUpperCase();
+        }
+      }
+
+      if (_ctrlActive) {
+        int code = finalData.toUpperCase().codeUnitAt(0);
+        if (code >= 64 && code <= 95) {
+          finalData = String.fromCharCode(code - 64);
+        } else if (finalData == ' ') {
+          finalData = '\x00';
+        }
+      }
+
+      if (_altActive) {
+        finalData = '\x1b$finalData';
+      }
+    }
+
+    // Send to backend via terminal provider
+    ref.read(terminalProvider.notifier).sendData(session, finalData);
+
+    // Reset soft modifiers if they were used
+    if (wasModified) {
+      setState(() {
+        _ctrlActive = false;
+        _altActive = false;
+        _shiftActive = false;
       });
     }
   }
@@ -77,7 +138,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
 
   Future<void> _clearActiveSession() async {
     final prefs = ref.read(sharedPreferencesProvider);
-    // Only clear if it's still this session (to avoid race conditions)
     if (prefs.getString('active_terminal_session') == widget.sessionName) {
       await prefs.remove('active_terminal_session');
     }
@@ -88,6 +148,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   }
 
   void _handleInput(String data) {
+    // This is called from our widgets (AccessoryBar, MobileKeyboard)
+    // We send directly since they handle their own modifiers
     ref.read(terminalProvider.notifier).sendData(widget.sessionName, data);
   }
 

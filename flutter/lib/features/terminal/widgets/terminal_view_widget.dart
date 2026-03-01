@@ -40,6 +40,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   bool _initialized = false;
 
   late TextEditingController _inputController;
+  final FocusNode _rawKeyFocusNode = FocusNode();
 
   final Map<String, String> _shiftMap = {
     '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
@@ -59,6 +60,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   void dispose() {
     _inputController.dispose();
+    _rawKeyFocusNode.dispose();
     VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
@@ -66,10 +68,14 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   void _handleTextFieldInput(String value) {
     if (value.isEmpty) return;
 
-    // We only process characters that were ADDED
-    // This is more robust against keyboards that send full strings
     for (int i = 0; i < value.length; i++) {
-      _processInputChar(value[i]);
+      String char = value[i];
+      // CRITICAL: Map newline from multiline TextField to carriage return for terminal
+      if (char == '\n') {
+        _processInputChar('\r');
+      } else {
+        _processInputChar(char);
+      }
     }
 
     // Always keep it empty to catch the next character
@@ -84,7 +90,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     if (widget.ctrlActive || widget.altActive || widget.shiftActive) {
       wasModified = true;
 
-      // 1. Apply Shift (only if it's a character that can be shifted)
+      // 1. Apply Shift
       if (widget.shiftActive) {
         if (_shiftMap.containsKey(char)) {
           finalData = _shiftMap[char]!;
@@ -101,7 +107,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
         } else if (finalData == ' ') {
           finalData = '\x00';
         }
-        // If not a standard letter, finalData remains as is (or shifted)
       }
 
       // 3. Apply Alt (Meta)
@@ -127,8 +132,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     }
   }
 
-  // RawKeyboardListener handles special keys like Backspace, Enter, Tab
-  // which might not trigger onChanged in TextField on some Android keyboards
   void _onKey(RawKeyEvent event) {
     if (event is! RawKeyDownEvent) return;
 
@@ -155,7 +158,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       }
     }
 
-    // Handle special keys that TextField might miss
+    // Handle special keys
     if (key == LogicalKeyboardKey.backspace) {
       sequence = '\x7f';
     } else if (key == LogicalKeyboardKey.enter) {
@@ -175,8 +178,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
     }
 
     if (sequence != null) {
-      // Apply soft modifiers even to these special keys if applicable
-      // (Though usually you don't Ctrl+Backspace, but Ctrl+Tab is a thing)
       String finalData = sequence;
       bool wasModified = false;
 
@@ -185,9 +186,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
         wasModified = true;
       }
       
-      // Ctrl+Special is rarer but handled by terminal sequences usually
-      // For now, just send the sequence
-
       widget.onInput(finalData);
       if (wasModified) widget.onModifiersReset();
     }
@@ -232,7 +230,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
   @override
   Widget build(BuildContext context) {
     return RawKeyboardListener(
-      focusNode: FocusNode(), // Local node for raw events
+      focusNode: _rawKeyFocusNode,
       onKey: _onKey,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -257,30 +255,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
               height: constraints.maxHeight,
               child: Stack(
                 children: [
-                  // Hidden TextField to capture native keyboard input
-                  Positioned(
-                    left: -100,
-                    top: 0,
-                    child: SizedBox(
-                      width: 10,
-                      height: 10,
-                      child: TextField(
-                        controller: _inputController,
-                        focusNode: widget.focusNode,
-                        autofocus: true,
-                        keyboardType: TextInputType.multiline,
-                        textInputAction: TextInputAction.none,
-                        maxLines: null,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        onChanged: _handleTextFieldInput,
-                        onSubmitted: (val) {
-                          _processInputChar('\r');
-                        },
-                      ),
-                    ),
-                  ),
-
                   // The terminal view
                   IgnorePointer(
                     child: TerminalView(
@@ -291,6 +265,27 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
                         fontFamily: 'JetBrains Mono',
                       ),
                       padding: EdgeInsets.zero,
+                    ),
+                  ),
+
+                  // Hidden TextField to capture native keyboard input
+                  // We place it at (0,0) but keep it invisible so it's "system visible" for focus
+                  Opacity(
+                    opacity: 0,
+                    child: SizedBox(
+                      width: 1,
+                      height: 1,
+                      child: TextField(
+                        controller: _inputController,
+                        focusNode: widget.focusNode,
+                        autofocus: true,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        maxLines: null,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        onChanged: _handleTextFieldInput,
+                      ),
                     ),
                   ),
                   

@@ -119,14 +119,24 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> {
       else if (key == LogicalKeyboardKey.delete)
         sequence = '\x1b[3~';
       else if (HardwareKeyboard.instance.isControlPressed) {
-        if (key == LogicalKeyboardKey.keyC)
-          sequence = '\x03';
-        else if (key == LogicalKeyboardKey.keyD)
-          sequence = '\x04';
-        else if (key == LogicalKeyboardKey.keyZ)
-          sequence = '\x1a';
-        else if (key == LogicalKeyboardKey.keyL)
-          sequence = '\x0c';
+        final code = key.keyLabel.toUpperCase().codeUnitAt(0);
+        if (code >= 65 && code <= 90) {
+          // A-Z
+          sequence = String.fromCharCode(code - 64);
+        } else if (key == LogicalKeyboardKey.bracketLeft) {
+          sequence = '\x1b';
+        } else if (key == LogicalKeyboardKey.backslash) {
+          sequence = '\x1c';
+        } else if (key == LogicalKeyboardKey.bracketRight) {
+          sequence = '\x1d';
+        } else if (key == LogicalKeyboardKey.space) {
+          sequence = '\x00';
+        }
+      } else if (HardwareKeyboard.instance.isAltPressed) {
+        final char = event.character;
+        if (char != null) {
+          sequence = '\x1b$char';
+        }
       } else if (key == LogicalKeyboardKey.altLeft ||
           key == LogicalKeyboardKey.altRight) {
         setState(() {

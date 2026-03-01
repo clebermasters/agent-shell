@@ -17,9 +17,7 @@ class TerminalService {
   Stream<String> get outputStream => _outputController.stream;
 
   Terminal createTerminal(String sessionName, {int cols = 80, int rows = 24}) {
-    final terminal = Terminal(
-      maxLines: 10000,
-    );
+    final terminal = Terminal(maxLines: 10000);
 
     _terminals[sessionName] = terminal;
 
@@ -30,7 +28,9 @@ class TerminalService {
 
     // Listen for incoming data from WebSocket
     _wsService.messages.listen((message) {
-      if (message['type'] == 'terminal_data' &&
+      // Handle terminal output - Capacitor uses 'output', legacy uses 'terminal_data'
+      final type = message['type'] as String?;
+      if ((type == 'output' || type == 'terminal_data') &&
           message['session'] == sessionName) {
         final data = message['data'] as String?;
         if (data != null) {
@@ -79,17 +79,11 @@ class NativeTerminalService {
   final Map<String, Terminal> _terminals = {};
 
   Pty createPty(String sessionName, {int cols = 80, int rows = 24}) {
-    final pty = Pty.start(
-      '/bin/bash',
-      columns: cols,
-      rows: rows,
-    );
+    final pty = Pty.start('/bin/bash', columns: cols, rows: rows);
 
     _ptys[sessionName] = pty;
 
-    final terminal = Terminal(
-      maxLines: 10000,
-    );
+    final terminal = Terminal(maxLines: 10000);
 
     _terminals[sessionName] = terminal;
 

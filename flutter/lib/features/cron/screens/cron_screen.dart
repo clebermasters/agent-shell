@@ -4,11 +4,24 @@ import '../../../data/models/cron_job.dart';
 import '../providers/cron_provider.dart';
 import 'cron_job_editor_screen.dart';
 
-class CronScreen extends ConsumerWidget {
+class CronScreen extends ConsumerStatefulWidget {
   const CronScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CronScreen> createState() => _CronScreenState();
+}
+
+class _CronScreenState extends ConsumerState<CronScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(cronProvider.notifier).refresh();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final cronState = ref.watch(cronProvider);
 
     return Scaffold(

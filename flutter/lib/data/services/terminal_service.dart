@@ -12,7 +12,7 @@ class TerminalService {
   final StreamController<String> _outputController =
       StreamController<String>.broadcast();
   
-  // Custom input processor to handle modifiers
+  // Custom input processor to handle modifiers globally
   Function(String session, String data)? _inputProcessor;
 
   TerminalService(this._wsService);
@@ -41,9 +41,6 @@ class TerminalService {
     _wsService.messages.listen((message) {
       final type = message['type'] as String?;
       
-      // Handle terminal output
-      // Note: Backend 'output' message ONLY has 'data', no 'session' field.
-      // Since we only have one session attached per WS connection, this is correct.
       if (type == 'output') {
         final data = message['data'] as String?;
         if (data != null) {
@@ -51,7 +48,6 @@ class TerminalService {
         }
       }
       
-      // Also handle legacy terminal_data format which DOES have a session field
       if (type == 'terminal_data') {
         final msgSession = message['session'] as String? ?? message['sessionName'] as String?;
         if (msgSession == sessionName) {

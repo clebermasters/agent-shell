@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -75,21 +75,55 @@ pub struct MemoryInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CronJob {
     pub id: String,
     pub name: String,
     pub schedule: String,
     pub command: String,
     pub enabled: bool,
+    #[serde(alias = "lastRun", default, deserialize_with = "deserialize_optional_datetime")]
     pub last_run: Option<DateTime<Utc>>,
+    #[serde(alias = "nextRun", default, deserialize_with = "deserialize_optional_datetime")]
     pub next_run: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub output: Option<String>,
+    #[serde(alias = "createdAt", default, deserialize_with = "deserialize_optional_datetime")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(alias = "updatedAt", default, deserialize_with = "deserialize_optional_datetime")]
+    pub updated_at: Option<DateTime<Utc>>,
     pub environment: Option<HashMap<String, String>>,
+    #[serde(alias = "logOutput")]
     pub log_output: Option<bool>,
+    #[serde(alias = "emailTo")]
     pub email_to: Option<String>,
+    #[serde(alias = "tmuxSession")]
     pub tmux_session: Option<String>,
+}
+
+fn deserialize_optional_datetime<'de, D>(
+    deserializer: D,
+) -> Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(value.and_then(|raw| parse_datetime_lenient(&raw)))
+}
+
+fn parse_datetime_lenient(raw: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(raw) {
+        return Some(dt.with_timezone(&Utc));
+    }
+
+    // Flutter can send ISO-8601 strings without timezone; treat them as UTC.
+    if let Ok(naive) = NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Some(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
+    }
+
+    if let Ok(naive) = NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f") {
+        return Some(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
+    }
+
+    None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,10 +135,21 @@ pub enum WebSocketMessage {
         session_name: String,
         cols: u16,
         rows: u16,
+        #[serde(rename = "windowIndex")]
+        window_index: Option<u32>,
     },
     Input {
         data: String,
     },
+    #[serde(alias = "inputViaTmux")]
+    InputViaTmux {
+        #[serde(alias = "sessionName")]
+        session_name: Option<String>,
+        #[serde(alias = "windowIndex")]
+        window_index: Option<u32>,
+        data: String,
+    },
+    SendEnterKey,
     Resize {
         cols: u16,
         rows: u16,

@@ -7,7 +7,7 @@ import '../providers/terminal_provider.dart';
 import '../widgets/terminal_view_widget.dart';
 import '../widgets/mobile_keyboard.dart';
 import '../widgets/terminal_accessory_bar.dart';
-import '../../auth/providers/auth_provider.dart';
+import '../../../core/providers.dart';
 
 class TerminalScreen extends ConsumerStatefulWidget {
   final String sessionName;
@@ -24,6 +24,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   bool _fullscreen = false;
   bool _showStatus = true;
   bool _wasKeyboardVisible = false;
+  
+  // Selection Mode state
+  bool _isSelectionMode = false;
+  bool _hasSelection = false;
   
   // Modifier states for accessory bar + native keyboard
   bool _ctrlActive = false;
@@ -50,7 +54,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
       final terminalNotifier = ref.read(terminalProvider.notifier);
       terminalNotifier.connect(widget.sessionName);
       
+      // CRITICAL: Register custom input processor to handle sticky modifiers
       terminalNotifier.terminalService.setInputProcessor(_processInput);
+      
+      // Listen for selection changes via the controller in state
+      final terminalState = ref.read(terminalProvider);
+      terminalState.controller?.addListener(_onSelectionChange);
       
       _persistActiveSession();
       
@@ -67,16 +76,28 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     });
   }
 
-  void _onFocusChange() {
-    if (_focusNode.hasFocus && !_showCustomKeyboard) {
+  void _onSelectionChange() {
+    final controller = ref.read(terminalProvider).controller;
+    if (controller != null) {
+      final hasSelection = controller.selection != null;
+      if (hasSelection != _hasSelection) {
+        setState(() {
+          _hasSelection = hasSelection;
+        });
+      }
     }
+  }
+
+  void _onFocusChange() {
   }
 
   @override
   void dispose() {
     _focusNode.removeListener(_onFocusChange);
+    ref.read(terminalProvider).controller?.removeListener(_onSelectionChange);
     WidgetsBinding.instance.removeObserver(this);
     _clearActiveSession();
+    ref.read(terminalProvider.notifier).disconnect();
     _focusNode.dispose();
     super.dispose();
   }
@@ -86,7 +107,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     if (state == AppLifecycleState.paused) {
       _wasKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
     } else if (state == AppLifecycleState.resumed) {
-      if (_wasKeyboardVisible && !_showCustomKeyboard) {
+      // Ensure the websocket is alive or force it to reconnect
+      ref.read(terminalProvider.notifier).checkConnection();
+
+      if (_wasKeyboardVisible && !_showCustomKeyboard && !_isSelectionMode) {
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted) {
             _focusNode.requestFocus();
@@ -97,10 +121,15 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     }
   }
 
+  // This method catches input from TerminalView
+  // and applies our custom modifiers before sending to backend.
   void _processInput(String session, String data) {
+    if (_isSelectionMode) return;
+
     String finalData = data;
     bool wasModified = false;
 
+    // Apply soft modifiers for single character inputs (from native keyboard)
     if (data.length == 1 && (_ctrlActive || _altActive || _shiftActive)) {
       String char = data;
       wasModified = true;
@@ -127,8 +156,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
       }
     }
 
+    // Send to backend via terminal provider
     ref.read(terminalProvider.notifier).sendData(session, finalData);
 
+    // Reset soft modifiers if they were used
     if (wasModified) {
       setState(() {
         _ctrlActive = false;
@@ -173,15 +204,52 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     setState(() {
       _showCustomKeyboard = !_showCustomKeyboard;
       if (_showCustomKeyboard) {
-        // Close native keyboard
         _focusNode.unfocus();
         SystemChannels.textInput.invokeMethod('TextInput.hide');
+        _isSelectionMode = false;
       } else {
-        // Show native keyboard
         _focusNode.requestFocus();
         SystemChannels.textInput.invokeMethod('TextInput.show');
       }
     });
+  }
+
+  void _toggleSelectionMode() {
+    setState(() {
+      _isSelectionMode = !_isSelectionMode;
+      if (_isSelectionMode) {
+        _focusNode.unfocus();
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      } else {
+        _focusNode.requestFocus();
+        SystemChannels.textInput.invokeMethod('TextInput.show');
+        ref.read(terminalProvider).controller?.clearSelection();
+      }
+    });
+  }
+
+  void _handleCopy() async {
+    final terminalState = ref.read(terminalProvider);
+    final controller = terminalState.controller;
+    final terminal = terminalState.terminal;
+    
+    if (controller != null && terminal != null && controller.selection != null) {
+      final text = terminal.buffer.getText(controller.selection!);
+      await Clipboard.setData(ClipboardData(text: text));
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Copied to clipboard'), duration: Duration(seconds: 1)),
+        );
+      }
+    }
+  }
+
+  void _handlePaste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (data?.text != null) {
+      _handleInput(data!.text!);
+    }
   }
 
   @override
@@ -197,9 +265,36 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
           : AppBar(
               title: Text(widget.sessionName),
               actions: [
+                if (_isSelectionMode)
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    onPressed: _toggleSelectionMode,
+                    tooltip: 'Exit Selection',
+                  ),
+                IconButton(
+                  icon: Icon(_isSelectionMode ? Icons.select_all : Icons.ads_click, size: 20),
+                  onPressed: _toggleSelectionMode,
+                  color: _isSelectionMode ? Colors.orange : null,
+                  tooltip: 'Selection Mode',
+                ),
+                if (_hasSelection)
+                  IconButton(
+                    icon: const Icon(Icons.copy, size: 20),
+                    onPressed: _handleCopy,
+                    tooltip: 'Copy',
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.paste, size: 20),
+                  onPressed: _handlePaste,
+                  tooltip: 'Paste',
+                ),
+                
+                const VerticalDivider(width: 8),
+
                 IconButton(
                   icon: Icon(
                     _showCustomKeyboard ? Icons.keyboard : Icons.keyboard_alt_outlined,
+                    size: 20,
                   ),
                   onPressed: _toggleKeyboardType,
                   tooltip: _showCustomKeyboard ? 'Use Native Keyboard' : 'Use Custom Keyboard',
@@ -207,18 +302,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                 IconButton(
                   icon: Icon(
                     _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                    size: 20,
                   ),
                   onPressed: _toggleFullscreen,
                   tooltip: _fullscreen ? 'Exit Fullscreen' : 'Fullscreen',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: () {
-                    ref
-                        .read(terminalProvider.notifier)
-                        .connect(widget.sessionName);
-                  },
-                  tooltip: 'Reconnect',
                 ),
               ],
             ),
@@ -233,8 +320,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
             // Connection status bar
             AnimatedContainer(
               duration: const Duration(milliseconds: 300),
-              height: _showStatus ? null : 0,
-              child: _showStatus
+              height: (_showStatus || !terminalState.isConnected) ? null : 0,
+              child: (_showStatus || !terminalState.isConnected)
                   ? Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(
@@ -263,12 +350,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
             Expanded(
               child: terminalState.terminal != null
                   ? GestureDetector(
-                      onTap: () {
-                        if (!_showCustomKeyboard) {
-                          _focusNode.requestFocus();
-                          SystemChannels.textInput.invokeMethod('TextInput.show');
-                        }
-                      },
                       onDoubleTap: _toggleFullscreen,
                       onLongPress: () {
                         setState(() {
@@ -284,6 +365,34 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                         ctrlActive: _ctrlActive,
                         altActive: _altActive,
                         shiftActive: _shiftActive,
+                        onTap: () {
+                          if (!_showCustomKeyboard && !_isSelectionMode) {
+                            final isKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+
+                            if (!isKeyboardVisible) {
+                              // If keyboard is hidden, ensure we cycle focus to force OS to show it
+                              if (_focusNode.hasFocus) {
+                                _focusNode.unfocus();
+                                Future.delayed(const Duration(milliseconds: 50), () {
+                                  if (mounted) {
+                                    _focusNode.requestFocus();
+                                    SystemChannels.textInput.invokeMethod('TextInput.show');
+                                  }
+                                });
+                              } else {
+                                _focusNode.requestFocus();
+                                SystemChannels.textInput.invokeMethod('TextInput.show');
+                              }
+                            } else {
+                              // If keyboard is already visible, just ensure focus is maintained
+                              // without unfocusing, which prevents the keyboard from hiding.
+                              if (!_focusNode.hasFocus) {
+                                _focusNode.requestFocus();
+                              }
+                              SystemChannels.textInput.invokeMethod('TextInput.show');
+                            }
+                          }
+                        },
                         onModifiersReset: () {
                           setState(() {
                             _ctrlActive = false;
@@ -297,7 +406,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
             ),
 
             // Accessory Bar (for native keyboard)
-            if (!_showCustomKeyboard && isNativeKeyboardVisible)
+            if (!_showCustomKeyboard && (isNativeKeyboardVisible || _isSelectionMode))
               TerminalAccessoryBar(
                 onKeyPressed: _handleInput,
                 onToggleKeyboard: () {

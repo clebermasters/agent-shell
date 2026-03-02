@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/tmux_session.dart';
 import '../providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
+import '../../chat/screens/chat_screen.dart';
+import '../../hosts/screens/host_selection_screen.dart';
+import '../../hosts/providers/hosts_provider.dart';
 
 class SessionsScreen extends ConsumerStatefulWidget {
   const SessionsScreen({super.key});
@@ -23,11 +26,31 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
   @override
   Widget build(BuildContext context) {
     final sessionsState = ref.watch(sessionsProvider);
+    final hostsState = ref.watch(hostsProvider);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sessions'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Sessions'),
+            if (hostsState.selectedHost != null)
+              Text(
+                hostsState.selectedHost!.name,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+          ],
+        ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.dns),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const HostSelectionScreen()),
+              );
+            },
+            tooltip: 'Servers',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
@@ -72,6 +95,16 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                       MaterialPageRoute(
                         builder: (_) =>
                             TerminalScreen(sessionName: session.name),
+                      ),
+                    );
+                  },
+                  onChat: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(
+                          sessionName: session.name,
+                          windowIndex: 0,
+                        ),
                       ),
                     );
                   },
@@ -161,11 +194,13 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
 class _SessionTile extends StatelessWidget {
   final TmuxSession session;
   final VoidCallback onAttach;
+  final VoidCallback onChat;
   final VoidCallback onKill;
 
   const _SessionTile({
     required this.session,
     required this.onAttach,
+    required this.onChat,
     required this.onKill,
   });
 
@@ -188,8 +223,16 @@ class _SessionTile extends StatelessWidget {
             const PopupMenuItem(
               value: 'attach',
               child: ListTile(
-                leading: Icon(Icons.open_in_new),
-                title: Text('Attach'),
+                leading: Icon(Icons.terminal),
+                title: Text('Terminal'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'chat',
+              child: ListTile(
+                leading: Icon(Icons.chat_bubble),
+                title: Text('Chat'),
                 contentPadding: EdgeInsets.zero,
               ),
             ),
@@ -205,6 +248,8 @@ class _SessionTile extends StatelessWidget {
           onSelected: (value) {
             if (value == 'attach') {
               onAttach();
+            } else if (value == 'chat') {
+              onChat();
             } else if (value == 'kill') {
               onKill();
             }

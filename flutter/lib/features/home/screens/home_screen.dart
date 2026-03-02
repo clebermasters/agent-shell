@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/providers.dart';
 import '../../sessions/screens/sessions_screen.dart';
-import '../../chat/screens/chat_screen.dart';
 import '../../cron/screens/cron_screen.dart';
 import '../../dotfiles/screens/dotfiles_screen.dart';
 import '../../system/screens/system_screen.dart';
 import '../../debug/screens/debug_screen.dart';
 import '../../terminal/screens/terminal_screen.dart';
-import '../../auth/providers/auth_provider.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   final bool showDebug;
@@ -29,12 +28,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     super.initState();
     _screens.addAll([
       const SessionsScreen(),
-      const ChatScreen(),
+      // Chat is now accessed via session selection
       const CronScreen(),
       const DotfilesScreen(),
       const SystemScreen(),
     ]);
-    
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _restoreState();
     });
@@ -103,11 +102,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             label: 'Sessions',
           ),
           NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline),
-            selectedIcon: Icon(Icons.chat_bubble),
-            label: 'Chat',
-          ),
-          NavigationDestination(
             icon: Icon(Icons.schedule_outlined),
             selectedIcon: Icon(Icons.schedule),
             label: 'Cron',
@@ -124,7 +118,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ],
       ),
-      floatingActionButton: widget.showDebug
+      floatingActionButton: widget.showDebug && _currentIndex == 0
           ? FloatingActionButton(
               onPressed: _openDebugScreen,
               child: const Icon(Icons.bug_report),

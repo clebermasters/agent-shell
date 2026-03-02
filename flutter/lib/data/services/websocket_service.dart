@@ -65,9 +65,6 @@ class WebSocketService {
   void _onMessage(dynamic data) {
     final dataStr = data.toString();
     _log('Received: $dataStr');
-    if (dataStr.contains('cron')) {
-      print('[WS] Cron-related message received: $dataStr');
-    }
     try {
       final message = jsonDecode(data as String) as Map<String, dynamic>;
       _messageController.add(message);
@@ -121,7 +118,6 @@ class WebSocketService {
   }
 
   void send(Map<String, dynamic> message) {
-    print('[WS] Sending: $message');
     if (_isConnected && _channel != null) {
       _log('Sending: $message');
       _channel!.sink.add(jsonEncode(message));
@@ -208,7 +204,6 @@ class WebSocketService {
   }
 
   void requestCronJobs() {
-    print('[WS] requestCronJobs called');
     send({'type': 'list-cron-jobs'});
   }
 

@@ -44,25 +44,26 @@ class CronNotifier extends StateNotifier<CronState> {
 
   void _init() {
     _wsService.messages.listen((message) {
-      print('[CRON] Received message: $message');
       final type = message['type'] as String?;
 
       switch (type) {
         case 'cron-jobs-list':
         case 'cron_jobs_list':
-          print('[CRON] Processing cron-jobs-list');
           final jobs =
               (message['jobs'] as List?)
                   ?.map((j) => CronJob.fromJson(j as Map<String, dynamic>))
                   .toList() ??
               [];
-          print('[CRON] Jobs count: ${jobs.length}');
-          state = state.copyWith(jobs: jobs, isLoading: false);
+          state = state.copyWith(jobs: jobs, isLoading: false, error: null);
           break;
         case 'cron-job-created':
         case 'cron_job_created':
           final job = CronJob.fromJson(message['job'] as Map<String, dynamic>);
-          state = state.copyWith(jobs: [...state.jobs, job]);
+          state = state.copyWith(
+            jobs: [...state.jobs, job],
+            isLoading: false,
+            error: null,
+          );
           break;
         case 'cron-job-updated':
         case 'cron_job_updated':
@@ -95,34 +96,28 @@ class CronNotifier extends StateNotifier<CronState> {
           break;
         case 'error':
           final errorMsg = message['message'] as String?;
-          print('[CRON] Error message: $errorMsg');
-          if (errorMsg != null && errorMsg.contains('cron')) {
-            state = state.copyWith(error: errorMsg, isLoading: false);
+          if (state.isLoading) {
+            state = state.copyWith(
+              error: errorMsg ?? 'Unknown error',
+              isLoading: false,
+            );
           }
           break;
-        default:
-          print('[CRON] Unknown message type: $type');
       }
     });
 
     _wsService.connectionState.listen((connected) {
-      print('[CRON] Connection state changed: $connected');
       if (connected) {
         refresh();
       }
     });
 
-    // If already connected, load immediately
     if (_wsService.isConnected) {
-      print('[CRON] Already connected, refreshing...');
       refresh();
     }
   }
 
   void refresh() {
-    print(
-      '[CRON] refresh() called, isConnected: ${_wsService.isConnected}, isLoading: ${state.isLoading}',
-    );
     if (!_wsService.isConnected) {
       return;
     }
@@ -131,12 +126,20 @@ class CronNotifier extends StateNotifier<CronState> {
     }
     state = state.copyWith(isLoading: true);
     _wsService.requestCronJobs();
-    print('[CRON] Request sent');
   }
 
   Future<void> createCronJob(CronJob job) async {
-    state = state.copyWith(jobs: [...state.jobs, job]);
+    state = state.copyWith(isLoading: true);
     _wsService.createCronJob(job);
+
+    Future.delayed(const Duration(seconds: 10), () {
+      if (state.isLoading) {
+        state = state.copyWith(
+          isLoading: false,
+          error: 'Failed to create cron job: no response from server',
+        );
+      }
+    });
   }
 
   Future<void> updateCronJob(CronJob job) async {

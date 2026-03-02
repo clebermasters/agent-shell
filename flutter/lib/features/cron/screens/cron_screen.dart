@@ -34,7 +34,34 @@ class _CronScreenState extends ConsumerState<CronScreen> {
           ),
         ],
       ),
-      body: cronState.isLoading
+      body: cronState.error != null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.error_outline, size: 64, color: Colors.red[400]),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Error',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.titleLarge?.copyWith(color: Colors.red[400]),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      cronState.error!,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(color: Colors.grey[600]),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : cronState.isLoading
           ? const Center(child: CircularProgressIndicator())
           : cronState.jobs.isEmpty
           ? Center(

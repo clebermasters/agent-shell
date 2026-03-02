@@ -75,7 +75,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void _handleChatHistory(Map<String, dynamic> message) {
     final messagesData = message['messages'] as List<dynamic>? ?? [];
-    final tool = message['tool'] as String?;
+    
+    final toolRaw = message['tool'];
+    String? toolStr;
+    if (toolRaw is String) {
+      toolStr = toolRaw;
+    } else if (toolRaw is Map) {
+      toolStr = toolRaw.keys.first.toString();
+    }
 
     // Filter out user messages from backend history (we add them locally)
     final messages = messagesData
@@ -85,7 +92,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     state = state.copyWith(
       messages: messages,
-      detectedTool: tool,
+      detectedTool: toolStr,
       isLoading: false,
       error: null,
     );

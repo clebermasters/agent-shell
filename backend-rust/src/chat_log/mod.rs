@@ -1,5 +1,6 @@
 pub mod claude_parser;
 pub mod codex_parser;
+pub mod opencode_parser;
 pub mod watcher;
 
 use chrono::{DateTime, Utc};
@@ -36,12 +37,15 @@ pub struct ChatMessage {
     pub blocks: Vec<ContentBlock>,
 }
 
+use std::path::PathBuf;
+
 /// Which AI tool is running.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum AiTool {
     Claude,
     Codex,
+    Opencode { cwd: PathBuf },
 }
 
 /// Events emitted by the log watcher.

@@ -301,7 +301,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Start a conversation with Claude Code',
+            'Start a conversation with Claude Code or Opencode',
             style: TextStyle(
               fontSize: 14,
               color: isDarkMode ? Colors.grey.shade500 : Colors.grey.shade500,

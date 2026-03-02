@@ -206,16 +206,12 @@ class WebSocketService {
     send({'type': 'list-cron-jobs'});
   }
 
-  void createCronJob(String schedule, String command) {
-    send({
-      'type': 'create-cron-job',
-      'job': {
-        'name': 'New Job',
-        'schedule': schedule,
-        'command': command,
-        'enabled': true,
-      },
-    });
+  void createCronJob(CronJob job) {
+    send({'type': 'create-cron-job', 'job': job.toJson()});
+  }
+
+  void updateCronJob(CronJob job) {
+    send({'type': 'update-cron-job', 'id': job.id, 'job': job.toJson()});
   }
 
   void deleteCronJob(String id) {
@@ -224,6 +220,10 @@ class WebSocketService {
 
   void toggleCronJob(String id, bool enabled) {
     send({'type': 'toggle-cron-job', 'id': id, 'enabled': enabled});
+  }
+
+  void testCronCommand(String command) {
+    send({'type': 'test-cron-command', 'command': command});
   }
 
   void requestDotfiles() {

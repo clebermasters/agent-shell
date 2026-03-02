@@ -12,8 +12,8 @@ class CronRepository {
     return [];
   }
 
-  Future<void> createCronJob(String schedule, String command) async {
-    _wsService.createCronJob(schedule, command);
+  Future<void> createCronJob(CronJob job) async {
+    _wsService.createCronJob(job);
   }
 
   Future<void> deleteCronJob(String id) async {
@@ -24,12 +24,7 @@ class CronRepository {
     _wsService.toggleCronJob(id, enabled);
   }
 
-  Future<void> updateCronJob(String id, String schedule, String command) async {
-    _wsService.send({
-      'action': 'update_cron',
-      'id': id,
-      'schedule': schedule,
-      'command': command,
-    });
+  Future<void> updateCronJob(CronJob job) async {
+    _wsService.updateCronJob(job);
   }
 }

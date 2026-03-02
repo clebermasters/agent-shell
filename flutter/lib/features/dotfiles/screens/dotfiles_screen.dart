@@ -77,18 +77,54 @@ class _DotfilesScreenState extends ConsumerState<DotfilesScreen> {
           ),
         ],
       ),
-      body: dotfilesState.isLoading && dotfilesState.files.isEmpty
-          ? const Center(child: CircularProgressIndicator())
-          : groupedFiles.isEmpty
-          ? _buildEmptyState(isDark)
-          : ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: groupedFiles.length,
-              itemBuilder: (context, index) {
-                final entry = groupedFiles.entries.elementAt(index);
-                return _buildSection(entry.key, entry.value, isDark);
-              },
+      body: Column(
+        children: [
+          if (dotfilesState.error != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              color: Colors.red.shade50,
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    color: Colors.red.shade700,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      dotfilesState.error!,
+                      style: TextStyle(
+                        color: Colors.red.shade700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () =>
+                        ref.read(dotfilesProvider.notifier).refresh(),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
             ),
+          Expanded(
+            child: dotfilesState.isLoading && dotfilesState.files.isEmpty
+                ? const Center(child: CircularProgressIndicator())
+                : groupedFiles.isEmpty
+                ? _buildEmptyState(isDark)
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: groupedFiles.length,
+                    itemBuilder: (context, index) {
+                      final entry = groupedFiles.entries.elementAt(index);
+                      return _buildSection(entry.key, entry.value, isDark);
+                    },
+                  ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showBrowsePathDialog(context, isDark),
         backgroundColor: const Color(0xFF6366F1),

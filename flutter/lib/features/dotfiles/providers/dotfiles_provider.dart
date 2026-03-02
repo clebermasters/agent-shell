@@ -48,7 +48,6 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
 
   DotfilesNotifier(this._wsService) : super(const DotfilesState()) {
     _init();
-    refresh();
   }
 
   void _init() {
@@ -112,7 +111,15 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
   }
 
   void refresh() {
-    state = state.copyWith(isLoading: true);
+    if (state.isLoading) return;
+    if (!_wsService.isConnected) {
+      state = state.copyWith(
+        error: 'Not connected to server',
+        isLoading: false,
+      );
+      return;
+    }
+    state = state.copyWith(isLoading: true, error: null);
     _wsService.requestDotfiles();
   }
 
@@ -167,6 +174,7 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
   }
 
   void loadHistory(String path) {
+    if (state.isLoading) return;
     state = state.copyWith(isLoading: true, versions: []);
     _wsService.requestDotfileHistory(path);
   }
@@ -179,6 +187,7 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
   }
 
   void loadTemplates() {
+    if (state.isLoading) return;
     state = state.copyWith(isLoading: true, templates: []);
     _wsService.requestDotfileTemplates();
   }

@@ -39,7 +39,7 @@ impl CronManager {
     pub async fn list_jobs(&self) -> Vec<CronJob> {
         let jobs = self.jobs.read().await;
         let mut job_list: Vec<CronJob> = jobs.values().cloned().collect();
-        job_list.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        job_list.sort_by(|a, b| a.created_at.cmp(&b.created_at).reverse());
         job_list
     }
 
@@ -59,8 +59,8 @@ impl CronManager {
         
         // Set timestamps
         let now = Utc::now();
-        job.created_at = now;
-        job.updated_at = now;
+        job.created_at = Some(now);
+        job.updated_at = Some(now);
         
         // Validate cron expression
         self.validate_cron_expression(&job.schedule)?;
@@ -92,7 +92,7 @@ impl CronManager {
         self.validate_cron_expression(&job.schedule)?;
         
         // Update timestamp
-        job.updated_at = Utc::now();
+        job.updated_at = Some(Utc::now());
         job.id = id.clone();
         
         // Calculate next run time
@@ -130,7 +130,7 @@ impl CronManager {
         
         if let Some(job) = jobs.get_mut(id) {
             job.enabled = enabled;
-            job.updated_at = Utc::now();
+            job.updated_at = Some(Utc::now());
             
             // Always remove first to avoid duplicates
             self.remove_from_crontab(id).await?;
@@ -246,8 +246,9 @@ impl CronManager {
                                     enabled,
                                     last_run: None,
                                     next_run: self.calculate_next_run(&parts[0..5].join(" ")).unwrap_or(None),
-                                    created_at: Utc::now(),
-                                    updated_at: Utc::now(),
+                                    output: None,
+                                    created_at: Some(Utc::now()),
+                                    updated_at: Some(Utc::now()),
                                     environment: None,
                                     log_output: None,
                                     email_to: None,

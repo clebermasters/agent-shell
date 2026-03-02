@@ -171,9 +171,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     while let Some(Ok(msg)) = receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(&text) {
-                    if let Err(e) = handle_message(ws_msg, &mut ws_state).await {
-                        error!("Error handling message: {}", e);
+                info!("Received WebSocket message: {}", text);
+                match serde_json::from_str::<WebSocketMessage>(&text) {
+                    Ok(ws_msg) => {
+                        info!("Parsed message type: {:?}", std::mem::discriminant(&ws_msg));
+                        if let Err(e) = handle_message(ws_msg, &mut ws_state).await {
+                            error!("Error handling message: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to parse WebSocket message: {} - Error: {}", text, e);
                     }
                 }
             }

@@ -104,6 +104,11 @@ class CronNotifier extends StateNotifier<CronState> {
         refresh();
       }
     });
+
+    // If already connected, load immediately
+    if (_wsService.isConnected) {
+      refresh();
+    }
   }
 
   void refresh() {

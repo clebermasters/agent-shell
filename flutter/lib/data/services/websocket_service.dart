@@ -63,7 +63,8 @@ class WebSocketService {
   }
 
   void _onMessage(dynamic data) {
-    _log('Received: $data');
+    final dataStr = data.toString();
+    _log('Received: $dataStr');
     try {
       final message = jsonDecode(data as String) as Map<String, dynamic>;
       _messageController.add(message);
@@ -102,6 +103,20 @@ class WebSocketService {
     });
   }
 
+  void forceReconnect() {
+    if (_currentUrl == null) return;
+    _log('Forcing immediate reconnect...');
+    _pingTimer?.cancel();
+    _reconnectTimer?.cancel();
+    try {
+      _subscription?.cancel();
+      _channel?.sink.close();
+    } catch (_) {}
+    _isConnected = false;
+    _connectionController.add(false);
+    _doConnect();
+  }
+
   void send(Map<String, dynamic> message) {
     if (_isConnected && _channel != null) {
       _log('Sending: $message');
@@ -128,12 +143,18 @@ class WebSocketService {
     send({'type': 'kill-session', 'sessionName': name});
   }
 
-  void attachSession(String name, {int cols = 80, int rows = 24}) {
+  void attachSession(
+    String name, {
+    int cols = 80,
+    int rows = 24,
+    int windowIndex = 0,
+  }) {
     send({
       'type': 'attach-session',
       'sessionName': name,
       'cols': cols,
       'rows': rows,
+      'windowIndex': windowIndex,
     });
   }
 
@@ -165,6 +186,19 @@ class WebSocketService {
     send({'type': 'input', 'data': data});
   }
 
+  void sendInputViaTmux(String sessionName, String data, {int? windowIndex}) {
+    send({
+      'type': 'inputViaTmux',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+      'data': data,
+    });
+  }
+
+  void sendEnterKey(String sessionName) {
+    send({'type': 'sendEnterKey'});
+  }
+
   void resizeTerminal(String sessionName, int cols, int rows) {
     send({'type': 'resize', 'cols': cols, 'rows': rows});
   }
@@ -173,16 +207,12 @@ class WebSocketService {
     send({'type': 'list-cron-jobs'});
   }
 
-  void createCronJob(String schedule, String command) {
-    send({
-      'type': 'create-cron-job',
-      'job': {
-        'name': 'New Job',
-        'schedule': schedule,
-        'command': command,
-        'enabled': true,
-      },
-    });
+  void createCronJob(CronJob job) {
+    send({'type': 'create-cron-job', 'job': job.toJson()});
+  }
+
+  void updateCronJob(CronJob job) {
+    send({'type': 'update-cron-job', 'id': job.id, 'job': job.toJson()});
   }
 
   void deleteCronJob(String id) {
@@ -191,6 +221,10 @@ class WebSocketService {
 
   void toggleCronJob(String id, bool enabled) {
     send({'type': 'toggle-cron-job', 'id': id, 'enabled': enabled});
+  }
+
+  void testCronCommand(String command) {
+    send({'type': 'test-cron-command', 'command': command});
   }
 
   void requestDotfiles() {
@@ -205,8 +239,36 @@ class WebSocketService {
     send({'type': 'write-dotfile', 'path': path, 'content': content});
   }
 
+  void requestDotfileHistory(String path) {
+    send({'type': 'get-dotfile-history', 'path': path});
+  }
+
+  void restoreDotfileVersion(String path, String timestamp) {
+    send({
+      'type': 'restore-dotfile-version',
+      'path': path,
+      'timestamp': timestamp,
+    });
+  }
+
+  void requestDotfileTemplates() {
+    send({'type': 'get-dotfile-templates'});
+  }
+
   void requestSystemStats() {
     send({'type': 'get-stats'});
+  }
+
+  void watchChatLog(String sessionName, int windowIndex) {
+    send({
+      'type': 'watch-chat-log',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+    });
+  }
+
+  void unwatchChatLog() {
+    send({'type': 'unwatch-chat-log'});
   }
 
   void disconnect() {

@@ -12,7 +12,9 @@ class TerminalViewWidget extends StatefulWidget {
   final bool ctrlActive;
   final bool altActive;
   final bool shiftActive;
+  final bool isSelectionMode;
   final VoidCallback onModifiersReset;
+  final VoidCallback? onTap;
 
   const TerminalViewWidget({
     super.key,
@@ -24,7 +26,9 @@ class TerminalViewWidget extends StatefulWidget {
     this.ctrlActive = false,
     this.altActive = false,
     this.shiftActive = false,
+    this.isSelectionMode = false,
     required this.onModifiersReset,
+    this.onTap,
   });
 
   @override
@@ -47,6 +51,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?',
     '`': '~',
   };
+
+  Offset? _pointerDownPos;
 
   @override
   void initState() {
@@ -80,6 +86,24 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
   void _onTerminalChange() {
     if (mounted) {
       setState(() {});
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Force text input connection to rebuild when returning to app
+      if (widget.focusNode.hasFocus) {
+        widget.focusNode.unfocus();
+      }
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) {
+          widget.focusNode.requestFocus();
+          SystemChannels.textInput.invokeMethod('TextInput.show');
+        }
+      });
+    } else if (state == AppLifecycleState.paused) {
+      widget.focusNode.unfocus();
     }
   }
 
@@ -160,11 +184,14 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
 
   void _onKey(RawKeyEvent event) {
     if (event is! RawKeyDownEvent) return;
+    
+    // In selection mode, we might want to allow some keys, 
+    // but for now, we keep it simple.
+    if (widget.isSelectionMode) return; 
 
     final key = event.logicalKey;
     String? sequence;
 
-    // Handle special keys that TextField might miss (including Backspace)
     if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
     else if (key == LogicalKeyboardKey.tab) sequence = '\t';
     else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
@@ -241,86 +268,117 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _updateTerminalSize(size);
           });
-        } else {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              _updateTerminalSize(size);
-            }
-          });
         }
 
-        return RawKeyboardListener(
-          focusNode: _wrapperFocusNode, // Wrapper node for RawKeyboardListener
-          onKey: _onKey,
-          child: GestureDetector(
-            onTap: () {
-              widget.focusNode.requestFocus();
-              SystemChannels.textInput.invokeMethod('TextInput.show');
-            },
-            onDoubleTap: _zoomIn,
-            onLongPress: _zoomOut,
-            child: Container(
-              color: Colors.black,
-              width: constraints.maxWidth,
-              height: constraints.maxHeight,
-              child: Stack(
-                children: [
-                  // Actual terminal rendering (readOnly: true because we handle input via TextField)
-                  TerminalView(
+        return Focus(
+          focusNode: _wrapperFocusNode,
+          onKey: (node, event) {
+            _onKey(event);
+            return KeyEventResult.ignored;
+          },
+          child: Container(
+            color: Colors.black,
+            width: constraints.maxWidth,
+            height: constraints.maxHeight,
+            child: Stack(
+              children: [
+                // Layer 1: GHOST INPUT (Underneath, captures keyboard only)
+                // We keep it focused but invisible and non-interactable via gestures
+                Positioned(
+                  left: -100, // Off-screen but active
+                  top: 0,
+                  width: 1,
+                  height: 1,
+                  child: Opacity(
+                    opacity: 0,
+                    child: TextField(
+                      controller: _inputController,
+                      focusNode: widget.focusNode,
+                      autofocus: true,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      maxLines: null,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      onChanged: _handleTextFieldInput,
+                    ),
+                  ),
+                ),
+
+                // Layer 2: TERMINAL VIEW (On top, captures ALL gestures)
+                Listener(
+                  onPointerDown: (e) => _pointerDownPos = e.position,
+                  onPointerUp: (e) {
+                    if (_pointerDownPos != null) {
+                      final distance = (e.position - _pointerDownPos!).distance;
+                      // If the pointer moved less than 10 pixels, treat it as a tap
+                      if (distance < 10) {
+                        if (widget.onTap != null) widget.onTap!();
+                      }
+                    }
+                  },
+                  behavior: HitTestBehavior.translucent,
+                  child: TerminalView(
                     widget.terminal,
                     controller: widget.controller,
-                    readOnly: true,
+                    readOnly: true, // Crucial: xterm.dart shouldn't try to handle focus itself
+                    cursorType: TerminalCursorType.block,
                     textStyle: TerminalStyle(
                       fontSize: _fontSize,
                       fontFamily: 'JetBrains Mono',
                     ),
                     padding: EdgeInsets.zero,
                   ),
+                ),
 
-                  // Overlay TextField to capture native keyboard input
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: 0.01,
-                      child: TextField(
-                        controller: _inputController,
-                        focusNode: widget.focusNode,
-                        autofocus: true,
-                        keyboardType: TextInputType.multiline,
-                        textInputAction: TextInputAction.newline,
-                        maxLines: null,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        onChanged: _handleTextFieldInput,
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                      ),
-                    ),
-                  ),
-                  
-                  if (widget.ctrlActive || widget.altActive || widget.shiftActive)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withOpacity(0.8),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
+                // Layer 3: Visual Indicators (Overlay)
+                IgnorePointer(
+                  child: Stack(
+                    children: [
+                      if (widget.ctrlActive || widget.altActive || widget.shiftActive)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(0.8),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ),
-                ],
-              ),
+                      if (widget.isSelectionMode)
+                        Positioned(
+                          top: 8,
+                          left: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.withOpacity(0.8),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'SELECTION MODE',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         );

@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../data/models/host.dart';
-import '../../auth/providers/auth_provider.dart';
+import '../../../core/providers.dart';
 
 final hostsProvider = StateNotifierProvider<HostsNotifier, HostsState>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);

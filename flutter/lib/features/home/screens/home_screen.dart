@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/providers.dart';
 import '../../sessions/screens/sessions_screen.dart';
 import '../../cron/screens/cron_screen.dart';
 import '../../dotfiles/screens/dotfiles_screen.dart';
 import '../../system/screens/system_screen.dart';
 import '../../debug/screens/debug_screen.dart';
 import '../../terminal/screens/terminal_screen.dart';
-import '../../auth/providers/auth_provider.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   final bool showDebug;

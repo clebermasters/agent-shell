@@ -7,7 +7,7 @@ import '../providers/terminal_provider.dart';
 import '../widgets/terminal_view_widget.dart';
 import '../widgets/mobile_keyboard.dart';
 import '../widgets/terminal_accessory_bar.dart';
-import '../../auth/providers/auth_provider.dart';
+import '../../../core/providers.dart';
 
 class TerminalScreen extends ConsumerStatefulWidget {
   final String sessionName;

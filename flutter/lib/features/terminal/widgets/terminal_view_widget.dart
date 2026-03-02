@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:ui';
 import 'package:xterm/xterm.dart';
 import 'package:volume_key_board/volume_key_board.dart';
 
@@ -52,7 +53,10 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
     '`': '~',
   };
 
+  final ScrollController _scrollController = ScrollController();
   Offset? _pointerDownPos;
+  bool _isDragging = false;
+  double _dragStartPixels = 0;
 
   @override
   void initState() {
@@ -75,11 +79,12 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
 
   @override
   void dispose() {
-    widget.terminal.removeListener(_onTerminalChange);
+    _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
+    VolumeKeyBoard.instance.removeListener();
+    widget.terminal.removeListener(_onTerminalChange);
     _wrapperFocusNode.dispose();
     _inputController.dispose();
-    VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
 
@@ -305,29 +310,87 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
                   ),
                 ),
 
-                // Layer 2: TERMINAL VIEW (On top, captures ALL gestures)
+                // Layer 2: TERMINAL VIEW (On top, captures gestures without competing in arena)
                 Listener(
-                  onPointerDown: (e) => _pointerDownPos = e.position,
+                  onPointerDown: (e) {
+                    _pointerDownPos = e.position;
+                    _isDragging = false;
+                    _dragStartPixels = 0.0;
+                  },
+                  onPointerMove: (e) {
+                    if (_pointerDownPos == null) return;
+                    
+                    final dy = e.position.dy - _pointerDownPos!.dy;
+                    
+                    // Activate drag if moved more than 18 logical pixels vertically
+                    if (!_isDragging && dy.abs() > 18) {
+                      _isDragging = true;
+                      _dragStartPixels = e.position.dy;
+                    }
+
+                    if (_isDragging) {
+                      // Calculate how many "ticks" of the scroll wheel this drag represents.
+                      // Standard line height is usually around 15-20 pixels.
+                      // Let's trigger a scroll event every 20 pixels of physical drag.
+                      final dragDelta = e.position.dy - _dragStartPixels;
+                      
+                      if (dragDelta.abs() > 20) {
+                        // Reset the anchor point so we wait for another 20 pixels
+                        _dragStartPixels = e.position.dy;
+                        
+                        // Terminal mouse reporting uses 1 for middle, 2 for right, 0 for left
+                        // 64 is wheel up, 65 is wheel down (X11 convention)
+                        // In SGR mode format: \e[<button;x;yM
+                        
+                        // If dy > 0, we are dragging DOWN (which means we want to see UP into history)
+                        // Therefore sending Mouse Wheel UP (64)
+                        final button = dragDelta > 0 ? 64 : 65;
+                        
+                        // Fake coordinates since it's a global swipe
+                        final x = 1;
+                        final y = 1;
+                        
+                        final sequence = '\x1b[<$button;$x;${y}M';
+                        widget.terminal.onOutput?.call(sequence);
+                      }
+                    }
+                  },
                   onPointerUp: (e) {
-                    if (_pointerDownPos != null) {
+                    if (_pointerDownPos != null && !_isDragging) {
                       final distance = (e.position - _pointerDownPos!).distance;
-                      // If the pointer moved less than 10 pixels, treat it as a tap
+                      // If NOT dragging and pointer moved less than 10 pixels, treat it as a tap
                       if (distance < 10) {
                         if (widget.onTap != null) widget.onTap!();
                       }
                     }
+                    _pointerDownPos = null;
+                    _isDragging = false;
                   },
                   behavior: HitTestBehavior.translucent,
-                  child: TerminalView(
-                    widget.terminal,
-                    controller: widget.controller,
-                    readOnly: true, // Crucial: xterm.dart shouldn't try to handle focus itself
-                    cursorType: TerminalCursorType.block,
-                    textStyle: TerminalStyle(
-                      fontSize: _fontSize,
-                      fontFamily: 'JetBrains Mono',
+                  child: ScrollConfiguration(
+                    behavior: ScrollConfiguration.of(context).copyWith(
+                      physics: const ClampingScrollPhysics(),
+                      dragDevices: {
+                        PointerDeviceKind.touch,
+                        PointerDeviceKind.mouse,
+                        PointerDeviceKind.trackpad,
+                      },
                     ),
-                    padding: EdgeInsets.zero,
+                    child: TerminalView(
+                      widget.terminal,
+                      scrollController: _scrollController,
+                      controller: widget.controller,
+                      readOnly: true, // Crucial: xterm.dart shouldn't try to handle focus itself
+                      cursorType: TerminalCursorType.block,
+                      alwaysShowCursor: true,
+                      textStyle: TerminalStyle(
+                        fontSize: _fontSize,
+                        fontFamily: 'JetBrains Mono',
+                      ),
+                      // theme: theme, // Assuming 'theme' is defined elsewhere or needs to be added
+                      onSecondaryTapDown: (details, offset) {},
+                      padding: EdgeInsets.zero,
+                    ),
                   ),
                 ),
 

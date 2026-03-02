@@ -9,6 +9,8 @@ class DotfilesState {
   final String? fileContent;
   final bool isLoading;
   final String? error;
+  final List<DotFileVersion> versions;
+  final List<DotFileTemplate> templates;
 
   const DotfilesState({
     this.files = const [],
@@ -16,6 +18,8 @@ class DotfilesState {
     this.fileContent,
     this.isLoading = false,
     this.error,
+    this.versions = const [],
+    this.templates = const [],
   });
 
   DotfilesState copyWith({
@@ -24,6 +28,8 @@ class DotfilesState {
     String? fileContent,
     bool? isLoading,
     String? error,
+    List<DotFileVersion>? versions,
+    List<DotFileTemplate>? templates,
   }) {
     return DotfilesState(
       files: files ?? this.files,
@@ -31,6 +37,8 @@ class DotfilesState {
       fileContent: fileContent ?? this.fileContent,
       isLoading: isLoading ?? this.isLoading,
       error: error,
+      versions: versions ?? this.versions,
+      templates: templates ?? this.templates,
     );
   }
 }
@@ -44,17 +52,60 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
 
   void _init() {
     _wsService.messages.listen((message) {
-      if (message['type'] == 'dotfiles_list') {
-        final files = (message['files'] as List?)
-                ?.map((f) => DotFile.fromJson(f as Map<String, dynamic>))
-                .toList() ??
-            [];
-        state = state.copyWith(files: files, isLoading: false);
-      } else if (message['type'] == 'dotfile_content') {
-        state = state.copyWith(
-          fileContent: message['content'] as String?,
-          isLoading: false,
-        );
+      final type = message['type'] as String?;
+      switch (type) {
+        case 'dotfiles_list':
+          final files =
+              (message['files'] as List?)
+                  ?.map((f) => DotFile.fromJson(f as Map<String, dynamic>))
+                  .toList() ??
+              [];
+          state = state.copyWith(files: files, isLoading: false);
+          break;
+        case 'dotfile_content':
+          state = state.copyWith(
+            fileContent: message['content'] as String?,
+            isLoading: false,
+          );
+          break;
+        case 'dotfile_written':
+          final success = message['success'] as bool? ?? false;
+          if (success) {
+            refresh();
+          }
+          break;
+        case 'dotfile_history':
+          final versions =
+              (message['versions'] as List?)
+                  ?.map(
+                    (v) => DotFileVersion.fromJson(v as Map<String, dynamic>),
+                  )
+                  .toList() ??
+              [];
+          state = state.copyWith(versions: versions, isLoading: false);
+          break;
+        case 'dotfile_restored':
+          final success = message['success'] as bool? ?? false;
+          if (success) {
+            refresh();
+          }
+          break;
+        case 'dotfile_templates':
+          final templates =
+              (message['templates'] as List?)
+                  ?.map(
+                    (t) => DotFileTemplate.fromJson(t as Map<String, dynamic>),
+                  )
+                  .toList() ??
+              [];
+          state = state.copyWith(templates: templates, isLoading: false);
+          break;
+        case 'error':
+          state = state.copyWith(
+            error: message['message'] as String?,
+            isLoading: false,
+          );
+          break;
       }
     });
   }
@@ -65,8 +116,46 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
   }
 
   void selectFile(DotFile file) {
-    state = state.copyWith(selectedFile: file, isLoading: true);
+    state = state.copyWith(
+      selectedFile: file,
+      fileContent: null,
+      isLoading: true,
+      versions: [],
+    );
     _wsService.requestDotfileContent(file.path);
+  }
+
+  void browseFile(String path) {
+    final file = DotFile(
+      path: path,
+      name: path.split('/').last,
+      isDirectory: false,
+      size: 0,
+      exists: false,
+      writable: true,
+      fileType: _detectFileType(path),
+    );
+    selectFile(file);
+  }
+
+  DotFileType _detectFileType(String path) {
+    final name = path.toLowerCase();
+    if (name.contains('.bashrc') ||
+        name.contains('.zshrc') ||
+        name.contains('.profile') ||
+        name.contains('.bash') ||
+        name.contains('.sh')) {
+      return DotFileType.shell;
+    } else if (name.contains('.gitconfig') || name.contains('.gitignore')) {
+      return DotFileType.git;
+    } else if (name.contains('.vimrc') || name.contains('vim/')) {
+      return DotFileType.vim;
+    } else if (name.contains('.tmux')) {
+      return DotFileType.tmux;
+    } else if (name.contains('.ssh/')) {
+      return DotFileType.ssh;
+    }
+    return DotFileType.other;
   }
 
   Future<void> saveFile(String path, String content) async {
@@ -76,17 +165,30 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
     refresh();
   }
 
+  void loadHistory(String path) {
+    state = state.copyWith(isLoading: true, versions: []);
+    _wsService.requestDotfileHistory(path);
+  }
+
+  Future<void> restoreVersion(String path, DateTime timestamp) async {
+    state = state.copyWith(isLoading: true);
+    _wsService.restoreDotfileVersion(path, timestamp.toIso8601String());
+    await Future.delayed(const Duration(milliseconds: 500));
+    refresh();
+  }
+
+  void loadTemplates() {
+    state = state.copyWith(isLoading: true, templates: []);
+    _wsService.requestDotfileTemplates();
+  }
+
   void clearSelection() {
-    state = DotfilesState(
-      files: state.files,
-      isLoading: state.isLoading,
-    );
+    state = DotfilesState(files: state.files, isLoading: state.isLoading);
   }
 }
 
 final dotfilesProvider = StateNotifierProvider<DotfilesNotifier, DotfilesState>(
   (ref) {
-    // Use the shared web socket service instead of creating a new disconnected one
     final wsService = ref.watch(sharedWebSocketServiceProvider);
     return DotfilesNotifier(wsService);
   },

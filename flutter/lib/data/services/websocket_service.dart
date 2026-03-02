@@ -238,6 +238,22 @@ class WebSocketService {
     send({'type': 'write-dotfile', 'path': path, 'content': content});
   }
 
+  void requestDotfileHistory(String path) {
+    send({'type': 'get-dotfile-history', 'path': path});
+  }
+
+  void restoreDotfileVersion(String path, String timestamp) {
+    send({
+      'type': 'restore-dotfile-version',
+      'path': path,
+      'timestamp': timestamp,
+    });
+  }
+
+  void requestDotfileTemplates() {
+    send({'type': 'get-dotfile-templates'});
+  }
+
   void requestSystemStats() {
     send({'type': 'get-stats'});
   }

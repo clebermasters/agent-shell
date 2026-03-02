@@ -83,15 +83,10 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     final textBefore = _controller.text.substring(0, position);
     final lineNumber = textBefore.split('\n').length - 1;
     final lineHeight = 20.0;
-    final paddingTop = 12.0;
-    final headerOffset = 120.0;
-    final targetOffset = (lineNumber * lineHeight) + paddingTop - headerOffset;
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    _scrollController.animateTo(
-      targetOffset.clamp(0.0, maxScroll),
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
-    );
+    final targetOffset = lineNumber * lineHeight;
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(targetOffset);
+    }
   }
 
   void _scrollToEnd() {

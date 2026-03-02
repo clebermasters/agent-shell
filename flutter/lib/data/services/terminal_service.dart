@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:xterm/xterm.dart';
 import 'package:flutter_pty/flutter_pty.dart';
 import 'websocket_service.dart';
@@ -15,6 +14,10 @@ class TerminalService {
   // Custom input processor to handle modifiers globally
   Function(String session, String data)? _inputProcessor;
 
+  // Per-session hydration state for history bootstrap
+  final Map<String, bool> _hydrating = {};
+  final Map<String, List<String>> _hydrationQueue = {};
+
   TerminalService(this._wsService);
 
   Stream<String> get outputStream => _outputController.stream;
@@ -24,9 +27,12 @@ class TerminalService {
   }
 
   Terminal createTerminal(String sessionName, {int cols = 80, int rows = 24}) {
-    final terminal = Terminal(maxLines: 10000);
+    // 50,000 lines so streamed tmux history is not trimmed
+    final terminal = Terminal(maxLines: 50000);
 
     _terminals[sessionName] = terminal;
+    _hydrating[sessionName] = false;
+    _hydrationQueue[sessionName] = [];
 
     // Set up terminal callbacks
     terminal.onOutput = (data) {
@@ -40,17 +46,62 @@ class TerminalService {
     // Listen for incoming data from WebSocket
     _wsService.messages.listen((message) {
       final type = message['type'] as String?;
-      
+      final msgSession = message['sessionName'] as String?;
+
+      // ── History bootstrap protocol ──────────────────────────────────────
+      if (type == 'terminal-history-start') {
+        // Only handle if it's for this terminal's session
+        if (msgSession == null || msgSession == sessionName) {
+          _hydrating[sessionName] = true;
+          _hydrationQueue[sessionName] = [];
+        }
+        return;
+      }
+
+      if (type == 'terminal-history-chunk') {
+        if (msgSession == null || msgSession == sessionName) {
+          final data = message['data'] as String?;
+          if (data != null) {
+            // Suppress onOutput during history replay to prevent
+            // escape-sequence responses from looping back to the backend.
+            final savedOutput = terminal.onOutput;
+            terminal.onOutput = null;
+            terminal.write(data);
+            terminal.onOutput = savedOutput;
+          }
+        }
+        return;
+      }
+
+      if (type == 'terminal-history-end') {
+        if (msgSession == null || msgSession == sessionName) {
+          _hydrating[sessionName] = false;
+          // Flush any live output that arrived during history streaming
+          final queue = _hydrationQueue[sessionName] ?? [];
+          for (final data in queue) {
+            terminal.write(data);
+          }
+          _hydrationQueue[sessionName] = [];
+        }
+        return;
+      }
+
+      // ── Live output ──────────────────────────────────────────────────────
       if (type == 'output') {
         final data = message['data'] as String?;
         if (data != null) {
-          terminal.write(data);
+          if (_hydrating[sessionName] == true) {
+            // Queue until history streaming is complete
+            _hydrationQueue[sessionName]?.add(data);
+          } else {
+            terminal.write(data);
+          }
         }
       }
       
       if (type == 'terminal_data') {
-        final msgSession = message['session'] as String? ?? message['sessionName'] as String?;
-        if (msgSession == sessionName) {
+        final tSession = message['session'] as String? ?? message['sessionName'] as String?;
+        if (tSession == sessionName) {
           final data = message['data'] as String?;
           if (data != null) {
             terminal.write(data);
@@ -77,6 +128,8 @@ class TerminalService {
 
   void closeTerminal(String sessionName) {
     _terminals.remove(sessionName);
+    _hydrating.remove(sessionName);
+    _hydrationQueue.remove(sessionName);
     _ptys[sessionName]?.kill();
     _ptys.remove(sessionName);
   }
@@ -87,6 +140,8 @@ class TerminalService {
     }
     _terminals.clear();
     _ptys.clear();
+    _hydrating.clear();
+    _hydrationQueue.clear();
     _outputController.close();
   }
 }

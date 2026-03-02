@@ -2,9 +2,132 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::types::{TmuxSession, TmuxWindow};
+
+/// Metadata about a tmux pane, used for history capture.
+pub struct PaneMetadata {
+    pub history_size: i64,
+    pub pane_height: u32,
+    pub pane_width: u32,
+}
+
+/// Get pane metadata (history_size, pane dimensions) for a given session/window.
+pub async fn get_pane_metadata(session: &str, window: u32) -> Result<PaneMetadata> {
+    let target = format!("{}:{}", session, window);
+    let output = Command::new("tmux")
+        .args(&[
+            "display-message",
+            "-p",
+            "-t", &target,
+            "#{history_size}:#{pane_height}:#{pane_width}",
+        ])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to get pane metadata for {}", target);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parts: Vec<&str> = stdout.trim().split(':').collect();
+    if parts.len() < 3 {
+        anyhow::bail!("Unexpected pane metadata format: {}", stdout.trim());
+    }
+
+    Ok(PaneMetadata {
+        history_size: parts[0].parse().unwrap_or(0),
+        pane_height: parts[1].parse().unwrap_or(24),
+        pane_width: parts[2].parse().unwrap_or(80),
+    })
+}
+
+/// Capture all scrollback history above the visible viewport for a pane.
+/// Uses a 2-second timeout to avoid blocking if tmux is slow.
+/// The -E -1 argument excludes the current visible viewport to prevent duplicate lines.
+pub async fn capture_history_above_viewport(session: &str, window: u32) -> Result<String> {
+    let target = format!("{}:{}", session, window);
+
+    // Get history size first to know bounds
+    let meta = get_pane_metadata(session, window).await.unwrap_or(PaneMetadata {
+        history_size: 1000,
+        pane_height: 24,
+        pane_width: 80,
+    });
+
+    if meta.history_size <= 0 {
+        return Ok(String::new());
+    }
+
+    let start_line = format!("-{}", meta.history_size);
+
+    // Use a 2-second timeout to protect against slow tmux
+    let capture_future = async {
+        Command::new("tmux")
+            .args(&[
+                "capture-pane",
+                "-p",  // Print to stdout
+                "-J",  // Join wrapped lines
+                "-t", &target,
+                "-S", &start_line, // Start from beginning of history
+                "-E", "-1",        // End just before the visible viewport
+            ])
+            .output()
+            .await
+    };
+
+    match tokio::time::timeout(tokio::time::Duration::from_secs(2), capture_future).await {
+        Ok(Ok(output)) => {
+            if output.status.success() {
+                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("capture-pane failed: {}", stderr)
+            }
+        }
+        Ok(Err(e)) => anyhow::bail!("capture-pane IO error: {}", e),
+        Err(_) => {
+            warn!("[history-bootstrap] capture-pane timed out for {}", target);
+            anyhow::bail!("capture-pane timed out")
+        }
+    }
+}
+
+/// Split terminal output text into chunks, splitting only at line boundaries.
+/// Returns a Vec of String chunks each no larger than max_bytes.
+pub fn chunk_terminal_stream(text: &str, max_bytes: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+
+    for line in text.split_inclusive('\n') {
+        // If this single line is bigger than max_bytes, split it anyway
+        if line.len() >= max_bytes {
+            if !current.is_empty() {
+                chunks.push(current.clone());
+                current.clear();
+            }
+            chunks.push(line.to_string());
+            continue;
+        }
+
+        if current.len() + line.len() > max_bytes {
+            chunks.push(current.clone());
+            current.clear();
+        }
+        current.push_str(line);
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
 
 fn escape_single_quotes(s: &str) -> String {
     s.replace('\'', "'\\''")

@@ -349,14 +349,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
             // Terminal view
             Expanded(
               child: terminalState.terminal != null
-                  ? GestureDetector(
-                      onDoubleTap: _toggleFullscreen,
-                      onLongPress: () {
-                        setState(() {
-                          _showStatus = !_showStatus;
-                        });
-                      },
-                      child: TerminalViewWidget(
+                  ? TerminalViewWidget(
                         terminal: terminalState.terminal!,
                         controller: terminalState.controller,
                         onResize: _handleResize,
@@ -400,8 +393,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                             _shiftActive = false;
                           });
                         },
-                      ),
-                    )
+                      )
                   : const Center(child: CircularProgressIndicator()),
             ),
 

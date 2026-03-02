@@ -393,4 +393,39 @@ pub enum ServerMessage {
     ChatLogError {
         error: String,
     },
+    // Terminal history bootstrap
+    TerminalHistoryStart {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        #[serde(rename = "totalLines")]
+        total_lines: i64,
+        #[serde(rename = "chunkSize")]
+        chunk_size: usize,
+        #[serde(rename = "generatedAt")]
+        generated_at: DateTime<Utc>,
+    },
+    TerminalHistoryChunk {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        seq: usize,
+        data: String,
+        #[serde(rename = "lineCount")]
+        line_count: usize,
+        #[serde(rename = "isLast")]
+        is_last: bool,
+    },
+    TerminalHistoryEnd {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        #[serde(rename = "totalLines")]
+        total_lines: i64,
+        #[serde(rename = "totalChunks")]
+        total_chunks: usize,
+    },
 }

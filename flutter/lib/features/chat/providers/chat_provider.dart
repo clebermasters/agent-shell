@@ -77,8 +77,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final messagesData = message['messages'] as List<dynamic>? ?? [];
     final tool = message['tool'] as String?;
 
+    // Filter out user messages from backend history (we add them locally)
     final messages = messagesData
         .map((msg) => _parseMessage(msg as Map<String, dynamic>))
+        .where((msg) => msg.type != ChatMessageType.user)
         .toList();
 
     state = state.copyWith(
@@ -94,6 +96,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (msgData == null) return;
 
     final msg = _parseMessage(msgData);
+
+    // Skip user messages from backend since we already add them locally
+    if (msg.type == ChatMessageType.user) {
+      return;
+    }
 
     // Merge consecutive assistant messages
     final messages = List<ChatMessage>.from(state.messages);

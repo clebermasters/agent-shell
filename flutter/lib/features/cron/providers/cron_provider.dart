@@ -44,16 +44,19 @@ class CronNotifier extends StateNotifier<CronState> {
 
   void _init() {
     _wsService.messages.listen((message) {
+      print('[CRON] Received message: $message');
       final type = message['type'] as String?;
 
       switch (type) {
         case 'cron-jobs-list':
         case 'cron_jobs_list':
+          print('[CRON] Processing cron-jobs-list');
           final jobs =
               (message['jobs'] as List?)
                   ?.map((j) => CronJob.fromJson(j as Map<String, dynamic>))
                   .toList() ??
               [];
+          print('[CRON] Jobs count: ${jobs.length}');
           state = state.copyWith(jobs: jobs, isLoading: false);
           break;
         case 'cron-job-created':
@@ -92,14 +95,18 @@ class CronNotifier extends StateNotifier<CronState> {
           break;
         case 'error':
           final errorMsg = message['message'] as String?;
+          print('[CRON] Error message: $errorMsg');
           if (errorMsg != null && errorMsg.contains('cron')) {
             state = state.copyWith(error: errorMsg, isLoading: false);
           }
           break;
+        default:
+          print('[CRON] Unknown message type: $type');
       }
     });
 
     _wsService.connectionState.listen((connected) {
+      print('[CRON] Connection state changed: $connected');
       if (connected) {
         refresh();
       }
@@ -107,11 +114,15 @@ class CronNotifier extends StateNotifier<CronState> {
 
     // If already connected, load immediately
     if (_wsService.isConnected) {
+      print('[CRON] Already connected, refreshing...');
       refresh();
     }
   }
 
   void refresh() {
+    print(
+      '[CRON] refresh() called, isConnected: ${_wsService.isConnected}, isLoading: ${state.isLoading}',
+    );
     if (!_wsService.isConnected) {
       return;
     }
@@ -120,6 +131,7 @@ class CronNotifier extends StateNotifier<CronState> {
     }
     state = state.copyWith(isLoading: true);
     _wsService.requestCronJobs();
+    print('[CRON] Request sent');
   }
 
   Future<void> createCronJob(CronJob job) async {

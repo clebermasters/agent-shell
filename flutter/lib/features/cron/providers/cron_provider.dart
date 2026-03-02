@@ -48,6 +48,7 @@ class CronNotifier extends StateNotifier<CronState> {
 
       switch (type) {
         case 'cron-jobs-list':
+        case 'cron_jobs_list':
           final jobs =
               (message['jobs'] as List?)
                   ?.map((j) => CronJob.fromJson(j as Map<String, dynamic>))
@@ -56,10 +57,12 @@ class CronNotifier extends StateNotifier<CronState> {
           state = state.copyWith(jobs: jobs, isLoading: false);
           break;
         case 'cron-job-created':
+        case 'cron_job_created':
           final job = CronJob.fromJson(message['job'] as Map<String, dynamic>);
           state = state.copyWith(jobs: [...state.jobs, job]);
           break;
         case 'cron-job-updated':
+        case 'cron_job_updated':
           final job = CronJob.fromJson(message['job'] as Map<String, dynamic>);
           final index = state.jobs.indexWhere((j) => j.id == job.id);
           if (index >= 0) {
@@ -69,6 +72,7 @@ class CronNotifier extends StateNotifier<CronState> {
           }
           break;
         case 'cron-job-deleted':
+        case 'cron_job_deleted':
           final id = message['id'] as String?;
           if (id != null) {
             state = state.copyWith(
@@ -77,6 +81,7 @@ class CronNotifier extends StateNotifier<CronState> {
           }
           break;
         case 'cron-command-output':
+        case 'cron_command_output':
           state = state.copyWith(
             isTesting: false,
             testOutput:
@@ -91,6 +96,12 @@ class CronNotifier extends StateNotifier<CronState> {
             state = state.copyWith(error: errorMsg, isLoading: false);
           }
           break;
+      }
+    });
+
+    _wsService.connectionState.listen((connected) {
+      if (connected) {
+        refresh();
       }
     });
   }

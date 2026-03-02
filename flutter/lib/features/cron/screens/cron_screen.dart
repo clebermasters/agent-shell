@@ -15,7 +15,7 @@ class _CronScreenState extends ConsumerState<CronScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    Future.microtask(() {
       ref.read(cronProvider.notifier).refresh();
     });
   }

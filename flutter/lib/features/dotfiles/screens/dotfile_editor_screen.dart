@@ -18,11 +18,16 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _hasChanges = false;
   String _originalContent = '';
+  bool _showSearch = false;
+  final TextEditingController _searchController = TextEditingController();
+  int _searchIndex = 0;
+  List<int> _searchMatches = [];
 
   @override
   void initState() {
     super.initState();
     _focusNode.addListener(_handleKeyPress);
+    _searchController.addListener(_onSearchChanged);
   }
 
   void _handleKeyPress() {
@@ -33,7 +38,69 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
 
   void _handleKeyboardShortcuts() {
     // Handle Ctrl+S / Cmd+S for save
-    // This is a simplified approach - in production you'd use a proper keyboard listener
+  }
+
+  void _onSearchChanged() {
+    _findMatches();
+    setState(() {});
+  }
+
+  void _findMatches() {
+    final query = _searchController.text.toLowerCase();
+    if (query.isEmpty) {
+      _searchMatches = [];
+      return;
+    }
+    final content = _controller.text.toLowerCase();
+    final matches = <int>[];
+    int index = 0;
+    while (true) {
+      index = content.indexOf(query, index);
+      if (index == -1) break;
+      matches.add(index);
+      index += 1;
+    }
+    _searchMatches = matches;
+    _searchIndex = 0;
+  }
+
+  void _jumpToNextMatch() {
+    if (_searchMatches.isEmpty) return;
+    _searchIndex = (_searchIndex + 1) % _searchMatches.length;
+    _highlightMatch();
+  }
+
+  void _jumpToPreviousMatch() {
+    if (_searchMatches.isEmpty) return;
+    _searchIndex =
+        (_searchIndex - 1 + _searchMatches.length) % _searchMatches.length;
+    _highlightMatch();
+  }
+
+  void _highlightMatch() {
+    if (_searchMatches.isEmpty) return;
+    final position = _searchMatches[_searchIndex];
+    final lineStart = _controller.text.lastIndexOf('\n', position);
+    final lineNumber =
+        _controller.text.substring(0, position).split('\n').length - 1;
+    final offset = lineNumber * 20.0 + 50;
+    _scrollController.animateTo(
+      offset,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   @override
@@ -41,6 +108,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     _controller.dispose();
     _focusNode.dispose();
     _scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -144,6 +212,29 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                 ),
                 IconButton(
                   icon: Icon(
+                    _showSearch ? Icons.close : Icons.search,
+                    color: isDark ? Colors.grey[300] : Colors.grey[700],
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _showSearch = !_showSearch;
+                      if (!_showSearch) {
+                        _searchController.clear();
+                      }
+                    });
+                  },
+                  tooltip: 'Search',
+                ),
+                IconButton(
+                  icon: Icon(
+                    Icons.vertical_align_bottom,
+                    color: isDark ? Colors.grey[300] : Colors.grey[700],
+                  ),
+                  onPressed: _scrollToEnd,
+                  tooltip: 'Scroll to end',
+                ),
+                IconButton(
+                  icon: Icon(
                     Icons.copy,
                     color: isDark ? Colors.grey[300] : Colors.grey[700],
                   ),
@@ -164,6 +255,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                 ? const Center(child: CircularProgressIndicator())
                 : Column(
                     children: [
+                      if (_showSearch) _buildSearchBar(isDark),
                       Expanded(
                         child: Container(
                           color: isDark
@@ -348,6 +440,80 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      color: isDark ? const Color(0xFF1E293B) : Colors.grey[100],
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _searchController,
+              autofocus: true,
+              decoration: InputDecoration(
+                hintText: 'Search...',
+                hintStyle: TextStyle(
+                  color: isDark ? Colors.grey[500] : Colors.grey[400],
+                ),
+                prefixIcon: Icon(
+                  Icons.search,
+                  size: 20,
+                  color: isDark ? Colors.grey[400] : Colors.grey[600],
+                ),
+                filled: true,
+                fillColor: isDark ? const Color(0xFF0F172A) : Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                isDense: true,
+              ),
+              style: TextStyle(
+                fontSize: 14,
+                color: isDark ? Colors.white : Colors.black87,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _searchMatches.isEmpty
+                ? '0/0'
+                : '${_searchIndex + 1}/${_searchMatches.length}',
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? Colors.grey[400] : Colors.grey[600],
+            ),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            icon: Icon(
+              Icons.keyboard_arrow_up,
+              size: 20,
+              color: isDark ? Colors.grey[300] : Colors.grey[700],
+            ),
+            onPressed: _searchMatches.isEmpty ? null : _jumpToPreviousMatch,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+          IconButton(
+            icon: Icon(
+              Icons.keyboard_arrow_down,
+              size: 20,
+              color: isDark ? Colors.grey[300] : Colors.grey[700],
+            ),
+            onPressed: _searchMatches.isEmpty ? null : _jumpToNextMatch,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
         ],
       ),
     );

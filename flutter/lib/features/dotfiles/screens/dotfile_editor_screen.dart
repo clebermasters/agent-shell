@@ -214,53 +214,18 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     final lineHeight = 20.0;
     final paddingTop = 12.0;
 
-    return Stack(
-      children: [
-        // Editor with padding for line numbers
-        Padding(
-          padding: const EdgeInsets.only(left: 58),
-          child: SingleChildScrollView(
-            controller: _scrollController,
-            child: TextField(
-              controller: _controller,
-              focusNode: _focusNode,
-              maxLines: null,
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.only(
-                  top: 12,
-                  left: 8,
-                  right: 12,
-                  bottom: 100,
-                ),
-              ),
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 14,
-                color: isDark ? Colors.grey[200] : Colors.grey[800],
-                height: 1.43, // 20px / 14px
-              ),
-              onChanged: (value) {
-                if (value != _originalContent && !_hasChanges) {
-                  setState(() => _hasChanges = true);
-                }
-                setState(() {});
-              },
-            ),
-          ),
-        ),
-        // Line numbers (synchronized)
-        SingleChildScrollView(
-          controller: _scrollController,
-          scrollDirection: Axis.vertical,
-          physics: const NeverScrollableScrollPhysics(),
-          child: Container(
-            width: 54,
-            padding: EdgeInsets.only(top: paddingTop, right: 4),
+    return SingleChildScrollView(
+      controller: _scrollController,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Line numbers
+          Container(
+            width: 45,
+            padding: EdgeInsets.only(top: paddingTop, right: 8, bottom: 100),
             color: isDark ? const Color(0xFF1E1E1E) : Colors.grey[100],
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
               children: List.generate(lines.length, (index) {
                 return SizedBox(
                   height: lineHeight,
@@ -277,8 +242,43 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
               }),
             ),
           ),
-        ),
-      ],
+          // Divider
+          Container(
+            width: 1,
+            color: isDark ? Colors.grey[700] : Colors.grey[300],
+            margin: EdgeInsets.only(top: paddingTop, bottom: 100),
+          ),
+          // Editor
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              focusNode: _focusNode,
+              maxLines: null,
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.only(
+                  top: paddingTop,
+                  left: 12,
+                  right: 12,
+                  bottom: 100,
+                ),
+              ),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 14,
+                color: isDark ? Colors.grey[200] : Colors.grey[800],
+                height: 1.43,
+              ),
+              onChanged: (value) {
+                if (value != _originalContent && !_hasChanges) {
+                  setState(() => _hasChanges = true);
+                }
+                setState(() {});
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -302,7 +302,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
         if (value != _originalContent && !_hasChanges) {
           setState(() => _hasChanges = true);
         }
-        setState(() {}); // Update line numbers
+        setState(() {});
       },
     );
   }

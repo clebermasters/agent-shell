@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:highlight/highlight.dart' show highlight;
 import '../../../data/models/chat_message.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
@@ -110,7 +109,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
       label = 'Error';
       icon = Icons.error_outline;
     } else if (isTool) {
-      headerColor = isDark ? const Color(0xFFFDE68A) : const Color(0xFFB45309);
+      headerColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
       label = widget.message.toolName ?? 'Tool';
       icon = Icons.build;
     } else {
@@ -156,9 +155,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
       textColor = isDark ? Colors.red.shade100 : Colors.red.shade900;
       borderColor = isDark ? Colors.red.shade700 : Colors.red.shade200;
     } else if (isTool) {
-      bubbleColor = isDark ? const Color(0xFF3F2A12) : const Color(0xFFFFFBEB);
-      textColor = isDark ? const Color(0xFFFDE68A) : const Color(0xFF78350F);
-      borderColor = isDark ? const Color(0xFFB45309) : const Color(0xFFF59E0B);
+      bubbleColor = Colors.transparent;
+      textColor = isDark ? Colors.grey.shade300 : Colors.grey.shade800;
+      borderColor = Colors.transparent;
     } else {
       bubbleColor = isDark ? const Color(0xFF1E293B) : Colors.white;
       textColor = isDark ? Colors.grey.shade100 : const Color(0xFF1E293B);
@@ -175,7 +174,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           bottomLeft: Radius.circular(isUser ? 18 : 4),
           bottomRight: Radius.circular(isUser ? 4 : 18),
         ),
-        border: isUser ? null : Border.all(color: borderColor, width: 1),
+        border: (isUser || isTool) ? null : Border.all(color: borderColor, width: 1),
         boxShadow: isUser
             ? [
                 BoxShadow(
@@ -186,7 +185,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
               ]
             : null,
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: isTool 
+          ? const EdgeInsets.symmetric(vertical: 2)
+          : const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: _buildMessageContent(isUser, isError, isTool, textColor),
     );
   }
@@ -472,14 +473,14 @@ class _CollapsibleToolCardState extends State<_CollapsibleToolCard>
   @override
   Widget build(BuildContext context) {
     final borderColor = widget.isDark
-        ? const Color(0xFFB45309)
-        : const Color(0xFFF59E0B);
+        ? const Color(0xFF1E293B)
+        : const Color(0xFFE2E8F0);
     final bgColor = widget.isDark
-        ? const Color(0xFF3F2A12)
-        : const Color(0xFFFFFBEB);
+        ? const Color(0xFF0F172A)
+        : const Color(0xFFF8FAFC);
     final textColor = widget.isDark
-        ? const Color(0xFFFDE68A)
-        : const Color(0xFF78350F);
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF475569);
     final hasDetails = widget.child != null;
 
     return Material(

@@ -172,7 +172,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 height: 18,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Color(0xFF6366F1),
+                  color: Color(0xFF0369A1),
                 ),
               ),
             ),
@@ -279,15 +279,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             decoration: BoxDecoration(
               color: isDarkMode
                   ? const Color(0xFF1E293B)
-                  : const Color(0xFFEEF2FF),
+                  : const Color(0xFFE0F2FE),
               shape: BoxShape.circle,
             ),
             child: Icon(
               Icons.smart_toy_outlined,
               size: 48,
               color: isDarkMode
-                  ? const Color(0xFF818CF8)
-                  : const Color(0xFF6366F1),
+                  ? const Color(0xFF67E8F9)
+                  : const Color(0xFF0369A1),
             ),
           ),
           const SizedBox(height: 24),
@@ -378,14 +378,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: _controller.text.trim().isNotEmpty
-                          ? const Color(0xFF6366F1)
+                          ? const Color(0xFF0369A1)
                           : const Color(0xFFE2E8F0),
                       shape: BoxShape.circle,
                       boxShadow: _controller.text.trim().isNotEmpty
                           ? [
                               BoxShadow(
                                 color: const Color(
-                                  0xFF6366F1,
+                                  0xFF0369A1,
                                 ).withValues(alpha: 0.3),
                                 blurRadius: 8,
                                 offset: const Offset(0, 2),

@@ -102,14 +102,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
       return;
     }
 
-    // Merge consecutive assistant messages
+    // Merge consecutive assistant blocks into one visual turn
     final messages = List<ChatMessage>.from(state.messages);
     if (messages.isNotEmpty &&
         messages.last.type == ChatMessageType.assistant &&
         msg.type == ChatMessageType.assistant) {
       final lastMsg = messages.last;
       messages[messages.length - 1] = lastMsg.copyWith(
-        content: '${lastMsg.content ?? ''}\n${msg.content ?? ''}',
+        blocks: [...lastMsg.blocks, ...msg.blocks],
+        content: _mergeContent(lastMsg.content, msg.content),
       );
     } else {
       messages.add(msg);
@@ -136,10 +137,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
           return ChatBlock.toolCall(
             toolName: block['name'] as String?,
             summary: block['summary'] as String?,
-            input: block['input'] as Map<String, dynamic>?,
+            input: _parseInputMap(block['input']),
           );
         case 'tool_result':
           return ChatBlock.toolResult(
+            toolName: block['toolName'] as String?,
             content: block['content'] as String?,
             summary: block['summary'] as String?,
           );
@@ -169,26 +171,47 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (toolBlocks.isNotEmpty) {
         type = ChatMessageType.tool;
         toolName = toolBlocks.first.toolName;
-        final summary = toolBlocks.first.summary ?? '';
-        content = 'Tool: $toolName - $summary';
-      }
-
-      if (toolResultBlocks.isNotEmpty) {
-        final resultContent = toolResultBlocks.first.content ?? '';
-        if (resultContent.isNotEmpty) {
-          content += '\n\nResult:\n$resultContent';
-        }
+      } else if (toolResultBlocks.isNotEmpty) {
+        type = ChatMessageType.toolResult;
+        toolName = toolResultBlocks.first.toolName;
       }
     }
+
+    final timestamp = _parseTimestamp(data['timestamp']);
 
     return ChatMessage(
       id: _uuid.v4(),
       type: type,
       content: content,
-      timestamp: DateTime.now(),
+      timestamp: timestamp ?? DateTime.now(),
       toolName: toolName,
       blocks: blocks,
     );
+  }
+
+  DateTime? _parseTimestamp(dynamic value) {
+    if (value is! String || value.isEmpty) {
+      return null;
+    }
+    return DateTime.tryParse(value);
+  }
+
+  Map<String, dynamic>? _parseInputMap(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map((key, val) => MapEntry(key.toString(), val));
+    }
+    return null;
+  }
+
+  String _mergeContent(String? left, String? right) {
+    final a = (left ?? '').trim();
+    final b = (right ?? '').trim();
+    if (a.isEmpty) return b;
+    if (b.isEmpty) return a;
+    return '$a\n$b';
   }
 
   void watchChatLog(String sessionName, int windowIndex) {

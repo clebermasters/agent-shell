@@ -43,8 +43,13 @@ class ChatBlock extends Equatable {
     input: input,
   );
 
-  factory ChatBlock.toolResult({String? content, String? summary}) => ChatBlock(
+  factory ChatBlock.toolResult({
+    String? toolName,
+    String? content,
+    String? summary,
+  }) => ChatBlock(
     type: ChatBlockType.toolResult,
+    toolName: toolName,
     content: content,
     summary: summary,
   );

@@ -118,7 +118,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ],
       ),
-      floatingActionButton: widget.showDebug
+      floatingActionButton: widget.showDebug && _currentIndex == 0
           ? FloatingActionButton(
               onPressed: _openDebugScreen,
               child: const Icon(Icons.bug_report),

@@ -8,13 +8,13 @@ use tracing::{warn, debug};
 
 use super::{AiTool, ChatMessage, ContentBlock};
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct OpencodeState {
     pub session_id: String,
     pub last_time_updated: i64,
-    pub seen_text_ids: HashSet<String>,
+    pub seen_text_lengths: HashMap<String, usize>,
     pub seen_tool_calls: HashSet<String>,
     pub seen_tool_results: HashSet<String>,
 }
@@ -57,7 +57,7 @@ pub fn init_opencode_state(db_path: &Path, directory: &Path) -> Result<OpencodeS
     Ok(OpencodeState {
         session_id,
         last_time_updated: 0,
-        seen_text_ids: HashSet::new(),
+        seen_text_lengths: HashMap::new(),
         seen_tool_calls: HashSet::new(),
         seen_tool_results: HashSet::new(),
     })
@@ -68,10 +68,11 @@ pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<V
     let conn = Connection::open(db_path)?;
     
     let mut stmt = conn.prepare(
-        "SELECT id, data, time_updated 
-         FROM part 
-         WHERE session_id = ? AND time_updated > ?
-         ORDER BY time_updated ASC"
+        "SELECT p.id, p.data, p.time_updated, json_extract(m.data, '$.role') 
+         FROM part p
+         JOIN message m ON p.message_id = m.id
+         WHERE p.session_id = ? AND p.time_updated > ?
+         ORDER BY p.time_updated ASC"
     )?;
     
     let mut rows = stmt.query(rusqlite::params![state.session_id, state.last_time_updated])?;
@@ -83,6 +84,9 @@ pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<V
         let id: String = row.get(0)?;
         let data: String = row.get(1)?;
         let time_updated: i64 = row.get(2)?;
+        let parsed_role: Option<String> = row.get(3)?;
+        
+        let role = parsed_role.unwrap_or_else(|| "assistant".to_string());
         
         if time_updated > new_last_time_updated {
             new_last_time_updated = time_updated;
@@ -90,7 +94,7 @@ pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<V
         
         match serde_json::from_str::<PartData>(&data) {
             Ok(part) => {
-                if let Some(msg) = parse_part(&id, &part, time_updated, state) {
+                if let Some(msg) = parse_part(&id, &part, time_updated, state, &role) {
                     messages.push(msg);
                 }
             }
@@ -104,22 +108,28 @@ pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<V
     Ok(messages)
 }
 
-fn parse_part(id: &str, part: &PartData, time_updated: i64, state: &mut OpencodeState) -> Option<ChatMessage> {
+fn parse_part(id: &str, part: &PartData, time_updated: i64, state: &mut OpencodeState, message_role: &str) -> Option<ChatMessage> {
     let timestamp = Utc.timestamp_millis_opt(time_updated).single();
     
-    let role = if part.part_type == "text" {
-        "assistant".to_string()
-    } else {
-        "tool".to_string()
-    };
+    let mut final_role = message_role.to_string();
+    if part.part_type != "text" {
+        final_role = "tool".to_string();
+    }
     
     let block = match part.part_type.as_str() {
         "text" => {
-            if !state.seen_text_ids.insert(id.to_string()) {
-                return None; // already sent this text chunk
+            let full_text = part.text.as_deref().unwrap_or_default();
+            let last_len = state.seen_text_lengths.get(id).copied().unwrap_or(0);
+            
+            if full_text.len() <= last_len {
+                return None; // no new text to send
             }
+            
+            let new_chunk = &full_text[last_len..];
+            state.seen_text_lengths.insert(id.to_string(), full_text.len());
+            
             ContentBlock::Text {
-                text: part.text.clone().unwrap_or_default(),
+                text: new_chunk.to_string(),
             }
         }
         "tool" => {
@@ -159,7 +169,7 @@ fn parse_part(id: &str, part: &PartData, time_updated: i64, state: &mut Opencode
     };
     
     Some(ChatMessage {
-        role,
+        role: final_role,
         timestamp,
         blocks: vec![block],
     })

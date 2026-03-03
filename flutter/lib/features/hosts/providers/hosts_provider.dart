@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import '../../../data/models/host.dart';
 import '../../../core/providers.dart';
+import '../../../core/config/app_config.dart';
 
 final hostsProvider = StateNotifierProvider<HostsNotifier, HostsState>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
@@ -13,15 +15,9 @@ class HostsState {
   final List<Host> hosts;
   final Host? selectedHost;
 
-  const HostsState({
-    required this.hosts,
-    this.selectedHost,
-  });
+  const HostsState({required this.hosts, this.selectedHost});
 
-  HostsState copyWith({
-    List<Host>? hosts,
-    Host? selectedHost,
-  }) {
+  HostsState copyWith({List<Host>? hosts, Host? selectedHost}) {
     return HostsState(
       hosts: hosts ?? this.hosts,
       selectedHost: selectedHost ?? this.selectedHost,
@@ -46,24 +42,35 @@ class HostsNotifier extends StateNotifier<HostsState> {
 
     // Default host if none exists
     if (hosts.isEmpty) {
-      final defaultHost = const Host(
-        id: 'default',
-        name: 'Default Server',
-        address: '192.168.0.76',
-        port: 4010,
-        useTls: false,
-      );
-      hosts.add(defaultHost);
+      // Check for build-time default servers
+      final buildTimeServers = AppConfig.parsedServerList;
+
+      if (buildTimeServers.isNotEmpty) {
+        // Use build-time servers
+        for (final server in buildTimeServers) {
+          hosts.add(
+            Host(
+              id: const Uuid().v4(),
+              name: server['name'] as String,
+              address: server['address'] as String,
+              port: server['port'] as int,
+            ),
+          );
+        }
+      } else {
+        // No servers available - user will need to add manually
+        // No hardcoded default
+      }
       _saveHosts(hosts);
     }
 
     final selectedHostId = _prefs.getString(_selectedHostIdKey);
     Host? selectedHost;
-    
+
     if (selectedHostId != null) {
       selectedHost = hosts.where((h) => h.id == selectedHostId).firstOrNull;
     }
-    
+
     if (selectedHost == null && hosts.isNotEmpty) {
       selectedHost = hosts.first;
       _prefs.setString(_selectedHostIdKey, selectedHost.id);
@@ -81,7 +88,7 @@ class HostsNotifier extends StateNotifier<HostsState> {
     final newHosts = [...state.hosts, host];
     _saveHosts(newHosts);
     state = state.copyWith(hosts: newHosts);
-    
+
     // Auto-select if it's the only one
     if (state.selectedHost == null) {
       selectHost(host);
@@ -94,12 +101,12 @@ class HostsNotifier extends StateNotifier<HostsState> {
       final newHosts = [...state.hosts];
       newHosts[index] = updatedHost;
       _saveHosts(newHosts);
-      
+
       Host? newSelectedHost = state.selectedHost;
       if (state.selectedHost?.id == updatedHost.id) {
         newSelectedHost = updatedHost;
       }
-      
+
       state = state.copyWith(hosts: newHosts, selectedHost: newSelectedHost);
     }
   }
@@ -107,7 +114,7 @@ class HostsNotifier extends StateNotifier<HostsState> {
   void removeHost(String id) {
     final newHosts = state.hosts.where((h) => h.id != id).toList();
     _saveHosts(newHosts);
-    
+
     Host? newSelectedHost = state.selectedHost;
     if (state.selectedHost?.id == id) {
       newSelectedHost = newHosts.isNotEmpty ? newHosts.first : null;
@@ -117,7 +124,7 @@ class HostsNotifier extends StateNotifier<HostsState> {
         _prefs.remove(_selectedHostIdKey);
       }
     }
-    
+
     state = state.copyWith(hosts: newHosts, selectedHost: newSelectedHost);
   }
 

@@ -3,9 +3,28 @@
 ARG BUILD_TYPE=debug
 FROM webmux-flutter-base:latest AS builder
 ARG BUILD_TYPE
+ARG SERVER_LIST=""
+ARG OPENAI_API_KEY=""
 
 WORKDIR /app
 COPY flutter/ ./
+
+# Generate build config if env vars are provided
+RUN if [ -n "$SERVER_LIST" ] || [ -n "$OPENAI_API_KEY" ]; then \
+    echo "Generating build config..."; \
+    mkdir -p /app/lib/core/config; \
+    echo "// Auto-generated build configuration" > /app/lib/core/config/build_config.dart; \
+    echo "// DO NOT EDIT - Generated at build time" >> /app/lib/core/config/build_config.dart; \
+    echo "" >> /app/lib/core/config/build_config.dart; \
+    echo "class BuildConfig {" >> /app/lib/core/config/build_config.dart; \
+    echo "  BuildConfig._();" >> /app/lib/core/config/build_config.dart; \
+    echo "  static const String defaultServerList = '$SERVER_LIST';" >> /app/lib/core/config/build_config.dart; \
+    echo "  static const String defaultApiKey = '$OPENAI_API_KEY';" >> /app/lib/core/config/build_config.dart; \
+    echo "}" >> /app/lib/core/config/build_config.dart; \
+    echo "Build config generated"; \
+    else \
+    echo "No build config (env vars not set)"; \
+    fi
 
 # Get dependencies
 RUN --mount=type=cache,target=/root/.pub-cache \

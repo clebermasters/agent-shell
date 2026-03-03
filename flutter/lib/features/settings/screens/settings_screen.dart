@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
+import '../../../core/config/build_config.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -28,6 +29,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final apiKey = prefs.getString(AppConfig.keyOpenAiApiKey);
     if (apiKey != null) {
       _apiKeyController.text = apiKey;
+    } else if (BuildConfig.defaultApiKey.isNotEmpty) {
+      // Use build-time default if no saved key
+      _apiKeyController.text = BuildConfig.defaultApiKey;
     }
   }
 

@@ -7,11 +7,13 @@ set -e
 # - Uses all available CPU cores for parallel compilation
 # - Docker layer caching for faster subsequent builds
 # - Auto-upload to S3 after successful build
+# - Reads .env file for default server list and API key
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FLUTTER_DIR="$PROJECT_ROOT/flutter"
 DOCKER_DIR="$PROJECT_ROOT/docker/flutter"
+ENV_FILE="$PROJECT_ROOT/.env"
 
 # Default to release build
 BUILD_TYPE="${1:-release}"
@@ -21,6 +23,33 @@ if [[ "$BUILD_TYPE" != "debug" && "$BUILD_TYPE" != "release" ]]; then
     echo "Error: Invalid build type '$BUILD_TYPE'"
     echo "Usage: $0 [debug|release]"
     exit 1
+fi
+
+# Read .env file if it exists
+SERVER_LIST=""
+OPENAI_API_KEY=""
+
+if [ -f "$ENV_FILE" ]; then
+    echo "Reading .env file..."
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ -z "$key" || "$key" =~ ^# ]] && continue
+        # Remove leading/trailing whitespace
+        key=$(echo "$key" | xargs)
+        value=$(echo "$value" | xargs)
+        
+        case "$key" in
+            SERVER_LIST)
+                SERVER_LIST="$value"
+                ;;
+            OPENAI_API_KEY)
+                OPENAI_API_KEY="$value"
+                ;;
+        esac
+    done < "$ENV_FILE"
+    
+    [ -n "$SERVER_LIST" ] && echo "  SERVER_LIST: set"
+    [ -n "$OPENAI_API_KEY" ] && echo "  OPENAI_API_KEY: set"
 fi
 
 # S3 configuration
@@ -48,7 +77,7 @@ fi
 # Set pipefail to catch docker build failure
 set -o pipefail
 
-# Build the image with BUILD_TYPE argument
+# Build the image with BUILD_TYPE argument and optional env vars
 DOCKER_BUILDKIT=1 docker build \
     -t webmux-flutter-builder:latest \
     -f "$DOCKER_DIR/Dockerfile" \
@@ -56,6 +85,8 @@ DOCKER_BUILDKIT=1 docker build \
     --progress=plain \
     --build-arg BUILD_TYPE=$BUILD_TYPE \
     --build-arg BUILDKIT_INLINE_CACHE=1 \
+    --build-arg SERVER_LIST="$SERVER_LIST" \
+    --build-arg OPENAI_API_KEY="$OPENAI_API_KEY" \
     2>&1 | tee /tmp/flutter-build.log
 
 # Check if build was successful

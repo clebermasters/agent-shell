@@ -43,7 +43,8 @@ class HostSelectionScreen extends ConsumerWidget {
                     children: [
                       IconButton(
                         icon: const Icon(Icons.edit),
-                        onPressed: () => _showHostForm(context, hostsNotifier, host: host),
+                        onPressed: () =>
+                            _showHostForm(context, hostsNotifier, host: host),
                       ),
                       IconButton(
                         icon: const Icon(Icons.delete),
@@ -53,7 +54,9 @@ class HostSelectionScreen extends ConsumerWidget {
                             hostsNotifier.removeHost(host.id);
                           } else {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Cannot delete the only server.')),
+                              const SnackBar(
+                                content: Text('Cannot delete the only server.'),
+                              ),
                             );
                           }
                         },
@@ -70,7 +73,11 @@ class HostSelectionScreen extends ConsumerWidget {
     );
   }
 
-  void _showHostForm(BuildContext context, HostsNotifier notifier, {Host? host}) {
+  void _showHostForm(
+    BuildContext context,
+    HostsNotifier notifier, {
+    Host? host,
+  }) {
     showDialog(
       context: context,
       builder: (context) => HostFormDialog(
@@ -102,8 +109,6 @@ class _HostFormDialogState extends State<HostFormDialog> {
   late String _name;
   late String _address;
   late int _port;
-  late bool _useTls;
-  String? _username;
 
   @override
   void initState() {
@@ -111,8 +116,6 @@ class _HostFormDialogState extends State<HostFormDialog> {
     _name = widget.initialHost?.name ?? '';
     _address = widget.initialHost?.address ?? '';
     _port = widget.initialHost?.port ?? 4010;
-    _useTls = widget.initialHost?.useTls ?? false;
-    _username = widget.initialHost?.username;
   }
 
   @override
@@ -127,32 +130,51 @@ class _HostFormDialogState extends State<HostFormDialog> {
             children: [
               TextFormField(
                 initialValue: _name,
-                decoration: const InputDecoration(labelText: 'Name (e.g., Home PI)'),
-                validator: (val) => val == null || val.isEmpty ? 'Required' : null,
+                decoration: const InputDecoration(
+                  labelText: 'Server Name',
+                  hintText: 'e.g., Home PI',
+                  prefixIcon: Icon(Icons.dns),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (val) =>
+                    val == null || val.isEmpty ? 'Please enter a name' : null,
                 onSaved: (val) => _name = val!,
+                textInputAction: TextInputAction.next,
               ),
+              const SizedBox(height: 16),
               TextFormField(
                 initialValue: _address,
-                decoration: const InputDecoration(labelText: 'Address (IP or Domain)'),
-                validator: (val) => val == null || val.isEmpty ? 'Required' : null,
+                decoration: const InputDecoration(
+                  labelText: 'Address',
+                  hintText: 'IP address or domain',
+                  prefixIcon: Icon(Icons.router),
+                  border: OutlineInputBorder(),
+                ),
+                validator: (val) => val == null || val.isEmpty
+                    ? 'Please enter an address'
+                    : null,
                 onSaved: (val) => _address = val!,
+                textInputAction: TextInputAction.next,
               ),
+              const SizedBox(height: 16),
               TextFormField(
                 initialValue: _port.toString(),
-                decoration: const InputDecoration(labelText: 'Port (e.g., 4010)'),
+                decoration: const InputDecoration(
+                  labelText: 'Port',
+                  hintText: 'e.g., 4010',
+                  prefixIcon: Icon(Icons.numbers),
+                  border: OutlineInputBorder(),
+                ),
                 keyboardType: TextInputType.number,
-                validator: (val) => int.tryParse(val ?? '') == null ? 'Invalid port' : null,
+                validator: (val) {
+                  final port = int.tryParse(val ?? '');
+                  if (port == null || port <= 0 || port > 65535) {
+                    return 'Enter a valid port (1-65535)';
+                  }
+                  return null;
+                },
                 onSaved: (val) => _port = int.parse(val!),
-              ),
-              TextFormField(
-                initialValue: _username,
-                decoration: const InputDecoration(labelText: 'Username (Optional)'),
-                onSaved: (val) => _username = val?.isEmpty == true ? null : val,
-              ),
-              SwitchListTile(
-                title: const Text('Use TLS (wss/https)'),
-                value: _useTls,
-                onChanged: (val) => setState(() => _useTls = val),
+                textInputAction: TextInputAction.done,
               ),
             ],
           ),
@@ -172,8 +194,6 @@ class _HostFormDialogState extends State<HostFormDialog> {
                 name: _name,
                 address: _address,
                 port: _port,
-                useTls: _useTls,
-                username: _username,
               );
               widget.onSave(host);
               Navigator.pop(context);

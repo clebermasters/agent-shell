@@ -98,8 +98,34 @@ if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
     echo "  Done! App is ready on your device."
     echo -e "==========================================${NC}"
     exit 0
-else
-    echo -e "${RED}Installation failed!${NC}"
-    echo "$INSTALL_OUTPUT"
-    exit 1
 fi
+
+# If install failed due to signature mismatch, try uninstalling first
+if echo "$INSTALL_OUTPUT" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
+    echo -e "${YELLOW}Signature mismatch detected. Uninstalling old version...${NC}"
+    adb uninstall "$PACKAGE_NAME" 2>/dev/null || true
+    
+    echo "Retrying installation..."
+    INSTALL_OUTPUT=$(adb install "$APK_PATH" 2>&1)
+    
+    if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
+        echo -e "${GREEN}Installation successful!${NC}"
+        echo ""
+        
+        if [ "${2:-}" = "--launch" ] || [ "${2:-}" = "-l" ]; then
+            echo "Launching app..."
+            adb shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
+                echo -e "${YELLOW}Could not launch app automatically${NC}"
+        fi
+        
+        echo ""
+        echo -e "${GREEN}=========================================="
+        echo "  Done! App is ready on your device."
+        echo -e "==========================================${NC}"
+        exit 0
+    fi
+fi
+
+echo -e "${RED}Installation failed!${NC}"
+echo "$INSTALL_OUTPUT"
+exit 1

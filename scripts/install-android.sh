@@ -243,9 +243,17 @@ if ! connect_device; then
 fi
 
 # Get device info
-DEVICE_SERIAL=$(adb devices | grep -E "^[a-zA-Z0-9:.-]+	device$" | head -1 | cut -f1)
-DEVICE_MODEL=$(adb shell getprop ro.product.model 2>/dev/null || echo "Unknown")
-DEVICE_ANDROID=$(adb shell getprop ro.build.version.release 2>/dev/null || echo "Unknown")
+if [ "$WIRELESS_MODE" = true ]; then
+    # For wireless, get the wireless device serial
+    DEVICE_SERIAL=$(adb devices | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:$ADB_PORT	device$" | head -1 | cut -f1)
+    if [ -z "$DEVICE_SERIAL" ]; then
+        DEVICE_SERIAL=$(adb devices | grep -E "^[a-zA-Z0-9:.-]+	device$" | head -1 | cut -f1)
+    fi
+else
+    DEVICE_SERIAL=$(adb devices | grep -E "^[a-zA-Z0-9:.-]+	device$" | head -1 | cut -f1)
+fi
+DEVICE_MODEL=$(adb shell -s "$DEVICE_SERIAL" getprop ro.product.model 2>/dev/null || echo "Unknown")
+DEVICE_ANDROID=$(adb shell -s "$DEVICE_SERIAL" getprop ro.build.version.release 2>/dev/null || echo "Unknown")
 CONNECTION_TYPE=$(echo "$DEVICE_SERIAL" | grep -q ":" && echo "WiFi" || echo "USB")
 
 echo ""
@@ -256,8 +264,19 @@ echo "  Android:   $DEVICE_ANDROID"
 echo "  Type:      $CONNECTION_TYPE"
 echo ""
 
+# Get the adb command with device selection
+get_adb_cmd() {
+    if [ -n "$DEVICE_SERIAL" ]; then
+        echo "adb -s $DEVICE_SERIAL"
+    else
+        echo "adb"
+    fi
+}
+
+ADB_CMD=$(get_adb_cmd)
+
 # Check if app is already installed
-if adb shell pm list packages 2>/dev/null | grep -q "^package:$PACKAGE_NAME$"; then
+if $ADB_CMD shell pm list packages 2>/dev/null | grep -q "^package:$PACKAGE_NAME$"; then
     echo -e "${YELLOW}App already installed. Replacing...${NC}"
 else
     echo "Installing app..."
@@ -266,7 +285,7 @@ fi
 # Install APK
 echo ""
 echo "Installing APK..."
-INSTALL_OUTPUT=$(adb install -r "$APK_PATH" 2>&1) || true
+INSTALL_OUTPUT=$($ADB_CMD install -r "$APK_PATH" 2>&1) || true
 
 if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
     echo -e "${GREEN}Installation successful!${NC}"
@@ -274,7 +293,7 @@ if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
     
     if [ "$LAUNCH_APP" = true ]; then
         echo "Launching app..."
-        adb shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
+        $ADB_CMD shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
             echo -e "${YELLOW}Could not launch app automatically${NC}"
     fi
     
@@ -288,10 +307,10 @@ fi
 # If install failed due to signature mismatch, try uninstalling first
 if echo "$INSTALL_OUTPUT" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
     echo -e "${YELLOW}Signature mismatch detected. Uninstalling old version...${NC}"
-    adb uninstall "$PACKAGE_NAME" 2>/dev/null || true
+    $ADB_CMD uninstall "$PACKAGE_NAME" 2>/dev/null || true
     
     echo "Retrying installation..."
-    INSTALL_OUTPUT=$(adb install "$APK_PATH" 2>&1)
+    INSTALL_OUTPUT=$($ADB_CMD install "$APK_PATH" 2>&1)
     
     if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
         echo -e "${GREEN}Installation successful!${NC}"
@@ -299,7 +318,7 @@ if echo "$INSTALL_OUTPUT" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
         
         if [ "$LAUNCH_APP" = true ]; then
             echo "Launching app..."
-            adb shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
+            $ADB_CMD shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
                 echo -e "${YELLOW}Could not launch app automatically${NC}"
         fi
         

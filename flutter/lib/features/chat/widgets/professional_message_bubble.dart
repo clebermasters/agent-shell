@@ -236,6 +236,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
     return MarkdownBody(
       data: text,
       selectable: true,
+      builders: {'code': CodeBlockBuilder(isUser: isUser, isDark: isDark)},
       styleSheet: MarkdownStyleSheet(
         p: TextStyle(color: textColor, fontSize: 14, height: 1.6),
         h1: TextStyle(

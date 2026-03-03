@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../data/models/chat_message.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/professional_message_bubble.dart';
 
@@ -24,6 +24,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _showScrollButton = false;
   bool _autoScroll = true;
   int _previousMessageCount = 0;
+  String? _lastTranscribedText;
 
   bool get isDarkMode {
     return Theme.of(context).brightness == Brightness.dark;
@@ -122,6 +123,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatProvider);
 
+    if (chatState.transcribedText != null &&
+        chatState.transcribedText!.isNotEmpty &&
+        chatState.transcribedText != _lastTranscribedText) {
+      _controller.text = chatState.transcribedText!;
+      _controller.selection = TextSelection.fromPosition(
+        TextPosition(offset: _controller.text.length),
+      );
+      _lastTranscribedText = chatState.transcribedText;
+      ref.read(chatProvider.notifier).clearTranscribedText();
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAndScrollToBottom(chatState.messages.length);
     });
@@ -172,7 +184,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 height: 18,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Color(0xFF6366F1),
+                  color: Color(0xFF0369A1),
                 ),
               ),
             ),
@@ -279,15 +291,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             decoration: BoxDecoration(
               color: isDarkMode
                   ? const Color(0xFF1E293B)
-                  : const Color(0xFFEEF2FF),
+                  : const Color(0xFFE0F2FE),
               shape: BoxShape.circle,
             ),
             child: Icon(
               Icons.smart_toy_outlined,
               size: 48,
               color: isDarkMode
-                  ? const Color(0xFF818CF8)
-                  : const Color(0xFF6366F1),
+                  ? const Color(0xFF67E8F9)
+                  : const Color(0xFF0369A1),
             ),
           ),
           const SizedBox(height: 24),
@@ -301,7 +313,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Start a conversation with Claude Code',
+            'Start a conversation with Claude Code or Opencode',
             style: TextStyle(
               fontSize: 14,
               color: isDarkMode ? Colors.grey.shade500 : Colors.grey.shade500,
@@ -313,6 +325,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildInputArea() {
+    final chatState = ref.watch(chatProvider);
+    final isRecording = chatState.isRecording;
+    final isTranscribing = chatState.isTranscribing;
+    final transcribedText = chatState.transcribedText;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -326,86 +343,240 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ],
       ),
       child: SafeArea(
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isDarkMode
-                      ? const Color(0xFF334155)
-                      : const Color(0xFFF1F5F9),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: isDarkMode
-                        ? const Color(0xFF475569)
-                        : const Color(0xFFE2E8F0),
-                  ),
-                ),
-                child: TextField(
-                  controller: _controller,
-                  maxLines: 4,
-                  minLines: 1,
-                  decoration: InputDecoration(
-                    hintText: 'Type a message...',
-                    hintStyle: TextStyle(
-                      color: isDarkMode
-                          ? Colors.grey.shade500
-                          : const Color(0xFF94A3B8),
-                    ),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 12,
-                    ),
-                  ),
-                  style: TextStyle(fontSize: 15, color: textPrimary),
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) => _sendMessage(),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _controller.text.trim().isNotEmpty
-                      ? _sendMessage
-                      : null,
-                  borderRadius: BorderRadius.circular(24),
+            if (isRecording || isTranscribing)
+              _buildRecordingIndicator(chatState, isRecording, isTranscribing),
+            Row(
+              children: [
+                Expanded(
                   child: Container(
-                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: _controller.text.trim().isNotEmpty
-                          ? const Color(0xFF6366F1)
-                          : const Color(0xFFE2E8F0),
-                      shape: BoxShape.circle,
-                      boxShadow: _controller.text.trim().isNotEmpty
-                          ? [
-                              BoxShadow(
-                                color: const Color(
-                                  0xFF6366F1,
-                                ).withValues(alpha: 0.3),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ]
-                          : null,
+                      color: isDarkMode
+                          ? const Color(0xFF334155)
+                          : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: isDarkMode
+                            ? const Color(0xFF475569)
+                            : const Color(0xFFE2E8F0),
+                      ),
                     ),
-                    child: Icon(
-                      Icons.send_rounded,
-                      size: 20,
-                      color: _controller.text.trim().isNotEmpty
-                          ? Colors.white
-                          : const Color(0xFF94A3B8),
+                    child: TextField(
+                      controller: _controller,
+                      maxLines: 4,
+                      minLines: 1,
+                      decoration: InputDecoration(
+                        hintText: isRecording
+                            ? 'Recording...'
+                            : 'Type a message...',
+                        hintStyle: TextStyle(
+                          color: isDarkMode
+                              ? Colors.grey.shade500
+                              : const Color(0xFF94A3B8),
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 12,
+                        ),
+                      ),
+                      style: TextStyle(fontSize: 15, color: textPrimary),
+                      onChanged: (_) => setState(() {}),
+                      onSubmitted: (_) => _sendMessage(),
                     ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                _buildMicButton(isRecording, isTranscribing),
+                const SizedBox(width: 8),
+                _buildSendButton(),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildRecordingIndicator(
+    ChatState chatState,
+    bool isRecording,
+    bool isTranscribing,
+  ) {
+    final duration = chatState.recordingDuration;
+    final minutes = duration.inMinutes.toString().padLeft(2, '0');
+    final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isRecording ? Colors.red.shade50 : Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isRecording ? Colors.red.shade200 : Colors.blue.shade200,
+        ),
+      ),
+      child: Row(
+        children: [
+          if (isRecording) ...[
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                color: Colors.red,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Recording $minutes:$seconds',
+              style: TextStyle(
+                color: Colors.red.shade700,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ] else if (isTranscribing) ...[
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.blue.shade700,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Transcribing...',
+              style: TextStyle(
+                color: Colors.blue.shade700,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMicButton(bool isRecording, bool isTranscribing) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: isTranscribing ? null : _handleMicPress,
+          borderRadius: BorderRadius.circular(24),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isRecording
+                  ? Colors.red
+                  : (isTranscribing ? Colors.grey : const Color(0xFF6366F1)),
+              shape: BoxShape.circle,
+              boxShadow: !isRecording && !isTranscribing
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF6366F1).withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Icon(
+              isRecording ? Icons.stop : Icons.mic,
+              size: 20,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSendButton() {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _controller.text.trim().isNotEmpty ? _sendMessage : null,
+          borderRadius: BorderRadius.circular(24),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: _controller.text.trim().isNotEmpty
+                  ? const Color(0xFF0369A1)
+                  : const Color(0xFFE2E8F0),
+              shape: BoxShape.circle,
+              boxShadow: _controller.text.trim().isNotEmpty
+                  ? [
+                      BoxShadow(
+                        color: const Color(0xFF0369A1).withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Icon(
+              Icons.send_rounded,
+              size: 20,
+              color: _controller.text.trim().isNotEmpty
+                  ? Colors.white
+                  : const Color(0xFF94A3B8),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleMicPress() async {
+    final chatState = ref.read(chatProvider);
+
+    if (chatState.isRecording) {
+      final audioPath = await ref
+          .read(chatProvider.notifier)
+          .stopVoiceRecording();
+      if (audioPath != null) {
+        await ref.read(chatProvider.notifier).transcribeAudio(audioPath);
+      }
+    } else {
+      final status = await Permission.microphone.request();
+      if (status.isGranted) {
+        await ref.read(chatProvider.notifier).startVoiceRecording();
+      } else if (status.isPermanentlyDenied) {
+        _showPermissionDeniedDialog();
+      }
+    }
+  }
+
+  void _showPermissionDeniedDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Microphone Permission'),
+        content: const Text(
+          'Microphone permission is required to use voice input. '
+          'Please enable it in your device settings.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
       ),
     );
   }

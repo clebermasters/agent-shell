@@ -7,6 +7,7 @@ import '../../cron/screens/cron_screen.dart';
 import '../../dotfiles/screens/dotfiles_screen.dart';
 import '../../system/screens/system_screen.dart';
 import '../../debug/screens/debug_screen.dart';
+import '../../settings/screens/settings_screen.dart';
 import '../../terminal/screens/terminal_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -79,6 +80,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ).push(MaterialPageRoute(builder: (context) => const DebugScreen()));
   }
 
+  void _openSettingsScreen() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (context) => const SettingsScreen()));
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!_initialized) {
@@ -120,8 +127,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
       floatingActionButton: widget.showDebug && _currentIndex == 0
           ? FloatingActionButton(
-              onPressed: _openDebugScreen,
-              child: const Icon(Icons.bug_report),
+              onPressed: _openSettingsScreen,
+              child: const Icon(Icons.settings),
             )
           : null,
     );

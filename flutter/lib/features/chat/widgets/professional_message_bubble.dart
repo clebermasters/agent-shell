@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:highlight/highlight.dart' show highlight;
 import '../../../data/models/chat_message.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
@@ -102,7 +101,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
     final IconData icon;
 
     if (isUser) {
-      headerColor = isDark ? const Color(0xFF818CF8) : const Color(0xFF6366F1);
+      headerColor = isDark ? const Color(0xFF7DD3FC) : const Color(0xFF0369A1);
       label = 'You';
       icon = Icons.person;
     } else if (isError) {
@@ -110,11 +109,11 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
       label = 'Error';
       icon = Icons.error_outline;
     } else if (isTool) {
-      headerColor = isDark ? Colors.amber.shade300 : Colors.amber.shade700;
+      headerColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
       label = widget.message.toolName ?? 'Tool';
       icon = Icons.build;
     } else {
-      headerColor = isDark ? const Color(0xFF34D399) : const Color(0xFF10B981);
+      headerColor = isDark ? const Color(0xFF6EE7B7) : const Color(0xFF047857);
       label = 'Assistant';
       icon = Icons.smart_toy;
     }
@@ -148,7 +147,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
     Color borderColor;
 
     if (isUser) {
-      bubbleColor = isDark ? const Color(0xFF4F46E5) : const Color(0xFF6366F1);
+      bubbleColor = isDark ? const Color(0xFF0C4A6E) : const Color(0xFF0369A1);
       textColor = Colors.white;
       borderColor = Colors.transparent;
     } else if (isError) {
@@ -156,9 +155,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
       textColor = isDark ? Colors.red.shade100 : Colors.red.shade900;
       borderColor = isDark ? Colors.red.shade700 : Colors.red.shade200;
     } else if (isTool) {
-      bubbleColor = isDark ? Colors.amber.shade900 : Colors.amber.shade50;
-      textColor = isDark ? Colors.amber.shade100 : Colors.black87;
-      borderColor = isDark ? Colors.amber.shade700 : Colors.amber.shade300;
+      bubbleColor = Colors.transparent;
+      textColor = isDark ? Colors.grey.shade300 : Colors.grey.shade800;
+      borderColor = Colors.transparent;
     } else {
       bubbleColor = isDark ? const Color(0xFF1E293B) : Colors.white;
       textColor = isDark ? Colors.grey.shade100 : const Color(0xFF1E293B);
@@ -175,18 +174,20 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           bottomLeft: Radius.circular(isUser ? 18 : 4),
           bottomRight: Radius.circular(isUser ? 4 : 18),
         ),
-        border: isUser ? null : Border.all(color: borderColor, width: 1),
+        border: (isUser || isTool) ? null : Border.all(color: borderColor, width: 1),
         boxShadow: isUser
             ? [
                 BoxShadow(
-                  color: const Color(0xFF6366F1).withValues(alpha: 0.3),
+                  color: const Color(0xFF0369A1).withValues(alpha: 0.35),
                   blurRadius: 8,
                   offset: const Offset(0, 2),
                 ),
               ]
             : null,
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: isTool 
+          ? const EdgeInsets.symmetric(vertical: 2)
+          : const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: _buildMessageContent(isUser, isError, isTool, textColor),
     );
   }
@@ -266,7 +267,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           backgroundColor: isDark
               ? Colors.white.withValues(alpha: 0.1)
               : Colors.grey.shade200,
-          color: isDark ? Colors.pink.shade300 : const Color(0xFF6366F1),
+          color: isDark ? const Color(0xFF67E8F9) : const Color(0xFF0369A1),
           fontFamily: 'monospace',
           fontSize: 13,
         ),
@@ -300,7 +301,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         strong: TextStyle(color: textColor, fontWeight: FontWeight.bold),
         em: TextStyle(color: textColor, fontStyle: FontStyle.italic),
         a: TextStyle(
-          color: isDark ? const Color(0xFF818CF8) : const Color(0xFF6366F1),
+          color: isDark ? const Color(0xFF67E8F9) : const Color(0xFF0369A1),
           decoration: TextDecoration.underline,
         ),
       ),
@@ -318,9 +319,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         icon: toolIcon,
         title: toolName,
         summary: summary,
-        isExpanded: false,
         isDark: isDark,
-        onToggle: () {},
         child: block.input != null
             ? Container(
                 width: double.infinity,
@@ -349,16 +348,16 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   Widget _buildToolResultCard(ChatBlock block) {
     final content = block.content ?? '';
     final summary = block.summary ?? '';
+    final toolName = block.toolName ?? '';
+    final title = toolName.isNotEmpty ? 'Result • $toolName' : 'Result';
 
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: _CollapsibleToolCard(
         icon: '📄',
-        title: 'Result',
+        title: title,
         summary: summary.isNotEmpty ? summary : content.take(50),
-        isExpanded: false,
         isDark: isDark,
-        onToggle: () {},
         child: content.isNotEmpty
             ? Container(
                 width: double.infinity,
@@ -431,18 +430,14 @@ class _CollapsibleToolCard extends StatefulWidget {
   final String icon;
   final String title;
   final String summary;
-  final bool isExpanded;
   final bool isDark;
-  final VoidCallback onToggle;
   final Widget? child;
 
   const _CollapsibleToolCard({
     required this.icon,
     required this.title,
     required this.summary,
-    required this.isExpanded,
     required this.isDark,
-    required this.onToggle,
     this.child,
   });
 
@@ -454,6 +449,7 @@ class _CollapsibleToolCardState extends State<_CollapsibleToolCard>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _expandAnimation;
+  bool _isExpanded = false;
 
   @override
   void initState() {
@@ -466,21 +462,6 @@ class _CollapsibleToolCardState extends State<_CollapsibleToolCard>
       parent: _controller,
       curve: Curves.easeInOut,
     );
-    if (widget.isExpanded) {
-      _controller.value = 1.0;
-    }
-  }
-
-  @override
-  void didUpdateWidget(_CollapsibleToolCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isExpanded != oldWidget.isExpanded) {
-      if (widget.isExpanded) {
-        _controller.forward();
-      } else {
-        _controller.reverse();
-      }
-    }
   }
 
   @override
@@ -492,19 +473,29 @@ class _CollapsibleToolCardState extends State<_CollapsibleToolCard>
   @override
   Widget build(BuildContext context) {
     final borderColor = widget.isDark
-        ? Colors.amber.shade700
-        : Colors.amber.shade300;
+        ? const Color(0xFF1E293B)
+        : const Color(0xFFE2E8F0);
     final bgColor = widget.isDark
-        ? Colors.amber.shade900
-        : Colors.amber.shade50;
+        ? const Color(0xFF0F172A)
+        : const Color(0xFFF8FAFC);
     final textColor = widget.isDark
-        ? Colors.amber.shade100
-        : Colors.amber.shade900;
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF475569);
+    final hasDetails = widget.child != null;
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: widget.onToggle,
+        onTap: hasDetails
+            ? () {
+                setState(() => _isExpanded = !_isExpanded);
+                if (_isExpanded) {
+                  _controller.forward();
+                } else {
+                  _controller.reverse();
+                }
+              }
+            : null,
         borderRadius: BorderRadius.circular(12),
         child: Container(
           decoration: BoxDecoration(
@@ -525,18 +516,36 @@ class _CollapsibleToolCardState extends State<_CollapsibleToolCard>
                     Text(widget.icon, style: const TextStyle(fontSize: 14)),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        widget.title,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                          color: textColor,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.title,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: textColor,
+                            ),
+                          ),
+                          if (widget.summary.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                widget.summary,
+                                maxLines: _isExpanded ? 8 : 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: textColor.withValues(alpha: 0.85),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                    if (widget.child != null)
+                    if (hasDetails)
                       AnimatedRotation(
-                        turns: widget.isExpanded ? 0.25 : 0,
+                        turns: _isExpanded ? 0.25 : 0,
                         duration: const Duration(milliseconds: 200),
                         child: Icon(
                           Icons.chevron_right,

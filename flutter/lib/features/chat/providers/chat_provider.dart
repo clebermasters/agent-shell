@@ -1,8 +1,13 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../../../data/models/chat_message.dart';
 import '../../../data/services/websocket_service.dart';
+import '../../../data/services/audio_service.dart';
+import '../../../data/services/whisper_service.dart';
+import '../../../core/config/app_config.dart';
+import '../../../core/providers.dart';
 import '../../sessions/providers/sessions_provider.dart';
 
 class ChatState {
@@ -12,6 +17,10 @@ class ChatState {
   final String? detectedTool;
   final String? sessionName;
   final int? windowIndex;
+  final bool isRecording;
+  final Duration recordingDuration;
+  final bool isTranscribing;
+  final String? transcribedText;
 
   const ChatState({
     this.messages = const [],
@@ -20,6 +29,10 @@ class ChatState {
     this.detectedTool,
     this.sessionName,
     this.windowIndex,
+    this.isRecording = false,
+    this.recordingDuration = Duration.zero,
+    this.isTranscribing = false,
+    this.transcribedText,
   });
 
   ChatState copyWith({
@@ -29,6 +42,10 @@ class ChatState {
     String? detectedTool,
     String? sessionName,
     int? windowIndex,
+    bool? isRecording,
+    Duration? recordingDuration,
+    bool? isTranscribing,
+    String? transcribedText,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
@@ -37,6 +54,10 @@ class ChatState {
       detectedTool: detectedTool ?? this.detectedTool,
       sessionName: sessionName ?? this.sessionName,
       windowIndex: windowIndex ?? this.windowIndex,
+      isRecording: isRecording ?? this.isRecording,
+      recordingDuration: recordingDuration ?? this.recordingDuration,
+      isTranscribing: isTranscribing ?? this.isTranscribing,
+      transcribedText: transcribedText,
     );
   }
 }
@@ -45,8 +66,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final Uuid _uuid = const Uuid();
   StreamSubscription? _messageSubscription;
   WebSocketService? _ws;
+  final AudioService _audioService = AudioService();
+  final WhisperService _whisperService = WhisperService();
+  Timer? _recordingTimer;
+  SharedPreferences? _prefs;
 
   ChatNotifier() : super(const ChatState());
+
+  void setPrefs(SharedPreferences prefs) {
+    _prefs = prefs;
+  }
 
   void setWebSocket(WebSocketService ws) {
     _ws = ws;
@@ -59,6 +88,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     _messageSubscription = _ws!.messages.listen((message) {
       final type = message['type'] as String?;
+      print('DEBUG: Received message of type: $type');
+      
+      if (type == 'chat-history' || type == 'chat-event') {
+        print('DEBUG: Full chat message: $message');
+      }
+
       switch (type) {
         case 'chat-history':
           _handleChatHistory(message);
@@ -74,48 +109,97 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void _handleChatHistory(Map<String, dynamic> message) {
-    final messagesData = message['messages'] as List<dynamic>? ?? [];
-    final tool = message['tool'] as String?;
+    try {
+      final sessionName = (message['sessionName'] ?? message['session-name']) as String?;
+      final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
+      final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
-    // Filter out user messages from backend history (we add them locally)
-    final messages = messagesData
-        .map((msg) => _parseMessage(msg as Map<String, dynamic>))
-        .where((msg) => msg.type != ChatMessageType.user)
-        .toList();
+      print(
+        'DEBUG: Chat history received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
+      );
 
-    state = state.copyWith(
-      messages: messages,
-      detectedTool: tool,
-      isLoading: false,
-      error: null,
-    );
+      if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+        print(
+          'Ignoring chat history for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
+        );
+        return;
+      }
+
+      final messagesData = message['messages'] as List<dynamic>? ?? [];
+      print('DEBUG: Processing ${messagesData.length} messages for history');
+
+      final toolRaw = message['tool'];
+      String? toolStr;
+      if (toolRaw is String) {
+        toolStr = toolRaw;
+      } else if (toolRaw is Map) {
+        toolStr = toolRaw.keys.first.toString();
+      }
+
+      // NO NOT FILTER user messages from history - we want to see previous conversation
+      final messages = messagesData
+          .map((msg) => _parseMessage(msg as Map<String, dynamic>))
+          .toList();
+
+      state = state.copyWith(
+        messages: messages,
+        detectedTool: toolStr,
+        isLoading: false,
+        error: null,
+      );
+      print('DEBUG: isLoading set to false, messages count: ${messages.length}');
+    } catch (e, stack) {
+      print('ERROR parsing chat history: $e\n$stack');
+      state = state.copyWith(isLoading: false, error: 'Failed to parse chat history');
+    }
   }
 
   void _handleChatEvent(Map<String, dynamic> message) {
-    final msgData = message['message'] as Map<String, dynamic>?;
-    if (msgData == null) return;
+    try {
+      final sessionName = (message['sessionName'] ?? message['session-name']) as String?;
+      final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
+      final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
-    final msg = _parseMessage(msgData);
-
-    // Skip user messages from backend since we already add them locally
-    if (msg.type == ChatMessageType.user) {
-      return;
-    }
-
-    // Merge consecutive assistant messages
-    final messages = List<ChatMessage>.from(state.messages);
-    if (messages.isNotEmpty &&
-        messages.last.type == ChatMessageType.assistant &&
-        msg.type == ChatMessageType.assistant) {
-      final lastMsg = messages.last;
-      messages[messages.length - 1] = lastMsg.copyWith(
-        content: '${lastMsg.content ?? ''}\n${msg.content ?? ''}',
+      print(
+        'DEBUG: Chat event received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
       );
-    } else {
-      messages.add(msg);
-    }
 
-    state = state.copyWith(messages: messages);
+      if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+        print(
+          'Ignoring chat event for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
+        );
+        return;
+      }
+
+      final msgData = message['message'] as Map<String, dynamic>?;
+      if (msgData == null) return;
+
+      final msg = _parseMessage(msgData);
+
+      // Skip user messages from backend ONLY for live events since we already add them locally
+      if (msg.type == ChatMessageType.user) {
+        print('  -> Skipping live user message from backend (already added locally)');
+        return;
+      }
+
+      // Merge consecutive assistant blocks into one visual turn
+      final messages = List<ChatMessage>.from(state.messages);
+      if (messages.isNotEmpty &&
+          messages.last.type == ChatMessageType.assistant &&
+          msg.type == ChatMessageType.assistant) {
+        final lastMsg = messages.last;
+        messages[messages.length - 1] = lastMsg.copyWith(
+          blocks: [...lastMsg.blocks, ...msg.blocks],
+          content: _mergeContent(lastMsg.content, msg.content),
+        );
+      } else {
+        messages.add(msg);
+      }
+
+      state = state.copyWith(messages: messages);
+    } catch (e, stack) {
+      print('ERROR parsing chat event: $e\n$stack');
+    }
   }
 
   void _handleChatError(Map<String, dynamic> message) {
@@ -136,10 +220,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
           return ChatBlock.toolCall(
             toolName: block['name'] as String?,
             summary: block['summary'] as String?,
-            input: block['input'] as Map<String, dynamic>?,
+            input: _parseInputMap(block['input']),
           );
         case 'tool_result':
           return ChatBlock.toolResult(
+            toolName: block['toolName'] as String?,
             content: block['content'] as String?,
             summary: block['summary'] as String?,
           );
@@ -169,29 +254,50 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (toolBlocks.isNotEmpty) {
         type = ChatMessageType.tool;
         toolName = toolBlocks.first.toolName;
-        final summary = toolBlocks.first.summary ?? '';
-        content = 'Tool: $toolName - $summary';
-      }
-
-      if (toolResultBlocks.isNotEmpty) {
-        final resultContent = toolResultBlocks.first.content ?? '';
-        if (resultContent.isNotEmpty) {
-          content += '\n\nResult:\n$resultContent';
-        }
+      } else if (toolResultBlocks.isNotEmpty) {
+        type = ChatMessageType.toolResult;
+        toolName = toolResultBlocks.first.toolName;
       }
     }
+
+    final timestamp = _parseTimestamp(data['timestamp']);
 
     return ChatMessage(
       id: _uuid.v4(),
       type: type,
       content: content,
-      timestamp: DateTime.now(),
+      timestamp: timestamp ?? DateTime.now(),
       toolName: toolName,
       blocks: blocks,
     );
   }
 
-  void watchChatLog(String sessionName, int windowIndex) {
+  DateTime? _parseTimestamp(dynamic value) {
+    if (value is! String || value.isEmpty) {
+      return null;
+    }
+    return DateTime.tryParse(value);
+  }
+
+  Map<String, dynamic>? _parseInputMap(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map((key, val) => MapEntry(key.toString(), val));
+    }
+    return null;
+  }
+
+  String _mergeContent(String? left, String? right) {
+    final a = (left ?? '').trim();
+    final b = (right ?? '').trim();
+    if (a.isEmpty) return b;
+    if (b.isEmpty) return a;
+    return '$a\n$b';
+  }
+
+  void watchChatLog(String sessionName, int windowIndex) async {
     state = state.copyWith(
       messages: [],
       isLoading: true,
@@ -199,6 +305,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       sessionName: sessionName,
       windowIndex: windowIndex,
     );
+    
+    // Give a small delay to ensure WebSocket is connected if it was just switched
+    if (_ws == null || !_ws!.isConnected) {
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
     // First attach to the session's PTY so we can send input
     _ws?.attachSession(
       sessionName,
@@ -297,6 +409,77 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = const ChatState();
   }
 
+  Future<bool> checkMicrophonePermission() async {
+    return await _audioService.hasPermission();
+  }
+
+  Future<void> startVoiceRecording() async {
+    final hasPermission = await _audioService.hasPermission();
+    if (!hasPermission) {
+      state = state.copyWith(error: 'Microphone permission denied');
+      return;
+    }
+
+    final path = await _audioService.startRecording();
+    if (path != null) {
+      state = state.copyWith(
+        isRecording: true,
+        recordingDuration: Duration.zero,
+        transcribedText: null,
+        error: null,
+      );
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        state = state.copyWith(
+          recordingDuration: _audioService.recordingDuration,
+        );
+      });
+    }
+  }
+
+  Future<String?> stopVoiceRecording() async {
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+
+    final path = await _audioService.stopRecording();
+    if (path != null) {
+      state = state.copyWith(isRecording: false);
+      return path;
+    }
+    state = state.copyWith(isRecording: false);
+    return null;
+  }
+
+  Future<void> transcribeAudio(String audioPath) async {
+    if (_prefs == null) {
+      state = state.copyWith(
+        error:
+            'API key not configured. Please add your OpenAI API key in Settings.',
+        isTranscribing: false,
+      );
+      return;
+    }
+
+    final apiKey = _prefs!.getString(AppConfig.keyOpenAiApiKey);
+    if (apiKey == null || apiKey.isEmpty) {
+      state = state.copyWith(
+        error:
+            'API key not configured. Please add your OpenAI API key in Settings.',
+        isTranscribing: false,
+      );
+      return;
+    }
+
+    state = state.copyWith(isTranscribing: true, error: null);
+
+    final text = await _whisperService.transcribe(audioPath, apiKey);
+
+    state = state.copyWith(isTranscribing: false, transcribedText: text);
+  }
+
+  void clearTranscribedText() {
+    state = state.copyWith(transcribedText: null);
+  }
+
   // Parse Claude Code output into structured messages
   void parseClaudeOutput(String output) {
     final lines = output.split('\n');
@@ -369,6 +552,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   final notifier = ChatNotifier();
+
+  // Set SharedPreferences
+  final prefs = ref.read(sharedPreferencesProvider);
+  notifier.setPrefs(prefs);
 
   // Watch the shared WebSocket service
   ref.listen(sharedWebSocketServiceProvider, (previous, next) {

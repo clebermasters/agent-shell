@@ -438,6 +438,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                           ctrlActive: _ctrlActive,
                           altActive: _altActive,
                           shiftActive: _shiftActive,
+                          prefs: ref.watch(sharedPreferencesProvider),
                           onTap: () {
                             if (!_showCustomKeyboard && !_isSelectionMode) {
                               final isKeyboardVisible =

@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
-use tracing::{debug, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{AiTool, ChatMessage, ContentBlock};
 
@@ -45,6 +45,8 @@ struct ToolState {
 /// Uses process CWD and tries to match by recent activity
 pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result<OpencodeState> {
     let conn = Connection::open(db_path)?;
+    // Set a busy timeout
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let dir_str = directory.to_str().context("invalid directory path")?;
 
     debug!("Looking for session in {} for PID {}", dir_str, pid);
@@ -57,30 +59,32 @@ pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result
     );
 
     // Get process uptime - we'll use this to calculate actual start time
-    let process_uptime = get_process_uptime_seconds(pid)?;
-    debug!("Process {} uptime: {} seconds", pid, process_uptime);
+    let process_uptime_ms = get_process_uptime_ms(pid)?;
+    debug!("Process {} uptime: {} ms", pid, process_uptime_ms);
 
     // Calculate approximate start time in epoch milliseconds
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    let process_start_epoch_ms = now - (process_uptime * 1000);
+    let process_start_epoch_ms = now - process_uptime_ms;
     debug!(
         "Process {} estimated start epoch ms: {}",
         pid, process_start_epoch_ms
     );
 
-    // Find session that was created closest to when the process started
-    // This handles the case where multiple sessions exist for the same directory
+    // Find session that was created around when the process started.
+    // We prefer the MOST RECENTLY UPDATED session created within a window of the process start
+    // because OpenCode often creates a "Greeting" session first, then the real one.
+    // The real session will have more activity and a later time_updated.
     let mut stmt = conn.prepare(
         "SELECT id, time_created, time_updated FROM session 
-         WHERE directory = ? 
-         ORDER BY ABS(time_created - ?)",
+         WHERE directory = ? AND time_created >= ? - 5000 AND time_created <= ? + 60000
+         ORDER BY time_updated DESC LIMIT 1",
     )?;
 
     let result: Result<(String, i64, i64), _> = stmt
-        .query_row([dir_str, &process_start_epoch_ms.to_string()], |row| {
+        .query_row(rusqlite::params![dir_str, process_start_epoch_ms, process_start_epoch_ms], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         });
 
@@ -94,7 +98,7 @@ pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result
         }
         Err(_) => {
             // Fallback: get the most recently updated session
-            debug!("Could not match by start time, falling back to most recent");
+            debug!("Could not match by start time window, falling back to most recent for directory");
             let mut stmt = conn.prepare(
                 "SELECT id, time_created, time_updated FROM session 
                  WHERE directory = ? 
@@ -143,8 +147,8 @@ fn get_process_start_time(pid: u32) -> Result<i64> {
     Ok(start_ticks)
 }
 
-/// Get process uptime in seconds
-fn get_process_uptime_seconds(pid: u32) -> Result<i64> {
+/// Get process uptime in milliseconds
+fn get_process_uptime_ms(pid: u32) -> Result<i64> {
     use std::fs;
 
     // Read /proc/<pid>/stat to get start time
@@ -180,12 +184,15 @@ fn get_process_uptime_seconds(pid: u32) -> Result<i64> {
     let start_seconds = start_ticks as f64 / clk_tck as f64;
     let uptime = uptime_seconds - start_seconds;
 
-    Ok(uptime as i64)
+    Ok((uptime * 1000.0) as i64)
 }
+
 
 /// Fetch all new messages since the last fetch
 pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<Vec<ChatMessage>> {
     let conn = Connection::open(db_path)?;
+    // Set a busy timeout to avoid hanging if the DB is locked by another process (like OpenCode)
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
     let mut stmt = conn.prepare(
         "SELECT p.id, p.data, p.time_updated, json_extract(m.data, '$.role') 
@@ -195,7 +202,13 @@ pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<V
          ORDER BY p.time_updated ASC",
     )?;
 
-    let mut rows = stmt.query(rusqlite::params![state.session_id, state.last_time_updated])?;
+    let mut rows = match stmt.query(rusqlite::params![state.session_id, state.last_time_updated]) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Failed to query opencode messages for session {}: {}", state.session_id, e);
+            return Err(e.into());
+        }
+    };
 
     let mut messages = Vec::new();
     let mut new_last_time_updated = state.last_time_updated;

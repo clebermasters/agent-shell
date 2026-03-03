@@ -88,6 +88,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     _messageSubscription = _ws!.messages.listen((message) {
       final type = message['type'] as String?;
+      print('DEBUG: Received message of type: $type');
+      
+      if (type == 'chat-history' || type == 'chat-event') {
+        print('DEBUG: Full chat message: $message');
+      }
+
       switch (type) {
         case 'chat-history':
           _handleChatHistory(message);
@@ -103,56 +109,97 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void _handleChatHistory(Map<String, dynamic> message) {
-    final messagesData = message['messages'] as List<dynamic>? ?? [];
+    try {
+      final sessionName = (message['sessionName'] ?? message['session-name']) as String?;
+      final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
+      final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
-    final toolRaw = message['tool'];
-    String? toolStr;
-    if (toolRaw is String) {
-      toolStr = toolRaw;
-    } else if (toolRaw is Map) {
-      toolStr = toolRaw.keys.first.toString();
+      print(
+        'DEBUG: Chat history received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
+      );
+
+      if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+        print(
+          'Ignoring chat history for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
+        );
+        return;
+      }
+
+      final messagesData = message['messages'] as List<dynamic>? ?? [];
+      print('DEBUG: Processing ${messagesData.length} messages for history');
+
+      final toolRaw = message['tool'];
+      String? toolStr;
+      if (toolRaw is String) {
+        toolStr = toolRaw;
+      } else if (toolRaw is Map) {
+        toolStr = toolRaw.keys.first.toString();
+      }
+
+      // NO NOT FILTER user messages from history - we want to see previous conversation
+      final messages = messagesData
+          .map((msg) => _parseMessage(msg as Map<String, dynamic>))
+          .toList();
+
+      state = state.copyWith(
+        messages: messages,
+        detectedTool: toolStr,
+        isLoading: false,
+        error: null,
+      );
+      print('DEBUG: isLoading set to false, messages count: ${messages.length}');
+    } catch (e, stack) {
+      print('ERROR parsing chat history: $e\n$stack');
+      state = state.copyWith(isLoading: false, error: 'Failed to parse chat history');
     }
-
-    // Filter out user messages from backend history (we add them locally)
-    final messages = messagesData
-        .map((msg) => _parseMessage(msg as Map<String, dynamic>))
-        .where((msg) => msg.type != ChatMessageType.user)
-        .toList();
-
-    state = state.copyWith(
-      messages: messages,
-      detectedTool: toolStr,
-      isLoading: false,
-      error: null,
-    );
   }
 
   void _handleChatEvent(Map<String, dynamic> message) {
-    final msgData = message['message'] as Map<String, dynamic>?;
-    if (msgData == null) return;
+    try {
+      final sessionName = (message['sessionName'] ?? message['session-name']) as String?;
+      final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
+      final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
-    final msg = _parseMessage(msgData);
-
-    // Skip user messages from backend since we already add them locally
-    if (msg.type == ChatMessageType.user) {
-      return;
-    }
-
-    // Merge consecutive assistant blocks into one visual turn
-    final messages = List<ChatMessage>.from(state.messages);
-    if (messages.isNotEmpty &&
-        messages.last.type == ChatMessageType.assistant &&
-        msg.type == ChatMessageType.assistant) {
-      final lastMsg = messages.last;
-      messages[messages.length - 1] = lastMsg.copyWith(
-        blocks: [...lastMsg.blocks, ...msg.blocks],
-        content: _mergeContent(lastMsg.content, msg.content),
+      print(
+        'DEBUG: Chat event received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
       );
-    } else {
-      messages.add(msg);
-    }
 
-    state = state.copyWith(messages: messages);
+      if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+        print(
+          'Ignoring chat event for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
+        );
+        return;
+      }
+
+      final msgData = message['message'] as Map<String, dynamic>?;
+      if (msgData == null) return;
+
+      final msg = _parseMessage(msgData);
+
+      // Skip user messages from backend ONLY for live events since we already add them locally
+      if (msg.type == ChatMessageType.user) {
+        print('  -> Skipping live user message from backend (already added locally)');
+        return;
+      }
+
+      // Merge consecutive assistant blocks into one visual turn
+      final messages = List<ChatMessage>.from(state.messages);
+      if (messages.isNotEmpty &&
+          messages.last.type == ChatMessageType.assistant &&
+          msg.type == ChatMessageType.assistant) {
+        final lastMsg = messages.last;
+        messages[messages.length - 1] = lastMsg.copyWith(
+          blocks: [...lastMsg.blocks, ...msg.blocks],
+          content: _mergeContent(lastMsg.content, msg.content),
+        );
+      } else {
+        messages.add(msg);
+      }
+
+      state = state.copyWith(messages: messages);
+    } catch (e, stack) {
+      print('ERROR parsing chat event: $e\n$stack');
+    }
   }
 
   void _handleChatError(Map<String, dynamic> message) {
@@ -250,7 +297,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     return '$a\n$b';
   }
 
-  void watchChatLog(String sessionName, int windowIndex) {
+  void watchChatLog(String sessionName, int windowIndex) async {
     state = state.copyWith(
       messages: [],
       isLoading: true,
@@ -258,6 +305,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       sessionName: sessionName,
       windowIndex: windowIndex,
     );
+    
+    // Give a small delay to ensure WebSocket is connected if it was just switched
+    if (_ws == null || !_ws!.isConnected) {
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
     // First attach to the session's PTY so we can send input
     _ws?.attachSession(
       sessionName,

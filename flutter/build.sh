@@ -20,6 +20,7 @@ INSTALL_SCRIPT="$PROJECT_ROOT/scripts/install-android.sh"
 # Default to release build, no auto-install
 BUILD_TYPE="release"
 AUTO_INSTALL=false
+WIRELESS_INSTALL=false
 
 # Parse arguments
 for arg in "$@"; do
@@ -30,13 +31,18 @@ for arg in "$@"; do
         --install|-i)
             AUTO_INSTALL=true
             ;;
+        --wireless|-w)
+            AUTO_INSTALL=true
+            WIRELESS_INSTALL=true
+            ;;
         --help|-h)
-            echo "Usage: $0 [debug|release] [--install]"
+            echo "Usage: $0 [debug|release] [options]"
             echo ""
             echo "Arguments:"
-            echo "  debug,release  Build type (default: release)"
-            echo "  --install, -i  Auto-install to connected Android device"
-            echo "  --help, -h     Show this help message"
+            echo "  debug,release     Build type (default: release)"
+            echo "  --install, -i    Auto-install to connected Android device (USB)"
+            echo "  --wireless, -w   Auto-install via WiFi"
+            echo "  --help, -h       Show this help message"
             exit 0
             ;;
     esac
@@ -133,7 +139,11 @@ if [ $? -eq 0 ]; then
                 echo "=========================================="
                 echo "Auto-installing to device..."
                 echo "=========================================="
-                "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME"
+                if [ "$WIRELESS_INSTALL" = true ]; then
+                    "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME" --wireless
+                else
+                    "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME"
+                fi
             else
                 echo "Warning: Install script not found at $INSTALL_SCRIPT"
             fi

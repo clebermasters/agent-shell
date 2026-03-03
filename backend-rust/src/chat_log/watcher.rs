@@ -47,8 +47,8 @@ pub async fn detect_log_file(
         if name == "opencode" {
             let cwd = get_process_cwd(*pid)?;
             let log = find_opencode_db()?;
-            info!("detected Opencode database: {}", log.display());
-            return Ok((log, AiTool::Opencode { cwd }));
+            info!("detected Opencode database: {} for PID {} (cwd: {})", log.display(), pid, cwd.display());
+            return Ok((log, AiTool::Opencode { cwd, pid: *pid }));
         }
     }
 
@@ -80,8 +80,8 @@ pub async fn watch_log_file(
     tool: AiTool,
     event_tx: mpsc::UnboundedSender<ChatLogEvent>,
 ) -> Result<LogWatcher> {
-    if let AiTool::Opencode { cwd } = &tool {
-        return watch_opencode_db(path, cwd, event_tx).await;
+    if let AiTool::Opencode { cwd, pid } = &tool {
+        return watch_opencode_db(path, cwd, *pid, event_tx).await;
     }
     // --- initial history read ---
     let file = File::open(path)
@@ -150,25 +150,56 @@ pub async fn watch_log_file(
     Ok(LogWatcher::File(watcher))
 }
 
-async fn watch_opencode_db(db_path: &Path, cwd: &Path, event_tx: mpsc::UnboundedSender<ChatLogEvent>) -> Result<LogWatcher> {
-    let mut state = opencode_parser::init_opencode_state(db_path, cwd)?;
+async fn watch_opencode_db(db_path: &Path, cwd: &Path, pid: u32, event_tx: mpsc::UnboundedSender<ChatLogEvent>) -> Result<LogWatcher> {
+    let mut state = opencode_parser::init_opencode_state(db_path, cwd, pid)?;
 
     let db_path_owned = db_path.to_path_buf();
+    let cwd_owned = cwd.to_path_buf();
+    let initial_pid = pid;
     
     // Initial fetch for history
     if let Ok(messages) = opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
         let _ = event_tx.send(ChatLogEvent::History {
             messages,
-            tool: AiTool::Opencode { cwd: cwd.to_path_buf() },
+            tool: AiTool::Opencode { cwd: cwd.to_path_buf(), pid },
         });
     }
 
     // Polling task
-    let cwdr = cwd.to_path_buf();
     let handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
         loop {
             interval.tick().await;
+            
+            // Verify the PID is still running with the same CWD
+            let current_pid_valid = is_process_alive_with_cwd(initial_pid, &cwd_owned);
+            
+            if !current_pid_valid {
+                // Try to find a new opencode process in the same directory
+                debug!("OpenCode PID {} no longer valid, re-detecting session for {}", initial_pid, cwd_owned.display());
+                
+                // Re-detect using get_descendant_pids approach to find any opencode in this CWD
+                if let Ok(new_pid) = find_opencode_pid_for_cwd(&cwd_owned) {
+                    match opencode_parser::init_opencode_state(&db_path_owned, &cwd_owned, new_pid) {
+                        Ok(new_state) => {
+                            debug!("Re-detected OpenCode session with PID {}", new_pid);
+                            state = new_state;
+                        }
+                        Err(e) => {
+                            warn!("Failed to re-detect OpenCode session: {}", e);
+                            let _ = event_tx.send(ChatLogEvent::Error {
+                                error: format!("OpenCode session re-detection failed: {}", e),
+                            });
+                            continue;
+                        }
+                    }
+                } else {
+                    // No opencode process found - the session might have ended
+                    // Continue polling but don't re-detect
+                    debug!("No OpenCode process found for {}", cwd_owned.display());
+                }
+            }
+            
             match opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
                 Ok(messages) => {
                     for msg in messages {
@@ -179,9 +210,9 @@ async fn watch_opencode_db(db_path: &Path, cwd: &Path, event_tx: mpsc::Unbounded
                     }
                 }
                 Err(e) => {
-                    warn!("failed to fetch opencode messages: {e}");
+                    warn!("failed to fetch opencode messages: {}",e);
                     let _ = event_tx.send(ChatLogEvent::Error {
-                        error: format!("Opencode DB error: {e}"),
+                        error: format!("Opencode DB error: {}", e),
                     });
                 }
             }
@@ -191,6 +222,8 @@ async fn watch_opencode_db(db_path: &Path, cwd: &Path, event_tx: mpsc::Unbounded
     Ok(LogWatcher::Task(handle))
 }
 
+// ---------------------------------------------------------------------------
+// File reading helpers
 // ---------------------------------------------------------------------------
 // File reading helpers
 // ---------------------------------------------------------------------------
@@ -358,6 +391,57 @@ fn get_process_cwd(pid: u32) -> Result<PathBuf> {
     let link = format!("/proc/{pid}/cwd");
     std::fs::read_link(&link)
         .with_context(|| format!("failed to read {link}"))
+}
+
+/// Check if a process with given PID is still running and has the expected CWD.
+fn is_process_alive_with_cwd(pid: u32, expected_cwd: &Path) -> bool {
+    // Check if process exists and is an opencode process
+    let is_opencode = match process_name(pid) {
+        Some(n) => n == "opencode",
+        None => return false,
+    };
+    
+    if !is_opencode {
+        return false;
+    }
+    
+    // Check if CWD matches
+    let cwd = match get_process_cwd(pid) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    
+    cwd == expected_cwd
+}
+
+/// Find an opencode process PID that matches the given CWD.
+fn find_opencode_pid_for_cwd(cwd: &Path) -> Result<u32> {
+    // Scan /proc for all running processes
+    let entries = match std::fs::read_dir("/proc") {
+        Ok(e) => e,
+        Err(_) => bail!("Cannot read /proc"),
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let name_str = match file_name.to_str() {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Must be a number (PID)
+        let pid: u32 = match name_str.parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        // Check if it's an opencode process with matching CWD
+        if is_process_alive_with_cwd(pid, cwd) {
+            return Ok(pid);
+        }
+    }
+
+    bail!("No opencode process found for {}", cwd.display())
 }
 
 // ---------------------------------------------------------------------------

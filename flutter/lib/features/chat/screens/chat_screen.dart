@@ -25,6 +25,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _autoScroll = true;
   int _previousMessageCount = 0;
   String? _lastTranscribedText;
+  bool _wasAtBottom = true;
+  static const double _bottomThreshold = 100;
 
   bool get isDarkMode {
     return Theme.of(context).brightness == Brightness.dark;
@@ -48,22 +50,52 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ref
           .read(chatProvider.notifier)
           .watchChatLog(widget.sessionName, widget.windowIndex);
+
+      // Initialize scroll position tracking
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _updateScrollState();
+      });
     });
 
     _scrollController.addListener(_onScroll);
+  }
+
+  void _updateScrollState() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    _wasAtBottom = position.pixels >= position.maxScrollExtent - 10;
   }
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
 
     final position = _scrollController.position;
-    final isNearBottom = position.maxScrollExtent - position.pixels < 150;
+    final isNearBottom =
+        position.maxScrollExtent - position.pixels < _bottomThreshold;
+    final atBottom = position.pixels >= position.maxScrollExtent - 10;
 
-    if (_showScrollButton != !isNearBottom && _autoScroll) {
+    // Show/hide scroll button based on position
+    if (_showScrollButton != !isNearBottom) {
       setState(() {
         _showScrollButton = !isNearBottom;
       });
     }
+
+    // Detect if user scrolled away from bottom - disable auto-scroll
+    if (_wasAtBottom && !atBottom && _autoScroll) {
+      setState(() {
+        _autoScroll = false;
+      });
+    }
+
+    // Detect if user scrolled to bottom - enable auto-scroll
+    if (!_wasAtBottom && atBottom && !_autoScroll) {
+      setState(() {
+        _autoScroll = true;
+      });
+    }
+
+    _wasAtBottom = atBottom;
   }
 
   void _checkAndScrollToBottom(int newCount) {
@@ -116,6 +148,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _scrollToBottom() {
+    setState(() {
+      _autoScroll = true;
+    });
     _smoothScrollToBottom();
   }
 

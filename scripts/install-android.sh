@@ -80,7 +80,7 @@ fi
 # Install APK
 echo ""
 echo "Installing APK..."
-INSTALL_OUTPUT=$(adb install -r "$APK_PATH" 2>&1)
+INSTALL_OUTPUT=$(adb install -r "$APK_PATH" 2>&1) || true
 
 if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
     echo -e "${GREEN}Installation successful!${NC}"

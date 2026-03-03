@@ -1,8 +1,13 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../../../data/models/chat_message.dart';
 import '../../../data/services/websocket_service.dart';
+import '../../../data/services/audio_service.dart';
+import '../../../data/services/whisper_service.dart';
+import '../../../core/config/app_config.dart';
+import '../../../core/providers.dart';
 import '../../sessions/providers/sessions_provider.dart';
 
 class ChatState {
@@ -12,6 +17,10 @@ class ChatState {
   final String? detectedTool;
   final String? sessionName;
   final int? windowIndex;
+  final bool isRecording;
+  final Duration recordingDuration;
+  final bool isTranscribing;
+  final String? transcribedText;
 
   const ChatState({
     this.messages = const [],
@@ -20,6 +29,10 @@ class ChatState {
     this.detectedTool,
     this.sessionName,
     this.windowIndex,
+    this.isRecording = false,
+    this.recordingDuration = Duration.zero,
+    this.isTranscribing = false,
+    this.transcribedText,
   });
 
   ChatState copyWith({
@@ -29,6 +42,10 @@ class ChatState {
     String? detectedTool,
     String? sessionName,
     int? windowIndex,
+    bool? isRecording,
+    Duration? recordingDuration,
+    bool? isTranscribing,
+    String? transcribedText,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
@@ -37,6 +54,10 @@ class ChatState {
       detectedTool: detectedTool ?? this.detectedTool,
       sessionName: sessionName ?? this.sessionName,
       windowIndex: windowIndex ?? this.windowIndex,
+      isRecording: isRecording ?? this.isRecording,
+      recordingDuration: recordingDuration ?? this.recordingDuration,
+      isTranscribing: isTranscribing ?? this.isTranscribing,
+      transcribedText: transcribedText,
     );
   }
 }
@@ -45,8 +66,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final Uuid _uuid = const Uuid();
   StreamSubscription? _messageSubscription;
   WebSocketService? _ws;
+  final AudioService _audioService = AudioService();
+  final WhisperService _whisperService = WhisperService();
+  Timer? _recordingTimer;
+  SharedPreferences? _prefs;
 
   ChatNotifier() : super(const ChatState());
+
+  void setPrefs(SharedPreferences prefs) {
+    _prefs = prefs;
+  }
 
   void setWebSocket(WebSocketService ws) {
     _ws = ws;
@@ -75,7 +104,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void _handleChatHistory(Map<String, dynamic> message) {
     final messagesData = message['messages'] as List<dynamic>? ?? [];
-    
+
     final toolRaw = message['tool'];
     String? toolStr;
     if (toolRaw is String) {
@@ -327,6 +356,77 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = const ChatState();
   }
 
+  Future<bool> checkMicrophonePermission() async {
+    return await _audioService.hasPermission();
+  }
+
+  Future<void> startVoiceRecording() async {
+    final hasPermission = await _audioService.hasPermission();
+    if (!hasPermission) {
+      state = state.copyWith(error: 'Microphone permission denied');
+      return;
+    }
+
+    final path = await _audioService.startRecording();
+    if (path != null) {
+      state = state.copyWith(
+        isRecording: true,
+        recordingDuration: Duration.zero,
+        transcribedText: null,
+        error: null,
+      );
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        state = state.copyWith(
+          recordingDuration: _audioService.recordingDuration,
+        );
+      });
+    }
+  }
+
+  Future<String?> stopVoiceRecording() async {
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+
+    final path = await _audioService.stopRecording();
+    if (path != null) {
+      state = state.copyWith(isRecording: false);
+      return path;
+    }
+    state = state.copyWith(isRecording: false);
+    return null;
+  }
+
+  Future<void> transcribeAudio(String audioPath) async {
+    if (_prefs == null) {
+      state = state.copyWith(
+        error:
+            'API key not configured. Please add your OpenAI API key in Settings.',
+        isTranscribing: false,
+      );
+      return;
+    }
+
+    final apiKey = _prefs!.getString(AppConfig.keyOpenAiApiKey);
+    if (apiKey == null || apiKey.isEmpty) {
+      state = state.copyWith(
+        error:
+            'API key not configured. Please add your OpenAI API key in Settings.',
+        isTranscribing: false,
+      );
+      return;
+    }
+
+    state = state.copyWith(isTranscribing: true, error: null);
+
+    final text = await _whisperService.transcribe(audioPath, apiKey);
+
+    state = state.copyWith(isTranscribing: false, transcribedText: text);
+  }
+
+  void clearTranscribedText() {
+    state = state.copyWith(transcribedText: null);
+  }
+
   // Parse Claude Code output into structured messages
   void parseClaudeOutput(String output) {
     final lines = output.split('\n');
@@ -399,6 +499,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   final notifier = ChatNotifier();
+
+  // Set SharedPreferences
+  final prefs = ref.read(sharedPreferencesProvider);
+  notifier.setPrefs(prefs);
 
   // Watch the shared WebSocket service
   ref.listen(sharedWebSocketServiceProvider, (previous, next) {

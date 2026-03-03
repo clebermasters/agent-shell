@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_highlight/flutter_highlight.dart';
+import 'package:flutter_highlight/themes/atom-one-dark.dart';
+import 'package:flutter_highlight/themes/atom-one-light.dart';
 import '../../../data/models/chat_message.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
@@ -174,7 +177,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           bottomLeft: Radius.circular(isUser ? 18 : 4),
           bottomRight: Radius.circular(isUser ? 4 : 18),
         ),
-        border: (isUser || isTool) ? null : Border.all(color: borderColor, width: 1),
+        border: (isUser || isTool)
+            ? null
+            : Border.all(color: borderColor, width: 1),
         boxShadow: isUser
             ? [
                 BoxShadow(
@@ -185,7 +190,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
               ]
             : null,
       ),
-      padding: isTool 
+      padding: isTool
           ? const EdgeInsets.symmetric(vertical: 2)
           : const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: _buildMessageContent(isUser, isError, isTool, textColor),
@@ -650,19 +655,66 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
             ),
           Container(
             padding: const EdgeInsets.all(12),
-            child: SelectableText(
-              code,
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 13,
-                color: codeColor,
-                height: 1.5,
-              ),
-            ),
+            child: language.isNotEmpty
+                ? ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: HighlightView(
+                      code,
+                      language: _mapLanguage(language),
+                      theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
+                      padding: const EdgeInsets.all(8),
+                      textStyle: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        height: 1.5,
+                      ),
+                    ),
+                  )
+                : SelectableText(
+                    code,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      color: codeColor,
+                      height: 1.5,
+                    ),
+                  ),
           ),
         ],
       ),
     );
+  }
+
+  String _mapLanguage(String lang) {
+    final languageMap = {
+      'js': 'javascript',
+      'ts': 'typescript',
+      'py': 'python',
+      'rb': 'ruby',
+      'yml': 'yaml',
+      'sh': 'bash',
+      'shell': 'bash',
+      'zsh': 'bash',
+      'md': 'markdown',
+      'dockerfile': 'dockerfile',
+      'html': 'xml',
+      'css': 'css',
+      'json': 'json',
+      'sql': 'sql',
+      'go': 'go',
+      'rs': 'rust',
+      'swift': 'swift',
+      'kt': 'kotlin',
+      'java': 'java',
+      'c': 'c',
+      'cpp': 'cpp',
+      'csharp': 'cs',
+      'php': 'php',
+      'r': 'r',
+      'scala': 'scala',
+      'hcl': 'hcl',
+    };
+    return languageMap[lang.toLowerCase()] ?? lang.toLowerCase();
   }
 }
 

@@ -384,10 +384,18 @@ pub enum ServerMessage {
     },
     // Chat log responses
     ChatHistory {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
         messages: Vec<crate::chat_log::ChatMessage>,
         tool: Option<crate::chat_log::AiTool>,
     },
     ChatEvent {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
         message: crate::chat_log::ChatMessage,
     },
     ChatLogError {

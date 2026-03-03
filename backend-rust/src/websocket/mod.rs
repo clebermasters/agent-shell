@@ -757,6 +757,7 @@ async fn handle_message(
             {
                 let mut handle_guard = state.chat_log_handle.lock().await;
                 if let Some(handle) = handle_guard.take() {
+                    tracing::info!("Stopping previous chat log watcher");
                     handle.abort();
                 }
             }
@@ -785,18 +786,25 @@ async fn handle_message(
                         };
 
                         // Forward events to WebSocket
+                        let session_name_owned = session_name.clone();
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
                                 crate::chat_log::ChatLogEvent::History { messages, tool } => {
-                                    tracing::info!("Sending chat history: {} messages", messages.len());
+                                    tracing::info!("Sending chat history: {} messages for session {}", messages.len(), session_name_owned);
                                     ServerMessage::ChatHistory {
+                                        session_name: session_name_owned.clone(),
+                                        window_index,
                                         messages,
                                         tool: Some(tool),
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::NewMessage { message } => {
-                                    tracing::info!("Sending new chat message: role={}", message.role);
-                                    ServerMessage::ChatEvent { message }
+                                    tracing::info!("Sending new chat message: role={} for session {}", message.role, session_name_owned);
+                                    ServerMessage::ChatEvent {
+                                        session_name: session_name_owned.clone(),
+                                        window_index,
+                                        message,
+                                    }
                                 }
                                 crate::chat_log::ChatLogEvent::Error { error } => {
                                     tracing::warn!("Chat log error: {}", error);

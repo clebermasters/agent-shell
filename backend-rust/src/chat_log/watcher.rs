@@ -159,6 +159,9 @@ async fn watch_opencode_db(db_path: &Path, cwd: &Path, pid: u32, event_tx: mpsc:
     
     info!("Starting OpenCode watcher for PID {} in directory {}", pid, cwd_owned.display());
     
+    // Small delay to ensure client has subscribed to the channel if this was triggered by a message
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
     // Initial fetch for history
     if let Ok(messages) = opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
         info!("Initial fetch got {} messages", messages.len());

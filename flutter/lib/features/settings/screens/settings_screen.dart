@@ -26,12 +26,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _loadApiKey() async {
     final prefs = ref.read(sharedPreferencesProvider);
-    final apiKey = prefs.getString(AppConfig.keyOpenAiApiKey);
+    var apiKey = prefs.getString(AppConfig.keyOpenAiApiKey);
     if (apiKey != null) {
       _apiKeyController.text = apiKey;
     } else if (BuildConfig.defaultApiKey.isNotEmpty) {
-      // Use build-time default if no saved key
+      // Use build-time default if no saved key, and save it to SharedPreferences
       _apiKeyController.text = BuildConfig.defaultApiKey;
+      await prefs.setString(
+        AppConfig.keyOpenAiApiKey,
+        BuildConfig.defaultApiKey,
+      );
     }
   }
 

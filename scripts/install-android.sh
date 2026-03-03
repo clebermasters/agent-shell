@@ -116,11 +116,34 @@ setup_wireless() {
         return 0
     fi
     
+    # Check for USB device
+    usb_device=$(adb devices 2>/dev/null | grep -E "^[a-zA-Z0-9:.-]+	device$" | head -1 | cut -f1)
+    
+    if [ -z "$usb_device" ]; then
+        echo -e "${RED}No USB device found.${NC}"
+        echo ""
+        echo -e "${YELLOW}To setup wireless for the first time:${NC}"
+        echo "  1. Connect your phone via USB"
+        echo "  2. Run: $0 --wireless"
+        echo ""
+        echo -e "${YELLOW}Or enter IP manually:${NC}"
+        read -p "Device IP address: " manual_ip
+        if [ -n "$manual_ip" ]; then
+            wireless_connect "$manual_ip"
+            if check_wireless_connection | grep -q .; then
+                echo "$manual_ip" > "$WIRELESS_IP_FILE"
+                echo -e "${GREEN}Connected! IP saved for future use.${NC}"
+                return 0
+            fi
+        fi
+        return 1
+    fi
+    
     # Get device IP
     local device_ip=$(get_device_ip)
     
     if [ -z "$device_ip" ]; then
-        echo -e "${RED}Could not get device IP address. Make sure WiFi is enabled.${NC}"
+        echo -e "${RED}Could not get device IP address. Make sure WiFi is enabled on device.${NC}"
         return 1
     fi
     

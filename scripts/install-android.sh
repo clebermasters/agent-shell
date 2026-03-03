@@ -1,26 +1,74 @@
 #!/bin/bash
-set -e
 
 # WebMux Android Installer Script
 # Installs the APK to a connected Android device via ADB
 # Features:
 # - Auto-detects connected device
-# - Installs/replaces existing APK
+# - Installs/replaces existing APK via USB or wireless
 # - Shows device info
 # - Works as standalone or called from build script
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG_DIR="$SCRIPT_DIR/.config"
+WIRELESS_IP_FILE="$CONFIG_DIR/wireless_ip"
 
 # Default APK path
-APK_PATH="${1:-$PROJECT_ROOT/webmux-flutter-release.apk}"
+APK_PATH=""
+WIRELESS_MODE=false
+LAUNCH_APP=false
 PACKAGE_NAME="com.example.webmux"
+ADB_PORT=5555
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Parse arguments
+for arg in "$@"; do
+    case "$arg" in
+        --wireless|-w)
+            WIRELESS_MODE=true
+            ;;
+        --launch|-l)
+            LAUNCH_APP=true
+            ;;
+        --help|-h)
+            echo "Usage: $0 [apk_path] [options]"
+            echo ""
+            echo "Options:"
+            echo "  --wireless, -w   Install over WiFi (requires wireless setup)"
+            echo "  --launch, -l     Launch app after installation"
+            echo "  --help, -h       Show this help"
+            echo ""
+            echo "Examples:"
+            echo "  $0                                    # Install release APK via USB"
+            echo "  $0 ./app.apk                         # Install specific APK via USB"
+            echo "  $0 --wireless                        # Install via WiFi (auto-connect)"
+            echo "  $0 --wireless --launch                # Install via WiFi and launch"
+            exit 0
+            ;;
+        -*)
+            # Ignore unknown options
+            ;;
+        *)
+            if [ -z "$APK_PATH" ]; then
+                APK_PATH="$arg"
+            fi
+            ;;
+    esac
+done
+
+# Set default APK path if not provided
+if [ -z "$APK_PATH" ]; then
+    APK_PATH="$PROJECT_ROOT/webmux-flutter-release.apk"
+fi
+
+# Create config directory
+mkdir -p "$CONFIG_DIR"
 
 echo "=========================================="
 echo "  WebMux Android Installer"
@@ -36,38 +84,153 @@ fi
 # Check if APK exists
 if [ ! -f "$APK_PATH" ]; then
     echo -e "${RED}Error: APK not found at $APK_PATH${NC}"
-    echo ""
-    echo "Usage: $0 [apk_path]"
-    echo "  apk_path: Path to APK file (default: ./webmux-flutter-release.apk)"
     exit 1
 fi
 
-echo "APK: $APK_PATH"
-echo ""
+# Check for existing wireless connection
+check_wireless_connection() {
+    adb devices 2>/dev/null | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:$ADB_PORT	device$" | head -1
+}
 
-# Check for connected device
-echo "Checking for connected device..."
-DEVICE_OUTPUT=$(adb devices 2>&1)
-DEVICES=$(echo "$DEVICE_OUTPUT" | grep -E "^[a-zA-Z0-9:.-]+	device$" | wc -l)
+# Get device IP address
+get_device_ip() {
+    local ip=$(adb shell ip addr show wlan0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
+    echo "$ip"
+}
 
-if [ "$DEVICES" -eq 0 ]; then
-    echo -e "${YELLOW}No device connected. Waiting for device...${NC}"
-    adb wait-for-device
-    echo -e "${GREEN}Device connected!${NC}"
-elif [ "$DEVICES" -gt 1 ]; then
-    echo -e "${YELLOW}Warning: Multiple devices connected. Using first one.${NC}"
+# Connect to device wirelessly
+wireless_connect() {
+    local ip="$1"
+    echo -e "${BLUE}Connecting to $ip:$ADB_PORT...${NC}"
+    adb connect "$ip:$ADB_PORT" 2>/dev/null
+    sleep 2
+}
+
+# Setup wireless connection (requires USB first time)
+setup_wireless() {
+    echo -e "${YELLOW}Setting up wireless connection...${NC}"
+    
+    # Check if already connected via wireless
+    if check_wireless_connection | grep -q .; then
+        echo -e "${GREEN}Already connected via WiFi${NC}"
+        return 0
+    fi
+    
+    # Get device IP
+    local device_ip=$(get_device_ip)
+    
+    if [ -z "$device_ip" ]; then
+        echo -e "${RED}Could not get device IP address. Make sure WiFi is enabled.${NC}"
+        return 1
+    fi
+    
+    echo -e "${BLUE}Device IP: $device_ip${NC}"
+    
+    # Enable TCPIP mode
+    echo "Enabling ADB over TCP/IP..."
+    adb tcpip $ADB_PORT 2>/dev/null
+    
+    # Disconnect USB
+    echo "Disconnecting USB..."
+    
+    # Connect wirelessly
+    wireless_connect "$device_ip"
+    
+    # Verify connection
+    if check_wireless_connection | grep -q .; then
+        echo "$device_ip" > "$WIRELESS_IP_FILE"
+        echo -e "${GREEN}Wireless setup complete!${NC}"
+        return 0
+    else
+        echo -e "${RED}Failed to connect wirelessly${NC}"
+        return 1
+    fi
+}
+
+# Main connection logic
+connect_device() {
+    if [ "$WIRELESS_MODE" = true ]; then
+        # Try to connect via wireless
+        if check_wireless_connection | grep -q .; then
+            echo -e "${GREEN}Already connected via WiFi${NC}"
+            return 0
+        fi
+        
+        # Try saved IP
+        if [ -f "$WIRELESS_IP_FILE" ]; then
+            saved_ip=$(cat "$WIRELESS_IP_FILE")
+            echo -e "${YELLOW}Trying saved IP: $saved_ip${NC}"
+            wireless_connect "$saved_ip"
+            
+            if check_wireless_connection | grep -q .; then
+                echo -e "${GREEN}Connected to saved device${NC}"
+                return 0
+            fi
+        fi
+        
+        # Try to find wireless device on network (common Android IP ranges)
+        echo -e "${YELLOW}Searching for device on network...${NC}"
+        
+        # First, check if device is connected via USB to setup wireless
+        usb_device=$(adb devices 2>/dev/null | grep -E "^[a-zA-Z0-9:.-]+	device$" | head -1 | cut -f1)
+        
+        if [ -n "$usb_device" ]; then
+            # USB connected - setup wireless
+            setup_wireless
+            return $?
+        else
+            # No USB - try common subnets
+            echo -e "${YELLOW}No USB device found. Searching network...${NC}"
+            
+            # Try saved IP first
+            if [ -f "$WIRELESS_IP_FILE" ]; then
+                saved_ip=$(cat "$WIRELESS_IP_FILE")
+                wireless_connect "$saved_ip"
+                if check_wireless_connection | grep -q .; then
+                    echo -e "${GREEN}Connected to saved device${NC}"
+                    return 0
+                fi
+            fi
+            
+            echo -e "${RED}Could not find device on network.${NC}"
+            echo -e "${YELLOW}Please connect your device via USB first to setup wireless.${NC}"
+            return 1
+        fi
+    else
+        # USB mode - wait for device
+        echo "Checking for connected device..."
+        DEVICE_OUTPUT=$(adb devices 2>&1)
+        DEVICES=$(echo "$DEVICE_OUTPUT" | grep -E "^[a-zA-Z0-9:.-]+	device$" | wc -l)
+        
+        if [ "$DEVICES" -eq 0 ]; then
+            echo -e "${YELLOW}No device connected. Waiting for device...${NC}"
+            adb wait-for-device
+            echo -e "${GREEN}Device connected!${NC}"
+        elif [ "$DEVICES" -gt 1 ]; then
+            echo -e "${YELLOW}Warning: Multiple devices connected. Using first one.${NC}"
+        fi
+        return 0
+    fi
+}
+
+# Connect to device
+if ! connect_device; then
+    echo -e "${RED}Failed to connect to device${NC}"
+    exit 1
 fi
 
 # Get device info
 DEVICE_SERIAL=$(adb devices | grep -E "^[a-zA-Z0-9:.-]+	device$" | head -1 | cut -f1)
 DEVICE_MODEL=$(adb shell getprop ro.product.model 2>/dev/null || echo "Unknown")
 DEVICE_ANDROID=$(adb shell getprop ro.build.version.release 2>/dev/null || echo "Unknown")
+CONNECTION_TYPE=$(echo "$DEVICE_SERIAL" | grep -q ":" && echo "WiFi" || echo "USB")
 
 echo ""
 echo "Connected Device:"
-echo "  Serial: $DEVICE_SERIAL"
-echo "  Model:  $DEVICE_MODEL"
-echo "  Android: $DEVICE_ANDROID"
+echo "  Serial:    $DEVICE_SERIAL"
+echo "  Model:     $DEVICE_MODEL"
+echo "  Android:   $DEVICE_ANDROID"
+echo "  Type:      $CONNECTION_TYPE"
 echo ""
 
 # Check if app is already installed
@@ -86,8 +249,7 @@ if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
     echo -e "${GREEN}Installation successful!${NC}"
     echo ""
     
-    # Optional: Launch app
-    if [ "${2:-}" = "--launch" ] || [ "${2:-}" = "-l" ]; then
+    if [ "$LAUNCH_APP" = true ]; then
         echo "Launching app..."
         adb shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
             echo -e "${YELLOW}Could not launch app automatically${NC}"
@@ -96,7 +258,7 @@ if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
     echo ""
     echo -e "${GREEN}=========================================="
     echo "  Done! App is ready on your device."
-    echo -e "==========================================${NC}"
+    echo "==========================================${NC}"
     exit 0
 fi
 
@@ -112,7 +274,7 @@ if echo "$INSTALL_OUTPUT" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
         echo -e "${GREEN}Installation successful!${NC}"
         echo ""
         
-        if [ "${2:-}" = "--launch" ] || [ "${2:-}" = "-l" ]; then
+        if [ "$LAUNCH_APP" = true ]; then
             echo "Launching app..."
             adb shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
                 echo -e "${YELLOW}Could not launch app automatically${NC}"
@@ -121,7 +283,7 @@ if echo "$INSTALL_OUTPUT" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
         echo ""
         echo -e "${GREEN}=========================================="
         echo "  Done! App is ready on your device."
-        echo -e "==========================================${NC}"
+        echo "==========================================${NC}"
         exit 0
     fi
 fi

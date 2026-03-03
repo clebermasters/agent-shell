@@ -58,6 +58,9 @@ bytes = "1.5"
 # SIMD UTF-8 validation
 simdutf8 = "0.1"
 
+# System calls for process info
+libc = "0.2"
+
 # Async streams
 futures = "0.3"
 

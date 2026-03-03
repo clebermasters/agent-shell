@@ -45,7 +45,7 @@ use std::path::PathBuf;
 pub enum AiTool {
     Claude,
     Codex,
-    Opencode { cwd: PathBuf },
+    Opencode { cwd: PathBuf, pid: u32 },
 }
 
 /// Events emitted by the log watcher.

@@ -763,6 +763,7 @@ async fn handle_message(
 
             let chat_log_handle = state.chat_log_handle.clone();
             let handle = tokio::spawn(async move {
+                tracing::info!("Detecting chat log for session '{}' window {}", session_name, window_index);
                 match crate::chat_log::watcher::detect_log_file(&session_name, window_index).await {
                     Ok((path, tool)) => {
                         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();

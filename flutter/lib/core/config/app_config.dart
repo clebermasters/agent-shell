@@ -23,4 +23,5 @@ class AppConfig {
   static const String keySelectedHost = 'selected_host';
   static const String keyThemeMode = 'theme_mode';
   static const String keyTerminalFontSize = 'terminal_font_size';
+  static const String keyOpenAiApiKey = 'openai_api_key';
 }

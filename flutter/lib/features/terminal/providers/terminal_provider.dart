@@ -1,8 +1,14 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../data/services/websocket_service.dart';
 import '../../../data/services/terminal_service.dart';
+import '../../../data/services/audio_service.dart';
+import '../../../data/services/whisper_service.dart';
+import '../../../core/config/app_config.dart';
+import '../../../core/providers.dart';
 import '../../sessions/providers/sessions_provider.dart';
 
 class TerminalState {
@@ -11,6 +17,9 @@ class TerminalState {
   final String? error;
   final Terminal? terminal;
   final TerminalController? controller;
+  final bool isRecording;
+  final Duration recordingDuration;
+  final bool isTranscribing;
 
   const TerminalState({
     this.isConnected = false,
@@ -18,6 +27,9 @@ class TerminalState {
     this.error,
     this.terminal,
     this.controller,
+    this.isRecording = false,
+    this.recordingDuration = Duration.zero,
+    this.isTranscribing = false,
   });
 
   TerminalState copyWith({
@@ -26,6 +38,9 @@ class TerminalState {
     String? error,
     Terminal? terminal,
     TerminalController? controller,
+    bool? isRecording,
+    Duration? recordingDuration,
+    bool? isTranscribing,
   }) {
     return TerminalState(
       isConnected: isConnected ?? this.isConnected,
@@ -33,6 +48,9 @@ class TerminalState {
       error: error,
       terminal: terminal ?? this.terminal,
       controller: controller ?? this.controller,
+      isRecording: isRecording ?? this.isRecording,
+      recordingDuration: recordingDuration ?? this.recordingDuration,
+      isTranscribing: isTranscribing ?? this.isTranscribing,
     );
   }
 }
@@ -41,16 +59,25 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   final TerminalService terminalService;
   final WebSocketService _wsService;
   final Map<String, TerminalController> _controllers = {};
+  final AudioService _audioService = AudioService();
+  final WhisperService _whisperService = WhisperService();
+  Timer? _recordingTimer;
+  SharedPreferences? _prefs;
   String? _activeSessionName;
 
-  TerminalNotifier(this.terminalService, this._wsService) : super(TerminalState(isConnected: _wsService.isConnected)) {
+  TerminalNotifier(this.terminalService, this._wsService)
+    : super(TerminalState(isConnected: _wsService.isConnected)) {
     _init();
+  }
+
+  void setPrefs(SharedPreferences prefs) {
+    _prefs = prefs;
   }
 
   void _init() {
     _wsService.connectionState.listen((connected) {
       if (connected && _activeSessionName != null && !state.isConnected) {
-        // We just reconnected, so we need to re-attach to the terminal session 
+        // We just reconnected, so we need to re-attach to the terminal session
         // to resume receiving terminal data.
         _wsService.attachSession(_activeSessionName!, cols: 80, rows: 24);
       }
@@ -63,7 +90,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     state = state.copyWith(isLoading: true, error: null);
 
     final terminal = terminalService.createTerminal(sessionName);
-    
+
     // Create or get existing controller for this session
     if (!_controllers.containsKey(sessionName)) {
       _controllers[sessionName] = TerminalController();
@@ -78,7 +105,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
       terminal: terminal,
       controller: _controllers[sessionName],
     );
-    
+
     // Start background service to keep socket alive
     final service = FlutterBackgroundService();
     var isRunning = await service.isRunning();
@@ -111,8 +138,83 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     terminalService.resizeTerminal(sessionName, cols, rows);
   }
 
+  Future<bool> checkMicrophonePermission() async {
+    return await _audioService.hasPermission();
+  }
+
+  Future<void> startVoiceRecording() async {
+    final hasPermission = await _audioService.hasPermission();
+    if (!hasPermission) {
+      state = state.copyWith(error: 'Microphone permission denied');
+      return;
+    }
+
+    final path = await _audioService.startRecording();
+    if (path != null) {
+      state = state.copyWith(
+        isRecording: true,
+        recordingDuration: Duration.zero,
+        error: null,
+      );
+      _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        state = state.copyWith(
+          recordingDuration: _audioService.recordingDuration,
+        );
+      });
+    }
+  }
+
+  Future<String?> stopVoiceRecording() async {
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+
+    final path = await _audioService.stopRecording();
+    if (path != null) {
+      state = state.copyWith(isRecording: false);
+      return path;
+    }
+    state = state.copyWith(isRecording: false);
+    return null;
+  }
+
+  Future<String?> transcribeAudio(String audioPath) async {
+    if (_prefs == null) {
+      state = state.copyWith(
+        error:
+            'API key not configured. Please add your OpenAI API key in Settings.',
+        isTranscribing: false,
+      );
+      return null;
+    }
+
+    final apiKey = _prefs!.getString(AppConfig.keyOpenAiApiKey);
+    if (apiKey == null || apiKey.isEmpty) {
+      state = state.copyWith(
+        error:
+            'API key not configured. Please add your OpenAI API key in Settings.',
+        isTranscribing: false,
+      );
+      return null;
+    }
+
+    state = state.copyWith(isTranscribing: true, error: null);
+
+    final text = await _whisperService.transcribe(audioPath, apiKey);
+
+    state = state.copyWith(isTranscribing: false);
+    return text;
+  }
+
+  void injectText(String text) {
+    if (_activeSessionName != null) {
+      terminalService.writeToTerminal(_activeSessionName!, text);
+    }
+  }
+
   @override
   void dispose() {
+    _recordingTimer?.cancel();
+    _audioService.dispose();
     for (final controller in _controllers.values) {
       controller.dispose();
     }
@@ -130,6 +232,12 @@ final terminalProvider = StateNotifierProvider<TerminalNotifier, TerminalState>(
   (ref) {
     final terminalService = ref.watch(terminalServiceProvider);
     final wsService = ref.watch(sharedWebSocketServiceProvider);
-    return TerminalNotifier(terminalService, wsService);
+    final notifier = TerminalNotifier(terminalService, wsService);
+
+    // Set SharedPreferences
+    final prefs = ref.read(sharedPreferencesProvider);
+    notifier.setPrefs(prefs);
+
+    return notifier;
   },
 );

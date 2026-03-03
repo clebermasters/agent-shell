@@ -13,8 +13,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FLUTTER_DIR="$PROJECT_ROOT/flutter"
 DOCKER_DIR="$PROJECT_ROOT/docker/flutter"
 
-# Default to debug build
-BUILD_TYPE="${1:-debug}"
+# Default to release build
+BUILD_TYPE="${1:-release}"
 
 # Validate build type
 if [[ "$BUILD_TYPE" != "debug" && "$BUILD_TYPE" != "release" ]]; then

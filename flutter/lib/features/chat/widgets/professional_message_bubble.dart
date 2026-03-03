@@ -593,11 +593,18 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
     final hasLanguage = language.isNotEmpty;
 
     if (hasLanguage) {
+      // Single container for entire code block - no separate header
       return Container(
         margin: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF282C34) : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(8),
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
           children: [
+            // Header row with language and copy button
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
@@ -648,13 +655,8 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
                 ],
               ),
             ),
+            // Code content - no additional decoration or border
             Container(
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF282C34) : Colors.grey.shade100,
-                borderRadius: const BorderRadius.vertical(
-                  bottom: Radius.circular(8),
-                ),
-              ),
               padding: const EdgeInsets.all(12),
               child: HighlightView(
                 code,

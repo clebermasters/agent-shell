@@ -363,89 +363,79 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final chatState = ref.watch(chatProvider);
     final isRecording = chatState.isRecording;
     final isTranscribing = chatState.isTranscribing;
-    final transcribedText = chatState.transcribedText;
     final hasText = _controller.text.trim().isNotEmpty;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: surfaceColor,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
+            blurRadius: 8,
+            offset: const Offset(0, -1),
           ),
         ],
       ),
       child: SafeArea(
         top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (isRecording || isTranscribing)
-              _buildRecordingIndicator(chatState, isRecording, isTranscribing),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: Container(
-                    constraints: const BoxConstraints(
-                      minHeight: 48,
-                      maxHeight: 120,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isDarkMode
-                          ? const Color(0xFF1E293B)
-                          : const Color(0xFFF1F5F9),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(
-                        color: hasText
-                            ? const Color(0xFF6366F1)
-                            : (isDarkMode
-                                  ? const Color(0xFF334155)
-                                  : const Color(0xFFE2E8F0)),
-                        width: hasText ? 1.5 : 1,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isRecording || isTranscribing)
+                _buildRecordingIndicator(
+                  chatState,
+                  isRecording,
+                  isTranscribing,
+                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: isDarkMode
+                            ? const Color(0xFF2D3748)
+                            : const Color(0xFFEDF2F7),
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                    ),
-                    child: TextField(
-                      controller: _controller,
-                      maxLines: 4,
-                      minLines: 1,
-                      textInputAction: TextInputAction.newline,
-                      decoration: InputDecoration(
-                        hintText: isRecording ? 'Recording...' : 'Message...',
-                        hintStyle: TextStyle(
-                          color: isDarkMode
-                              ? Colors.grey.shade600
-                              : const Color(0xFF94A3B8),
-                          fontSize: 15,
+                      child: TextField(
+                        controller: _controller,
+                        maxLines: 4,
+                        minLines: 1,
+                        textInputAction: TextInputAction.newline,
+                        keyboardType: TextInputType.multiline,
+                        decoration: InputDecoration(
+                          hintText: isRecording ? 'Recording...' : 'Message',
+                          hintStyle: TextStyle(
+                            color: isDarkMode
+                                ? Colors.grey.shade500
+                                : const Color(0xFFA0AEC0),
+                            fontSize: 16,
+                          ),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
                         ),
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
+                        style: TextStyle(fontSize: 16, color: textPrimary),
+                        onChanged: (_) => setState(() {}),
+                        onSubmitted: (_) => _sendMessage(),
                       ),
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: textPrimary,
-                        height: 1.4,
-                      ),
-                      onChanged: (_) => setState(() {}),
-                      onSubmitted: (_) => _sendMessage(),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                _buildMicButton(isRecording, isTranscribing),
-                if (!isRecording && !isTranscribing) ...[
-                  const SizedBox(width: 4),
-                  _buildSendButton(),
+                  const SizedBox(width: 8),
+                  _buildMicButton(isRecording, isTranscribing),
+                  if (hasText && !isRecording && !isTranscribing) ...[
+                    const SizedBox(width: 8),
+                    _buildSendButton(),
+                  ],
                 ],
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -513,35 +503,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildMicButton(bool isRecording, bool isTranscribing) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: isTranscribing ? null : _handleMicPress,
-          borderRadius: BorderRadius.circular(24),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: isRecording
-                  ? Colors.red
-                  : (isTranscribing ? Colors.grey : const Color(0xFF6366F1)),
-              shape: BoxShape.circle,
-              boxShadow: !isRecording && !isTranscribing
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF6366F1).withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Icon(
-              isRecording ? Icons.stop : Icons.mic,
-              size: 20,
-              color: Colors.white,
-            ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: isTranscribing ? null : _handleMicPress,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: isRecording
+                ? Colors.red
+                : (isTranscribing
+                      ? Colors.grey.shade400
+                      : (isDarkMode
+                            ? const Color(0xFF4A5568)
+                            : const Color(0xFFE2E8F0))),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            isRecording ? Icons.stop_rounded : Icons.mic,
+            size: 22,
+            color: isRecording
+                ? Colors.white
+                : (isTranscribing
+                      ? Colors.white
+                      : (isDarkMode ? Colors.white : Colors.grey.shade700)),
           ),
         ),
       ),
@@ -549,38 +535,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildSendButton() {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: _controller.text.trim().isNotEmpty ? _sendMessage : null,
-          borderRadius: BorderRadius.circular(24),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: _controller.text.trim().isNotEmpty
-                  ? const Color(0xFF0369A1)
-                  : const Color(0xFFE2E8F0),
-              shape: BoxShape.circle,
-              boxShadow: _controller.text.trim().isNotEmpty
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF0369A1).withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Icon(
-              Icons.send_rounded,
-              size: 20,
-              color: _controller.text.trim().isNotEmpty
-                  ? Colors.white
-                  : const Color(0xFF94A3B8),
-            ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _sendMessage,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: const BoxDecoration(
+            color: Color(0xFF3182CE),
+            shape: BoxShape.circle,
           ),
+          child: const Icon(Icons.send_rounded, size: 22, color: Colors.white),
         ),
       ),
     );

@@ -8,22 +8,39 @@ set -e
 # - Docker layer caching for faster subsequent builds
 # - Auto-upload to S3 after successful build
 # - Reads .env file for default server list and API key
+# - Optional: auto-install to connected Android device
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FLUTTER_DIR="$PROJECT_ROOT/flutter"
 DOCKER_DIR="$PROJECT_ROOT/docker/flutter"
 ENV_FILE="$PROJECT_ROOT/.env"
+INSTALL_SCRIPT="$PROJECT_ROOT/scripts/install-android.sh"
 
-# Default to release build
-BUILD_TYPE="${1:-release}"
+# Default to release build, no auto-install
+BUILD_TYPE="release"
+AUTO_INSTALL=false
 
-# Validate build type
-if [[ "$BUILD_TYPE" != "debug" && "$BUILD_TYPE" != "release" ]]; then
-    echo "Error: Invalid build type '$BUILD_TYPE'"
-    echo "Usage: $0 [debug|release]"
-    exit 1
-fi
+# Parse arguments
+for arg in "$@"; do
+    case "$arg" in
+        debug|release)
+            BUILD_TYPE="$arg"
+            ;;
+        --install|-i)
+            AUTO_INSTALL=true
+            ;;
+        --help|-h)
+            echo "Usage: $0 [debug|release] [--install]"
+            echo ""
+            echo "Arguments:"
+            echo "  debug,release  Build type (default: release)"
+            echo "  --install, -i  Auto-install to connected Android device"
+            echo "  --help, -h     Show this help message"
+            exit 0
+            ;;
+    esac
+done
 
 # Read .env file if it exists
 SERVER_LIST=""
@@ -108,6 +125,19 @@ if [ $? -eq 0 ]; then
         # Cleanup dangling images to save space
         echo "Cleaning up dangling Docker images..."
         docker image prune -f
+        
+        # Auto-install to device if requested
+        if [ "$AUTO_INSTALL" = true ]; then
+            if [ -f "$INSTALL_SCRIPT" ]; then
+                echo ""
+                echo "=========================================="
+                echo "Auto-installing to device..."
+                echo "=========================================="
+                "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME"
+            else
+                echo "Warning: Install script not found at $INSTALL_SCRIPT"
+            fi
+        fi
     else
         echo "ERROR: APK was not generated or could not be copied!"
         exit 1

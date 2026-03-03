@@ -589,25 +589,19 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
       language = element.attributes['class']!.replaceFirst('language-', '');
     }
 
-    final bgColor = isDark ? const Color(0xFF282C34) : Colors.grey.shade100;
     final codeColor = isDark ? Colors.grey.shade300 : Colors.grey.shade800;
+    final hasLanguage = language.isNotEmpty;
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (language.isNotEmpty)
+    if (hasLanguage) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.05)
-                    : Colors.grey.shade200,
+                color: isDark ? const Color(0xFF21252B) : Colors.grey.shade200,
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(8),
                 ),
@@ -654,31 +648,51 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
                 ],
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: language.isNotEmpty
-                ? HighlightView(
-                    code,
-                    language: _mapLanguage(language),
-                    theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
-                    padding: EdgeInsets.zero,
-                    textStyle: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      height: 1.5,
-                    ),
-                  )
-                : SelectableText(
-                    code,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      color: codeColor,
-                      height: 1.5,
-                    ),
-                  ),
-          ),
-        ],
+            Container(
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF282C34) : Colors.grey.shade100,
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(8),
+                ),
+              ),
+              padding: const EdgeInsets.all(12),
+              child: HighlightView(
+                code,
+                language: _mapLanguage(language),
+                theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
+                padding: EdgeInsets.zero,
+                textStyle: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.grey.shade800.withValues(alpha: 0.3)
+            : Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
+        ),
+      ),
+      child: SelectableText(
+        code,
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: codeColor,
+          height: 1.5,
+        ),
       ),
     );
   }

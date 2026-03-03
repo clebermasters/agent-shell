@@ -788,15 +788,18 @@ async fn handle_message(
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
                                 crate::chat_log::ChatLogEvent::History { messages, tool } => {
+                                    tracing::info!("Sending chat history: {} messages", messages.len());
                                     ServerMessage::ChatHistory {
                                         messages,
                                         tool: Some(tool),
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::NewMessage { message } => {
+                                    tracing::info!("Sending new chat message: role={}", message.role);
                                     ServerMessage::ChatEvent { message }
                                 }
                                 crate::chat_log::ChatLogEvent::Error { error } => {
+                                    tracing::warn!("Chat log error: {}", error);
                                     ServerMessage::ChatLogError { error }
                                 }
                             };

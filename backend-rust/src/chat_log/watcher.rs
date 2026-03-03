@@ -157,16 +157,22 @@ async fn watch_opencode_db(db_path: &Path, cwd: &Path, pid: u32, event_tx: mpsc:
     let cwd_owned = cwd.to_path_buf();
     let initial_pid = pid;
     
+    info!("Starting OpenCode watcher for PID {} in directory {}", pid, cwd_owned.display());
+    
     // Initial fetch for history
     if let Ok(messages) = opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
+        info!("Initial fetch got {} messages", messages.len());
         let _ = event_tx.send(ChatLogEvent::History {
             messages,
             tool: AiTool::Opencode { cwd: cwd.to_path_buf(), pid },
         });
+    } else {
+        info!("Initial fetch got no messages or error");
     }
 
     // Polling task
     let handle = tokio::spawn(async move {
+        info!("OpenCode polling task started for PID {}", initial_pid);
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
         loop {
             interval.tick().await;
@@ -202,6 +208,9 @@ async fn watch_opencode_db(db_path: &Path, cwd: &Path, pid: u32, event_tx: mpsc:
             
             match opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
                 Ok(messages) => {
+                    if !messages.is_empty() {
+                        info!("Polling: got {} new messages", messages.len());
+                    }
                     for msg in messages {
                         if event_tx.send(ChatLogEvent::NewMessage { message: msg }).is_err() {
                             debug!("event_tx closed, stopping opencode polling task");

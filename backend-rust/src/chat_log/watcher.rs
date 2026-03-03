@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use super::{claude_parser, codex_parser, AiTool, ChatLogEvent, ChatMessage};
+use super::{claude_parser, codex_parser, opencode_parser, AiTool, ChatLogEvent, ChatMessage};
 
 // ---------------------------------------------------------------------------
 // Log file detection
@@ -43,10 +43,17 @@ pub async fn detect_log_file(
             info!("detected Codex log: {}", log.display());
             return Ok((log, AiTool::Codex));
         }
+
+        if name == "opencode" {
+            let cwd = get_process_cwd(*pid)?;
+            let log = find_opencode_db()?;
+            info!("detected Opencode database: {} for PID {} (cwd: {})", log.display(), pid, cwd.display());
+            return Ok((log, AiTool::Opencode { cwd, pid: *pid }));
+        }
     }
 
     bail!(
-        "no AI tool (claude/codex) found among descendants of pane PID {pane_pid}"
+        "no AI tool (claude/codex/opencode) found among descendants of pane PID {pane_pid}"
     );
 }
 
@@ -54,19 +61,28 @@ pub async fn detect_log_file(
 // Log file watcher
 // ---------------------------------------------------------------------------
 
+pub enum LogWatcher {
+    File(notify::RecommendedWatcher),
+    Task(tokio::task::JoinHandle<()>),
+}
+
+impl Drop for LogWatcher {
+    fn drop(&mut self) {
+        if let LogWatcher::Task(ref handle) = self {
+            handle.abort();
+        }
+    }
+}
+
 /// Watch a log file for changes and emit parsed chat events.
-///
-/// 1. Reads the entire file and sends a `ChatLogEvent::History`.
-/// 2. Uses `notify` (inotify on Linux) to detect writes, reads new lines,
-///    parses them, and sends `ChatLogEvent::NewMessage` for each.
-///
-/// The returned `notify::RecommendedWatcher` **must be kept alive** by the
-/// caller -- dropping it stops file-system notifications.
 pub async fn watch_log_file(
     path: &Path,
     tool: AiTool,
     event_tx: mpsc::UnboundedSender<ChatLogEvent>,
-) -> Result<notify::RecommendedWatcher> {
+) -> Result<LogWatcher> {
+    if let AiTool::Opencode { cwd, pid } = &tool {
+        return watch_opencode_db(path, cwd, *pid, event_tx).await;
+    }
     // --- initial history read ---
     let file = File::open(path)
         .with_context(|| format!("failed to open log file: {}", path.display()))?;
@@ -131,9 +147,95 @@ pub async fn watch_log_file(
         }
     });
 
-    Ok(watcher)
+    Ok(LogWatcher::File(watcher))
 }
 
+async fn watch_opencode_db(db_path: &Path, cwd: &Path, pid: u32, event_tx: mpsc::UnboundedSender<ChatLogEvent>) -> Result<LogWatcher> {
+    let mut state = opencode_parser::init_opencode_state(db_path, cwd, pid)?;
+
+    let db_path_owned = db_path.to_path_buf();
+    let cwd_owned = cwd.to_path_buf();
+    let initial_pid = pid;
+    
+    info!("Starting OpenCode watcher for PID {} in directory {}", pid, cwd_owned.display());
+    
+    // Small delay to ensure client has subscribed to the channel if this was triggered by a message
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Initial fetch for history
+    if let Ok(messages) = opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
+        info!("Initial fetch got {} messages", messages.len());
+        let _ = event_tx.send(ChatLogEvent::History {
+            messages,
+            tool: AiTool::Opencode { cwd: cwd.to_path_buf(), pid },
+        });
+    } else {
+        info!("Initial fetch got no messages or error");
+    }
+
+    // Polling task
+    let handle = tokio::spawn(async move {
+        info!("OpenCode polling task started for PID {}", initial_pid);
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            
+            // Verify the PID is still running with the same CWD
+            let current_pid_valid = is_process_alive_with_cwd(initial_pid, &cwd_owned);
+            
+            if !current_pid_valid {
+                // Try to find a new opencode process in the same directory
+                debug!("OpenCode PID {} no longer valid, re-detecting session for {}", initial_pid, cwd_owned.display());
+                
+                // Re-detect using get_descendant_pids approach to find any opencode in this CWD
+                if let Ok(new_pid) = find_opencode_pid_for_cwd(&cwd_owned) {
+                    match opencode_parser::init_opencode_state(&db_path_owned, &cwd_owned, new_pid) {
+                        Ok(new_state) => {
+                            debug!("Re-detected OpenCode session with PID {}", new_pid);
+                            state = new_state;
+                        }
+                        Err(e) => {
+                            warn!("Failed to re-detect OpenCode session: {}", e);
+                            let _ = event_tx.send(ChatLogEvent::Error {
+                                error: format!("OpenCode session re-detection failed: {}", e),
+                            });
+                            continue;
+                        }
+                    }
+                } else {
+                    // No opencode process found - the session might have ended
+                    // Continue polling but don't re-detect
+                    debug!("No OpenCode process found for {}", cwd_owned.display());
+                }
+            }
+            
+            match opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
+                Ok(messages) => {
+                    if !messages.is_empty() {
+                        info!("Polling: got {} new messages", messages.len());
+                    }
+                    for msg in messages {
+                        if event_tx.send(ChatLogEvent::NewMessage { message: msg }).is_err() {
+                            debug!("event_tx closed, stopping opencode polling task");
+                            return; 
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("failed to fetch opencode messages: {}",e);
+                    let _ = event_tx.send(ChatLogEvent::Error {
+                        error: format!("Opencode DB error: {}", e),
+                    });
+                }
+            }
+        }
+    });
+
+    Ok(LogWatcher::Task(handle))
+}
+
+// ---------------------------------------------------------------------------
+// File reading helpers
 // ---------------------------------------------------------------------------
 // File reading helpers
 // ---------------------------------------------------------------------------
@@ -202,6 +304,7 @@ fn parse_line(line: &str, tool: &AiTool) -> Option<ChatMessage> {
     match tool {
         AiTool::Claude => claude_parser::parse_line(line),
         AiTool::Codex => codex_parser::parse_line(line),
+        AiTool::Opencode { .. } => None, // Opencode parser is handled by DB polling
     }
 }
 
@@ -302,6 +405,57 @@ fn get_process_cwd(pid: u32) -> Result<PathBuf> {
         .with_context(|| format!("failed to read {link}"))
 }
 
+/// Check if a process with given PID is still running and has the expected CWD.
+fn is_process_alive_with_cwd(pid: u32, expected_cwd: &Path) -> bool {
+    // Check if process exists and is an opencode process
+    let is_opencode = match process_name(pid) {
+        Some(n) => n == "opencode",
+        None => return false,
+    };
+    
+    if !is_opencode {
+        return false;
+    }
+    
+    // Check if CWD matches
+    let cwd = match get_process_cwd(pid) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    
+    cwd == expected_cwd
+}
+
+/// Find an opencode process PID that matches the given CWD.
+fn find_opencode_pid_for_cwd(cwd: &Path) -> Result<u32> {
+    // Scan /proc for all running processes
+    let entries = match std::fs::read_dir("/proc") {
+        Ok(e) => e,
+        Err(_) => bail!("Cannot read /proc"),
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let name_str = match file_name.to_str() {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Must be a number (PID)
+        let pid: u32 = match name_str.parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        // Check if it's an opencode process with matching CWD
+        if is_process_alive_with_cwd(pid, cwd) {
+            return Ok(pid);
+        }
+    }
+
+    bail!("No opencode process found for {}", cwd.display())
+}
+
 // ---------------------------------------------------------------------------
 // Log file location helpers
 // ---------------------------------------------------------------------------
@@ -382,4 +536,15 @@ fn newest_jsonl_in(dir: &Path) -> Option<PathBuf> {
     }
 
     best.map(|(_, p)| p)
+}
+
+/// Find the Opencode database
+fn find_opencode_db() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("cannot determine home directory")?;
+    let db_path = home.join(".local/share/opencode/opencode.db");
+    if db_path.exists() {
+        Ok(db_path)
+    } else {
+        bail!("Opencode database not found at {}", db_path.display())
+    }
 }

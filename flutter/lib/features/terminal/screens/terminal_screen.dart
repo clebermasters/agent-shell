@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:xterm/xterm.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../providers/terminal_provider.dart';
 import '../widgets/terminal_view_widget.dart';
 import '../widgets/mobile_keyboard.dart';
 import '../widgets/terminal_accessory_bar.dart';
+import '../widgets/floating_voice_button.dart';
 import '../../../core/providers.dart';
 
 class TerminalScreen extends ConsumerStatefulWidget {
@@ -18,27 +19,44 @@ class TerminalScreen extends ConsumerStatefulWidget {
   ConsumerState<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
+class _TerminalScreenState extends ConsumerState<TerminalScreen>
+    with WidgetsBindingObserver {
   final FocusNode _focusNode = FocusNode(debugLabel: 'TerminalMainFocus');
   bool _showCustomKeyboard = false;
   bool _fullscreen = false;
   bool _showStatus = true;
   bool _wasKeyboardVisible = false;
-  
+
   // Selection Mode state
   bool _isSelectionMode = false;
   bool _hasSelection = false;
-  
+
   // Modifier states for accessory bar + native keyboard
   bool _ctrlActive = false;
   bool _altActive = false;
   bool _shiftActive = false;
 
   final Map<String, String> _shiftMap = {
-    '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
-    '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
-    '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|',
-    ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?',
+    '1': '!',
+    '2': '@',
+    '3': '#',
+    '4': '\$',
+    '5': '%',
+    '6': '^',
+    '7': '&',
+    '8': '*',
+    '9': '(',
+    '0': ')',
+    '-': '_',
+    '=': '+',
+    '[': '{',
+    ']': '}',
+    '\\': '|',
+    ';': ':',
+    '\'': '"',
+    ',': '<',
+    '.': '>',
+    '/': '?',
     '`': '~',
   };
 
@@ -46,23 +64,23 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    
+
     _focusNode.addListener(_onFocusChange);
 
     // Connect to the terminal session
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final terminalNotifier = ref.read(terminalProvider.notifier);
       terminalNotifier.connect(widget.sessionName);
-      
+
       // CRITICAL: Register custom input processor to handle sticky modifiers
       terminalNotifier.terminalService.setInputProcessor(_processInput);
-      
+
       // Listen for selection changes via the controller in state
       final terminalState = ref.read(terminalProvider);
       terminalState.controller?.addListener(_onSelectionChange);
-      
+
       _persistActiveSession();
-      
+
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) {
           setState(() {
@@ -88,8 +106,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     }
   }
 
-  void _onFocusChange() {
-  }
+  void _onFocusChange() {}
 
   @override
   void dispose() {
@@ -232,14 +249,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     final terminalState = ref.read(terminalProvider);
     final controller = terminalState.controller;
     final terminal = terminalState.terminal;
-    
-    if (controller != null && terminal != null && controller.selection != null) {
+
+    if (controller != null &&
+        terminal != null &&
+        controller.selection != null) {
       final text = terminal.buffer.getText(controller.selection!);
       await Clipboard.setData(ClipboardData(text: text));
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Copied to clipboard'), duration: Duration(seconds: 1)),
+          const SnackBar(
+            content: Text('Copied to clipboard'),
+            duration: Duration(seconds: 1),
+          ),
         );
       }
     }
@@ -250,6 +272,53 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
     if (data?.text != null) {
       _handleInput(data!.text!);
     }
+  }
+
+  Future<void> _handleVoiceButton(TerminalState terminalState) async {
+    final terminalNotifier = ref.read(terminalProvider.notifier);
+
+    if (terminalState.isRecording) {
+      final audioPath = await terminalNotifier.stopVoiceRecording();
+      if (audioPath != null) {
+        final text = await terminalNotifier.transcribeAudio(audioPath);
+        if (text != null && text.isNotEmpty) {
+          terminalNotifier.injectText(text);
+        }
+      }
+    } else {
+      final status = await Permission.microphone.request();
+      if (status.isGranted) {
+        await terminalNotifier.startVoiceRecording();
+      } else if (status.isPermanentlyDenied) {
+        _showPermissionDeniedDialog();
+      }
+    }
+  }
+
+  void _showPermissionDeniedDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Microphone Permission'),
+        content: const Text(
+          'Microphone permission is required to use voice input. '
+          'Please enable it in your device settings.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -272,7 +341,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                     tooltip: 'Exit Selection',
                   ),
                 IconButton(
-                  icon: Icon(_isSelectionMode ? Icons.select_all : Icons.ads_click, size: 20),
+                  icon: Icon(
+                    _isSelectionMode ? Icons.select_all : Icons.ads_click,
+                    size: 20,
+                  ),
                   onPressed: _toggleSelectionMode,
                   color: _isSelectionMode ? Colors.orange : null,
                   tooltip: 'Selection Mode',
@@ -288,16 +360,20 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
                   onPressed: _handlePaste,
                   tooltip: 'Paste',
                 ),
-                
+
                 const VerticalDivider(width: 8),
 
                 IconButton(
                   icon: Icon(
-                    _showCustomKeyboard ? Icons.keyboard : Icons.keyboard_alt_outlined,
+                    _showCustomKeyboard
+                        ? Icons.keyboard
+                        : Icons.keyboard_alt_outlined,
                     size: 20,
                   ),
                   onPressed: _toggleKeyboardType,
-                  tooltip: _showCustomKeyboard ? 'Use Native Keyboard' : 'Use Custom Keyboard',
+                  tooltip: _showCustomKeyboard
+                      ? 'Use Native Keyboard'
+                      : 'Use Custom Keyboard',
                 ),
                 IconButton(
                   icon: Icon(
@@ -315,126 +391,147 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> with WidgetsBin
             _clearActiveSession();
           }
         },
-        child: Column(
+        child: Stack(
           children: [
-            // Connection status bar
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              height: (_showStatus || !terminalState.isConnected) ? null : 0,
-              child: (_showStatus || !terminalState.isConnected)
-                  ? Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      color: terminalState.isConnected
-                          ? Colors.green
-                          : (terminalState.isLoading
-                                ? Colors.orange
-                                : Colors.red),
-                      child: Text(
-                        terminalState.isLoading
-                            ? 'Connecting...'
-                            : terminalState.isConnected
-                            ? 'Connected'
-                            : terminalState.error ?? 'Disconnected',
-                        style: const TextStyle(color: Colors.white),
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  : const SizedBox.shrink(),
-            ),
+            Column(
+              children: [
+                // Connection status bar
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  height: (_showStatus || !terminalState.isConnected)
+                      ? null
+                      : 0,
+                  child: (_showStatus || !terminalState.isConnected)
+                      ? Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          color: terminalState.isConnected
+                              ? Colors.green
+                              : (terminalState.isLoading
+                                    ? Colors.orange
+                                    : Colors.red),
+                          child: Text(
+                            terminalState.isLoading
+                                ? 'Connecting...'
+                                : terminalState.isConnected
+                                ? 'Connected'
+                                : terminalState.error ?? 'Disconnected',
+                            style: const TextStyle(color: Colors.white),
+                            textAlign: TextAlign.center,
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
 
-            // Terminal view
-            Expanded(
-              child: terminalState.terminal != null
-                  ? GestureDetector(
-                      onDoubleTap: _toggleFullscreen,
-                      onLongPress: () {
-                        setState(() {
-                          _showStatus = !_showStatus;
-                        });
-                      },
-                      child: TerminalViewWidget(
-                        terminal: terminalState.terminal!,
-                        controller: terminalState.controller,
-                        onResize: _handleResize,
-                        onInput: _handleInput,
-                        focusNode: _focusNode,
-                        ctrlActive: _ctrlActive,
-                        altActive: _altActive,
-                        shiftActive: _shiftActive,
-                        onTap: () {
-                          if (!_showCustomKeyboard && !_isSelectionMode) {
-                            final isKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+                // Terminal view
+                Expanded(
+                  child: terminalState.terminal != null
+                      ? TerminalViewWidget(
+                          terminal: terminalState.terminal!,
+                          controller: terminalState.controller,
+                          onResize: _handleResize,
+                          onInput: _handleInput,
+                          focusNode: _focusNode,
+                          ctrlActive: _ctrlActive,
+                          altActive: _altActive,
+                          shiftActive: _shiftActive,
+                          onTap: () {
+                            if (!_showCustomKeyboard && !_isSelectionMode) {
+                              final isKeyboardVisible =
+                                  MediaQuery.of(context).viewInsets.bottom > 0;
 
-                            if (!isKeyboardVisible) {
-                              // If keyboard is hidden, ensure we cycle focus to force OS to show it
-                              if (_focusNode.hasFocus) {
-                                _focusNode.unfocus();
-                                Future.delayed(const Duration(milliseconds: 50), () {
-                                  if (mounted) {
-                                    _focusNode.requestFocus();
-                                    SystemChannels.textInput.invokeMethod('TextInput.show');
-                                  }
-                                });
+                              if (!isKeyboardVisible) {
+                                if (_focusNode.hasFocus) {
+                                  _focusNode.unfocus();
+                                  Future.delayed(
+                                    const Duration(milliseconds: 50),
+                                    () {
+                                      if (mounted) {
+                                        _focusNode.requestFocus();
+                                        SystemChannels.textInput.invokeMethod(
+                                          'TextInput.show',
+                                        );
+                                      }
+                                    },
+                                  );
+                                } else {
+                                  _focusNode.requestFocus();
+                                  SystemChannels.textInput.invokeMethod(
+                                    'TextInput.show',
+                                  );
+                                }
                               } else {
-                                _focusNode.requestFocus();
-                                SystemChannels.textInput.invokeMethod('TextInput.show');
+                                if (!_focusNode.hasFocus) {
+                                  _focusNode.requestFocus();
+                                }
+                                SystemChannels.textInput.invokeMethod(
+                                  'TextInput.show',
+                                );
                               }
-                            } else {
-                              // If keyboard is already visible, just ensure focus is maintained
-                              // without unfocusing, which prevents the keyboard from hiding.
-                              if (!_focusNode.hasFocus) {
-                                _focusNode.requestFocus();
-                              }
-                              SystemChannels.textInput.invokeMethod('TextInput.show');
                             }
-                          }
-                        },
-                        onModifiersReset: () {
-                          setState(() {
-                            _ctrlActive = false;
-                            _altActive = false;
-                            _shiftActive = false;
-                          });
-                        },
-                      ),
-                    )
-                  : const Center(child: CircularProgressIndicator()),
+                          },
+                          onModifiersReset: () {
+                            setState(() {
+                              _ctrlActive = false;
+                              _altActive = false;
+                              _shiftActive = false;
+                            });
+                          },
+                        )
+                      : const Center(child: CircularProgressIndicator()),
+                ),
+
+                // Accessory Bar (for native keyboard)
+                if (!_showCustomKeyboard &&
+                    (isNativeKeyboardVisible || _isSelectionMode))
+                  TerminalAccessoryBar(
+                    onKeyPressed: _handleInput,
+                    onToggleKeyboard: () {
+                      _focusNode.unfocus();
+                      SystemChannels.textInput.invokeMethod('TextInput.hide');
+                    },
+                    isCtrlActive: _ctrlActive,
+                    isAltActive: _altActive,
+                    isShiftActive: _shiftActive,
+                    onModifierTap: (mod) {
+                      setState(() {
+                        if (mod == 'CTRL') _ctrlActive = !_ctrlActive;
+                        if (mod == 'ALT') _altActive = !_altActive;
+                        if (mod == 'SHIFT') _shiftActive = !_shiftActive;
+                      });
+                    },
+                  ),
+
+                // Custom virtual keyboard
+                if (_showCustomKeyboard)
+                  MobileKeyboard(
+                    onKeyPressed: _handleInput,
+                    onClose: () {
+                      setState(() {
+                        _showCustomKeyboard = false;
+                      });
+                    },
+                  ),
+              ],
             ),
 
-            // Accessory Bar (for native keyboard)
-            if (!_showCustomKeyboard && (isNativeKeyboardVisible || _isSelectionMode))
-              TerminalAccessoryBar(
-                onKeyPressed: _handleInput,
-                onToggleKeyboard: () {
-                  _focusNode.unfocus();
-                  SystemChannels.textInput.invokeMethod('TextInput.hide');
-                },
-                isCtrlActive: _ctrlActive,
-                isAltActive: _altActive,
-                isShiftActive: _shiftActive,
-                onModifierTap: (mod) {
-                  setState(() {
-                    if (mod == 'CTRL') _ctrlActive = !_ctrlActive;
-                    if (mod == 'ALT') _altActive = !_altActive;
-                    if (mod == 'SHIFT') _shiftActive = !_shiftActive;
-                  });
-                },
-              ),
-
-            // Custom virtual keyboard
-            if (_showCustomKeyboard)
-              MobileKeyboard(
-                onKeyPressed: _handleInput,
-                onClose: () {
-                  setState(() {
-                    _showCustomKeyboard = false;
-                  });
-                },
-              ),
+            // Floating Voice Button
+            FutureBuilder<SharedPreferences>(
+              future: SharedPreferences.getInstance(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const SizedBox.shrink();
+                return FloatingVoiceButton(
+                  prefs: snapshot.data!,
+                  isRecording: terminalState.isRecording,
+                  isTranscribing: terminalState.isTranscribing,
+                  recordingDuration: terminalState.recordingDuration,
+                  onPressed: () => _handleVoiceButton(terminalState),
+                );
+              },
+            ),
           ],
         ),
       ),

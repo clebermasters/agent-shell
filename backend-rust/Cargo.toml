@@ -58,11 +58,15 @@ bytes = "1.5"
 # SIMD UTF-8 validation
 simdutf8 = "0.1"
 
+# System calls for process info
+libc = "0.2"
+
 # Async streams
 futures = "0.3"
 
 # File watching (inotify on Linux)
 notify = { version = "6.1", features = ["macos_fsevent"] }
+rusqlite = { version = "0.38.0", features = ["bundled"] }
 
 # For audio streaming (optional, can shell out to ffmpeg instead)
 # cpal = { version = "0.15", optional = true }

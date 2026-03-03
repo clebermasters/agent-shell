@@ -51,14 +51,14 @@
         <div
           v-for="(msg, msgIdx) in messages"
           :key="msgIdx"
-          class="chat-message rounded-lg px-4 py-3"
+          class="chat-message rounded-xl px-4 py-3 shadow-sm"
           :class="msg.role === 'user' ? 'chat-message--user' : 'chat-message--assistant'"
         >
           <!-- Message header -->
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-medium" :style="msg.role === 'user'
-              ? 'color: var(--accent-primary)'
-              : 'color: var(--accent-success)'">
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full" :style="msg.role === 'user'
+              ? 'color: #0369a1; background: rgba(14, 165, 233, 0.15)'
+              : 'color: #047857; background: rgba(16, 185, 129, 0.14)'">
               {{ msg.role === 'user' ? 'You' : 'Assistant' }}
             </span>
             <span v-if="msg.timestamp" class="text-xs" style="color: var(--text-tertiary)">
@@ -77,14 +77,18 @@
 
             <!-- Tool call block -->
             <div v-else-if="block.type === 'tool_call'" class="tool-card rounded border"
-                 style="border-color: var(--border-primary); background: var(--bg-secondary)">
+                 style="border-color: rgba(245, 158, 11, 0.45); background: rgba(245, 158, 11, 0.08)">
               <button
                 class="w-full flex items-center px-3 py-2 text-left text-sm"
                 @click="toggleBlock(msgIdx, blockIdx)"
               >
                 <span class="mr-2 text-xs flex-shrink-0">{{ getToolIcon(block.name) }}</span>
-                <span class="font-medium mr-2" style="color: var(--accent-primary)">{{ block.name }}</span>
+                <span class="font-semibold mr-2" style="color: #b45309">{{ block.name }}</span>
                 <span class="text-xs truncate flex-1" style="color: var(--text-secondary)">{{ block.summary }}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded mr-2 flex-shrink-0"
+                      style="background: rgba(245, 158, 11, 0.2); color: #b45309">
+                  CALL
+                </span>
                 <span class="ml-2 text-xs transition-transform flex-shrink-0"
                       :class="{ 'rotate-90': isExpanded(msgIdx, blockIdx) }"
                       style="color: var(--text-tertiary)">
@@ -99,12 +103,22 @@
 
             <!-- Tool result block -->
             <div v-else-if="block.type === 'tool_result'" class="tool-card rounded border ml-4"
-                 style="border-color: var(--border-secondary); background: var(--bg-secondary)">
+                 style="border-color: rgba(14, 165, 233, 0.45); background: rgba(14, 165, 233, 0.08)">
               <button
                 class="w-full flex items-center px-3 py-2 text-left text-sm"
                 @click="toggleBlock(msgIdx, blockIdx)"
               >
-                <span class="text-xs truncate flex-1" style="color: var(--text-secondary)">{{ block.summary }}</span>
+                <span class="mr-2 text-xs flex-shrink-0">{{ getToolIcon(block.toolName) }}</span>
+                <span class="font-semibold mr-2" style="color: #0369a1">
+                  {{ block.toolName || 'Tool Result' }}
+                </span>
+                <span class="text-xs truncate flex-1" style="color: var(--text-secondary)">
+                  {{ block.summary }}
+                </span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded mr-2 flex-shrink-0"
+                      style="background: rgba(14, 165, 233, 0.18); color: #0369a1">
+                  RESULT
+                </span>
                 <span class="ml-2 text-xs transition-transform flex-shrink-0"
                       :class="{ 'rotate-90': isExpanded(msgIdx, blockIdx) }"
                       style="color: var(--text-tertiary)">
@@ -436,24 +450,27 @@ watch(
 <style scoped>
 .chat-message {
   border-left: 3px solid transparent;
+  border: 1px solid var(--border-primary);
+  backdrop-filter: blur(2px);
 }
 
 .chat-message--user {
-  border-left-color: var(--accent-primary);
-  background: rgba(88, 166, 255, 0.04);
+  border-left-color: #0ea5e9;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.14), rgba(2, 132, 199, 0.05));
 }
 
 .chat-message--assistant {
-  border-left-color: var(--accent-success);
-  background: rgba(63, 185, 80, 0.04);
+  border-left-color: #10b981;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.13), rgba(5, 150, 105, 0.05));
 }
 
 .tool-card {
-  transition: background 0.15s;
+  transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 
 .tool-card:hover {
-  background: var(--bg-tertiary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(2, 6, 23, 0.15);
 }
 
 .tool-input-pre,

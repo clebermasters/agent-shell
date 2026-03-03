@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:ui';
 import 'package:xterm/xterm.dart';
 import 'package:volume_key_board/volume_key_board.dart';
 
@@ -35,24 +36,44 @@ class TerminalViewWidget extends StatefulWidget {
   State<TerminalViewWidget> createState() => _TerminalViewWidgetState();
 }
 
-class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBindingObserver {
+class _TerminalViewWidgetState extends State<TerminalViewWidget>
+    with WidgetsBindingObserver {
   double _fontSize = 14.0;
   bool _initialized = false;
   int _lastCols = 0;
   int _lastRows = 0;
-  
+
   late FocusNode _wrapperFocusNode;
   late TextEditingController _inputController;
 
   final Map<String, String> _shiftMap = {
-    '1': '!', '2': '@', '3': '#', '4': '\$', '5': '%',
-    '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
-    '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|',
-    ';': ':', '\'': '"', ',': '<', '.': '>', '/': '?',
+    '1': '!',
+    '2': '@',
+    '3': '#',
+    '4': '\$',
+    '5': '%',
+    '6': '^',
+    '7': '&',
+    '8': '*',
+    '9': '(',
+    '0': ')',
+    '-': '_',
+    '=': '+',
+    '[': '{',
+    ']': '}',
+    '\\': '|',
+    ';': ':',
+    '\'': '"',
+    ',': '<',
+    '.': '>',
+    '/': '?',
     '`': '~',
   };
 
+  final ScrollController _scrollController = ScrollController();
   Offset? _pointerDownPos;
+  bool _isDragging = false;
+  double _dragStartPixels = 0;
 
   @override
   void initState() {
@@ -75,11 +96,12 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
 
   @override
   void dispose() {
-    widget.terminal.removeListener(_onTerminalChange);
+    _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
+    VolumeKeyBoard.instance.removeListener();
+    widget.terminal.removeListener(_onTerminalChange);
     _wrapperFocusNode.dispose();
     _inputController.dispose();
-    VolumeKeyBoard.instance.removeListener();
     super.dispose();
   }
 
@@ -184,37 +206,195 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
 
   void _onKey(RawKeyEvent event) {
     if (event is! RawKeyDownEvent) return;
-    
-    // In selection mode, we might want to allow some keys, 
-    // but for now, we keep it simple.
-    if (widget.isSelectionMode) return; 
+
+    if (widget.isSelectionMode) return;
 
     final key = event.logicalKey;
     String? sequence;
+    String finalData = '';
+    bool wasModified = false;
 
-    if (key == LogicalKeyboardKey.backspace) sequence = '\x7f';
-    else if (key == LogicalKeyboardKey.tab) sequence = '\t';
-    else if (key == LogicalKeyboardKey.escape) sequence = '\x1b';
-    else if (key == LogicalKeyboardKey.arrowUp) sequence = '\x1b[A';
-    else if (key == LogicalKeyboardKey.arrowDown) sequence = '\x1b[B';
-    else if (key == LogicalKeyboardKey.arrowLeft) sequence = '\x1b[D';
-    else if (key == LogicalKeyboardKey.arrowRight) sequence = '\x1b[C';
-    else if (key == LogicalKeyboardKey.home) sequence = '\x1b[H';
-    else if (key == LogicalKeyboardKey.end) sequence = '\x1b[F';
-    else if (key == LogicalKeyboardKey.pageUp) sequence = '\x1b[5~';
-    else if (key == LogicalKeyboardKey.pageDown) sequence = '\x1b[6~';
-    else if (key == LogicalKeyboardKey.delete) sequence = '\x1b[3~';
+    // Handle CTRL + letter combinations (e.g., CTRL+C = \x03)
+    if (event.isControlPressed) {
+      // Get the key label
+      final keyLabel = key.keyLabel;
+      if (keyLabel.isNotEmpty && keyLabel.length == 1) {
+        final char = keyLabel.toUpperCase();
+        final code = char.codeUnitAt(0);
+        // A-Z = 65-90, convert to Ctrl+A = 1, Ctrl+B = 2, etc.
+        if (code >= 65 && code <= 90) {
+          finalData = String.fromCharCode(code - 64);
+          widget.onInput(finalData);
+          return;
+        }
+        // CTRL+Space = \x00
+        if (key == LogicalKeyboardKey.space) {
+          widget.onInput('\x00');
+          return;
+        }
+        // CTRL+\ = \x1c (FS)
+        // CTRL+] = \x1d (GS)
+        // CTRL+^ = \x1e (RS)
+        // CTRL+_ = \x1f (US)
+        if (key == LogicalKeyboardKey.backslash) {
+          widget.onInput('\x1c');
+          return;
+        }
+        if (key == LogicalKeyboardKey.bracketRight) {
+          if (event.isShiftPressed) {
+            widget.onInput('\x1e'); // CTRL+^
+          } else {
+            widget.onInput('\x1d'); // CTRL+]
+          }
+          return;
+        }
+        if (key == LogicalKeyboardKey.minus && event.isShiftPressed) {
+          widget.onInput('\x1f'); // CTRL+_
+          return;
+        }
+        // For other CTRL+key combinations, try to extract the character
+        if (code >= 97 && code <= 122) {
+          // a-z
+          finalData = String.fromCharCode(code - 96);
+          widget.onInput(finalData);
+          return;
+        }
+      }
+      // Handle other special keys with CTRL
+      if (key == LogicalKeyboardKey.backspace) {
+        widget.onInput('\x7f'); // CTRL+?
+        return;
+      }
+      if (key == LogicalKeyboardKey.escape) {
+        widget.onInput('\x1b'); // CTRL+[
+        return;
+      }
+      if (key == LogicalKeyboardKey.enter) {
+        widget.onInput('\x0d'); // CTRL+M
+        return;
+      }
+      if (key == LogicalKeyboardKey.tab) {
+        widget.onInput('\x09'); // CTRL+I
+        return;
+      }
+      if (key == LogicalKeyboardKey.delete) {
+        widget.onInput('\x1b[3~'); // CTRL+Delete - send as escape sequence
+        return;
+      }
+    }
+
+    // Handle ALT + key combinations
+    if (event.isAltPressed) {
+      // First, get the base sequence
+      if (key == LogicalKeyboardKey.backspace)
+        sequence = '\x7f';
+      else if (key == LogicalKeyboardKey.tab)
+        sequence = '\t';
+      else if (key == LogicalKeyboardKey.escape)
+        sequence = '\x1b';
+      else if (key == LogicalKeyboardKey.arrowUp)
+        sequence = '\x1b[A';
+      else if (key == LogicalKeyboardKey.arrowDown)
+        sequence = '\x1b[B';
+      else if (key == LogicalKeyboardKey.arrowLeft)
+        sequence = '\x1b[D';
+      else if (key == LogicalKeyboardKey.arrowRight)
+        sequence = '\x1b[C';
+      else if (key == LogicalKeyboardKey.home)
+        sequence = '\x1b[H';
+      else if (key == LogicalKeyboardKey.end)
+        sequence = '\x1b[F';
+      else if (key == LogicalKeyboardKey.pageUp)
+        sequence = '\x1b[5~';
+      else if (key == LogicalKeyboardKey.pageDown)
+        sequence = '\x1b[6~';
+      else if (key == LogicalKeyboardKey.delete)
+        sequence = '\x1b[3~';
+      else {
+        // ALT + printable character
+        final keyLabel = key.keyLabel;
+        if (keyLabel.isNotEmpty && keyLabel.length == 1) {
+          finalData = '\x1b${keyLabel}';
+          widget.onInput(finalData);
+          return;
+        }
+      }
+
+      if (sequence != null) {
+        finalData = '\x1b$sequence';
+        widget.onInput(finalData);
+        return;
+      }
+    }
+
+    // Handle special keys without modifiers
+    if (key == LogicalKeyboardKey.backspace)
+      sequence = '\x7f';
+    else if (key == LogicalKeyboardKey.tab)
+      sequence = '\t';
+    else if (key == LogicalKeyboardKey.escape)
+      sequence = '\x1b';
+    else if (key == LogicalKeyboardKey.arrowUp)
+      sequence = '\x1b[A';
+    else if (key == LogicalKeyboardKey.arrowDown)
+      sequence = '\x1b[B';
+    else if (key == LogicalKeyboardKey.arrowLeft)
+      sequence = '\x1b[D';
+    else if (key == LogicalKeyboardKey.arrowRight)
+      sequence = '\x1b[C';
+    else if (key == LogicalKeyboardKey.home)
+      sequence = '\x1b[H';
+    else if (key == LogicalKeyboardKey.end)
+      sequence = '\x1b[F';
+    else if (key == LogicalKeyboardKey.pageUp)
+      sequence = '\x1b[5~';
+    else if (key == LogicalKeyboardKey.pageDown)
+      sequence = '\x1b[6~';
+    else if (key == LogicalKeyboardKey.delete)
+      sequence = '\x1b[3~';
+    else if (key == LogicalKeyboardKey.enter)
+      sequence = '\r';
+    else if (key == LogicalKeyboardKey.f1)
+      sequence = '\x1bOP';
+    else if (key == LogicalKeyboardKey.f2)
+      sequence = '\x1bOQ';
+    else if (key == LogicalKeyboardKey.f3)
+      sequence = '\x1bOR';
+    else if (key == LogicalKeyboardKey.f4)
+      sequence = '\x1bOS';
+    else if (key == LogicalKeyboardKey.f5)
+      sequence = '\x1b[15~';
+    else if (key == LogicalKeyboardKey.f6)
+      sequence = '\x1b[17~';
+    else if (key == LogicalKeyboardKey.f7)
+      sequence = '\x1b[18~';
+    else if (key == LogicalKeyboardKey.f8)
+      sequence = '\x1b[19~';
+    else if (key == LogicalKeyboardKey.f9)
+      sequence = '\x1b[20~';
+    else if (key == LogicalKeyboardKey.f10)
+      sequence = '\x1b[21~';
+    else if (key == LogicalKeyboardKey.f11)
+      sequence = '\x1b[23~';
+    else if (key == LogicalKeyboardKey.f12)
+      sequence = '\x1b[24~';
+    else if (key == LogicalKeyboardKey.insert)
+      sequence = '\x1b[2~';
+
+    // Handle SHIFT + special keys
+    if (event.isShiftPressed && sequence != null) {
+      if (key == LogicalKeyboardKey.tab) sequence = '\x1b[Z'; // Shift+Tab
+      wasModified = true;
+    }
+
+    // Also handle soft ALT modifier from accessory bar
+    if (widget.altActive && sequence != null) {
+      sequence = '\x1b$sequence';
+      wasModified = true;
+    }
 
     if (sequence != null) {
-      String finalData = sequence;
-      bool wasModified = false;
-
-      if (widget.altActive) {
-        finalData = '\x1b$finalData';
-        wasModified = true;
-      }
-      
-      widget.onInput(finalData);
+      widget.onInput(sequence);
       if (wasModified) widget.onModifiersReset();
     }
   }
@@ -305,29 +485,88 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
                   ),
                 ),
 
-                // Layer 2: TERMINAL VIEW (On top, captures ALL gestures)
+                // Layer 2: TERMINAL VIEW (On top, captures gestures without competing in arena)
                 Listener(
-                  onPointerDown: (e) => _pointerDownPos = e.position,
+                  onPointerDown: (e) {
+                    _pointerDownPos = e.position;
+                    _isDragging = false;
+                    _dragStartPixels = 0.0;
+                  },
+                  onPointerMove: (e) {
+                    if (_pointerDownPos == null) return;
+
+                    final dy = e.position.dy - _pointerDownPos!.dy;
+
+                    // Activate drag if moved more than 18 logical pixels vertically
+                    if (!_isDragging && dy.abs() > 18) {
+                      _isDragging = true;
+                      _dragStartPixels = e.position.dy;
+                    }
+
+                    if (_isDragging) {
+                      // Calculate how many "ticks" of the scroll wheel this drag represents.
+                      // Standard line height is usually around 15-20 pixels.
+                      // Let's trigger a scroll event every 20 pixels of physical drag.
+                      final dragDelta = e.position.dy - _dragStartPixels;
+
+                      if (dragDelta.abs() > 20) {
+                        // Reset the anchor point so we wait for another 20 pixels
+                        _dragStartPixels = e.position.dy;
+
+                        // Terminal mouse reporting uses 1 for middle, 2 for right, 0 for left
+                        // 64 is wheel up, 65 is wheel down (X11 convention)
+                        // In SGR mode format: \e[<button;x;yM
+
+                        // If dy > 0, we are dragging DOWN (which means we want to see UP into history)
+                        // Therefore sending Mouse Wheel UP (64)
+                        final button = dragDelta > 0 ? 64 : 65;
+
+                        // Fake coordinates since it's a global swipe
+                        final x = 1;
+                        final y = 1;
+
+                        final sequence = '\x1b[<$button;$x;${y}M';
+                        widget.terminal.onOutput?.call(sequence);
+                      }
+                    }
+                  },
                   onPointerUp: (e) {
-                    if (_pointerDownPos != null) {
+                    if (_pointerDownPos != null && !_isDragging) {
                       final distance = (e.position - _pointerDownPos!).distance;
-                      // If the pointer moved less than 10 pixels, treat it as a tap
+                      // If NOT dragging and pointer moved less than 10 pixels, treat it as a tap
                       if (distance < 10) {
                         if (widget.onTap != null) widget.onTap!();
                       }
                     }
+                    _pointerDownPos = null;
+                    _isDragging = false;
                   },
                   behavior: HitTestBehavior.translucent,
-                  child: TerminalView(
-                    widget.terminal,
-                    controller: widget.controller,
-                    readOnly: true, // Crucial: xterm.dart shouldn't try to handle focus itself
-                    cursorType: TerminalCursorType.block,
-                    textStyle: TerminalStyle(
-                      fontSize: _fontSize,
-                      fontFamily: 'JetBrains Mono',
+                  child: ScrollConfiguration(
+                    behavior: ScrollConfiguration.of(context).copyWith(
+                      physics: const ClampingScrollPhysics(),
+                      dragDevices: {
+                        PointerDeviceKind.touch,
+                        PointerDeviceKind.mouse,
+                        PointerDeviceKind.trackpad,
+                      },
                     ),
-                    padding: EdgeInsets.zero,
+                    child: TerminalView(
+                      widget.terminal,
+                      scrollController: _scrollController,
+                      controller: widget.controller,
+                      readOnly:
+                          true, // Crucial: xterm.dart shouldn't try to handle focus itself
+                      cursorType: TerminalCursorType.block,
+                      alwaysShowCursor: true,
+                      textStyle: TerminalStyle(
+                        fontSize: _fontSize,
+                        fontFamily: 'JetBrains Mono',
+                      ),
+                      // theme: theme, // Assuming 'theme' is defined elsewhere or needs to be added
+                      onSecondaryTapDown: (details, offset) {},
+                      padding: EdgeInsets.zero,
+                    ),
                   ),
                 ),
 
@@ -335,12 +574,17 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
                 IgnorePointer(
                   child: Stack(
                     children: [
-                      if (widget.ctrlActive || widget.altActive || widget.shiftActive)
+                      if (widget.ctrlActive ||
+                          widget.altActive ||
+                          widget.shiftActive)
                         Positioned(
                           top: 8,
                           right: 8,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.red.withOpacity(0.8),
                               borderRadius: BorderRadius.circular(4),
@@ -360,7 +604,10 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget> with WidgetsBin
                           top: 8,
                           left: 8,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.orange.withOpacity(0.8),
                               borderRadius: BorderRadius.circular(4),

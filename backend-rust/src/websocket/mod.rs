@@ -757,12 +757,14 @@ async fn handle_message(
             {
                 let mut handle_guard = state.chat_log_handle.lock().await;
                 if let Some(handle) = handle_guard.take() {
+                    tracing::info!("Stopping previous chat log watcher");
                     handle.abort();
                 }
             }
 
             let chat_log_handle = state.chat_log_handle.clone();
             let handle = tokio::spawn(async move {
+                tracing::info!("Detecting chat log for session '{}' window {}", session_name, window_index);
                 match crate::chat_log::watcher::detect_log_file(&session_name, window_index).await {
                     Ok((path, tool)) => {
                         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -784,18 +786,28 @@ async fn handle_message(
                         };
 
                         // Forward events to WebSocket
+                        let session_name_owned = session_name.clone();
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
                                 crate::chat_log::ChatLogEvent::History { messages, tool } => {
+                                    tracing::info!("Sending chat history: {} messages for session {}", messages.len(), session_name_owned);
                                     ServerMessage::ChatHistory {
+                                        session_name: session_name_owned.clone(),
+                                        window_index,
                                         messages,
                                         tool: Some(tool),
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::NewMessage { message } => {
-                                    ServerMessage::ChatEvent { message }
+                                    tracing::info!("Sending new chat message: role={} for session {}", message.role, session_name_owned);
+                                    ServerMessage::ChatEvent {
+                                        session_name: session_name_owned.clone(),
+                                        window_index,
+                                        message,
+                                    }
                                 }
                                 crate::chat_log::ChatLogEvent::Error { error } => {
+                                    tracing::warn!("Chat log error: {}", error);
                                     ServerMessage::ChatLogError { error }
                                 }
                             };
@@ -848,6 +860,15 @@ async fn attach_to_session(
         let mut current = state.current_session.lock().await;
         *current = Some(session_name.to_string());
     }
+    // History bootstrap: use an AtomicBool so the blocking reader thread can
+    // see when the async bootstrap task is finished without a Mutex.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let bootstrap_done = Arc::new(AtomicBool::new(false));
+    let bootstrap_done_reader = bootstrap_done.clone();
+    // Bounded live-output queue (256 msgs) — reader enqueues during bootstrap.
+    const QUEUE_CAP: usize = 256;
+    let (live_queue_tx, live_queue_rx) = mpsc::channel::<String>(QUEUE_CAP);
+    let live_queue_tx_clone = live_queue_tx.clone();
     
     // Clean up any existing PTY session first
     let mut pty_guard = state.current_pty.lock().await;
@@ -914,24 +935,23 @@ async fn attach_to_session(
     let child = pair.slave.spawn_command(cmd)?;
     let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> = Arc::new(Mutex::new(child));
     
-    // Set up reader task - DIRECT sending for now to fix the issue
+    // Set up reader task — queues output during bootstrap, then direct-forwards
     let tx_clone = tx.clone();
     let client_id = state.client_id.clone();
     let reader_task = tokio::task::spawn_blocking(move || {
         let mut reader = reader;
-        let mut buffer = vec![0u8; 8192]; // Smaller buffer to prevent overwhelming
+        let mut buffer = vec![0u8; 8192];
         let mut consecutive_errors = 0;
         let mut utf8_decoder = crate::terminal_buffer::Utf8StreamDecoder::new();
         let mut pending_output = String::with_capacity(16384);
         let mut last_send = std::time::Instant::now();
         let mut bytes_since_pause = 0usize;
-        
+
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
                     info!("PTY EOF for client {}", client_id);
-                    // Send any pending output
-                    if !pending_output.is_empty() {
+                    if !pending_output.is_empty() && bootstrap_done_reader.load(Ordering::Relaxed) {
                         let output = ServerMessage::Output { data: pending_output };
                         if let Ok(json) = serde_json::to_string(&output) {
                             let _ = tx_clone.send(BroadcastMessage::Text(Arc::new(json)));
@@ -941,32 +961,47 @@ async fn attach_to_session(
                 }
                 Ok(n) => {
                     consecutive_errors = 0;
-                    
-                    // Decode and accumulate
                     let (text, _) = utf8_decoder.decode_chunk(&buffer[..n]);
                     if !text.is_empty() {
                         pending_output.push_str(&text);
-                        
                         bytes_since_pause += text.len();
-                        
-                        // More aggressive sending for better responsiveness
-                        let should_send = pending_output.len() > 1024 || 
-                                         last_send.elapsed() > std::time::Duration::from_millis(10) ||
-                                         pending_output.contains('\n'); // Send on newlines
-                        
+
+                        let should_send = pending_output.len() > 1024
+                            || last_send.elapsed() > std::time::Duration::from_millis(10)
+                            || pending_output.contains('\n');
+
                         if should_send && !pending_output.is_empty() {
-                            let output = ServerMessage::Output { data: pending_output.clone() };
-                            if let Ok(json) = serde_json::to_string(&output) {
-                                if tx_clone.send(BroadcastMessage::Text(Arc::new(json))).is_err() {
-                                    error!("Client {} disconnected, stopping PTY reader", client_id);
-                                    break;
+                            if bootstrap_done_reader.load(Ordering::Relaxed) {
+                                // Direct path: bootstrap finished
+                                let output = ServerMessage::Output { data: pending_output.clone() };
+                                if let Ok(json) = serde_json::to_string(&output) {
+                                    if tx_clone.send(BroadcastMessage::Text(Arc::new(json))).is_err() {
+                                        error!("Client {} disconnected, stopping PTY reader", client_id);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                // Bootstrap path: queue or overflow to direct
+                                match live_queue_tx_clone.try_send(pending_output.clone()) {
+                                    Ok(_) => {}
+                                    Err(_) => {
+                                        tracing::warn!("[history-bootstrap] queue overflow, switching to direct forward for client {}", client_id);
+                                        bootstrap_done_reader.store(true, Ordering::Relaxed);
+                                        let output = ServerMessage::Output { data: pending_output.clone() };
+                                        if let Ok(json) = serde_json::to_string(&output) {
+                                            if tx_clone.send(BroadcastMessage::Text(Arc::new(json))).is_err() {
+                                                error!("Client {} disconnected, stopping PTY reader", client_id);
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
                             }
+
                             pending_output.clear();
                             last_send = std::time::Instant::now();
-                            
-                            // Flow control: pause if we're sending too much data
-                            if bytes_since_pause > 65536 { // 64KB threshold
+
+                            if bytes_since_pause > 65536 {
                                 std::thread::sleep(std::time::Duration::from_millis(5));
                                 bytes_since_pause = 0;
                             }
@@ -984,13 +1019,13 @@ async fn attach_to_session(
                 }
             }
         }
-        
+
         let disconnected = ServerMessage::Disconnected;
         if let Ok(json) = serde_json::to_string(&disconnected) {
             let _ = tx_clone.send(BroadcastMessage::Text(Arc::new(json)));
         }
     });
-    
+
     let pty_session = PtySession {
         writer: writer.clone(),
         master: Arc::new(Mutex::new(pair.master)),
@@ -998,16 +1033,114 @@ async fn attach_to_session(
         child,
         tmux_session: session_name.to_string(),
     };
-    
+
     *pty_guard = Some(pty_session);
     drop(pty_guard);
-    
-    // Send attached confirmation
+
+    // Send attached confirmation first
     let response = ServerMessage::Attached {
         session_name: session_name.to_string(),
     };
     send_message(tx, response).await?;
-    
+
+    // ── Async bootstrap task ─────────────────────────────────────────────────
+    // Captures tmux scrollback history, streams it in chunks, then flushes
+    // queued live output so nothing is lost or reordered.
+    let tx_bootstrap = tx.clone();
+    let session_owned = session_name.to_string();
+    let window_index_val = *state.current_window.lock().await;
+    let mut live_queue_rx = live_queue_rx;
+
+    tokio::spawn(async move {
+        let window = window_index_val.unwrap_or(0);
+        let bootstrap_start = std::time::Instant::now();
+
+        match tmux::capture_history_above_viewport(&session_owned, window).await {
+            Ok(history_text) if !history_text.is_empty() => {
+                let total_lines = history_text.lines().count() as i64;
+                const CHUNK_SIZE: usize = 24 * 1024;
+                let chunks = tmux::chunk_terminal_stream(&history_text, CHUNK_SIZE);
+                let total_chunks = chunks.len();
+
+                info!(
+                    "[history-bootstrap] captured {} lines in {:.1}ms, {} chunks, {} bytes",
+                    total_lines,
+                    bootstrap_start.elapsed().as_secs_f64() * 1000.0,
+                    total_chunks,
+                    history_text.len()
+                );
+
+                let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryStart {
+                    session_name: session_owned.clone(),
+                    window_index: window,
+                    total_lines,
+                    chunk_size: CHUNK_SIZE,
+                    generated_at: chrono::Utc::now(),
+                }).await;
+
+                for (seq, chunk) in chunks.iter().enumerate() {
+                    let line_count = chunk.lines().count();
+                    let is_last = seq + 1 == total_chunks;
+                    let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryChunk {
+                        session_name: session_owned.clone(),
+                        window_index: window,
+                        seq,
+                        data: chunk.clone(),
+                        line_count,
+                        is_last,
+                    }).await;
+                }
+
+                let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryEnd {
+                    session_name: session_owned.clone(),
+                    window_index: window,
+                    total_lines,
+                    total_chunks,
+                }).await;
+            }
+            Ok(_) => {
+                info!("[history-bootstrap] no scrollback history for {}:{}", session_owned, window);
+                let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryEnd {
+                    session_name: session_owned.clone(),
+                    window_index: window,
+                    total_lines: 0,
+                    total_chunks: 0,
+                }).await;
+            }
+            Err(e) => {
+                tracing::warn!("[history-bootstrap] failed for {}:{} — {}", session_owned, window, e);
+                let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryEnd {
+                    session_name: session_owned.clone(),
+                    window_index: window,
+                    total_lines: 0,
+                    total_chunks: 0,
+                }).await;
+            }
+        }
+
+        // Signal reader to switch to direct mode
+        bootstrap_done.store(true, Ordering::Relaxed);
+        // Drop sender so the receiver loop terminates
+        drop(live_queue_tx);
+
+        // Flush live output that arrived during bootstrap
+        let mut flushed = 0usize;
+        while let Some(data) = live_queue_rx.recv().await {
+            flushed += data.len();
+            let output = ServerMessage::Output { data };
+            if let Ok(json) = serde_json::to_string(&output) {
+                if tx_bootstrap.send(BroadcastMessage::Text(Arc::new(json))).is_err() {
+                    break;
+                }
+            }
+        }
+
+        if flushed > 0 {
+            info!("[history-bootstrap] flushed {} bytes of queued live output", flushed);
+        }
+        info!("[history-bootstrap] complete in {:.1}ms", bootstrap_start.elapsed().as_secs_f64() * 1000.0);
+    });
+
     Ok(())
 }
 

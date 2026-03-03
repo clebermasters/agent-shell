@@ -17,17 +17,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _obscureApiKey = true;
   bool _isSaving = false;
   String? _savedMessage;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadApiKey();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadApiKey();
+    });
   }
 
   Future<void> _loadApiKey() async {
     final prefs = ref.read(sharedPreferencesProvider);
     var apiKey = prefs.getString(AppConfig.keyOpenAiApiKey);
-    if (apiKey != null) {
+    if (apiKey != null && apiKey.isNotEmpty) {
       _apiKeyController.text = apiKey;
     } else if (BuildConfig.defaultApiKey.isNotEmpty) {
       // Use build-time default if no saved key, and save it to SharedPreferences
@@ -36,6 +39,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         AppConfig.keyOpenAiApiKey,
         BuildConfig.defaultApiKey,
       );
+    }
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 

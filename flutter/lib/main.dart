@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/theme/app_theme.dart';
 import 'core/config/app_config.dart';
+import 'core/config/build_config.dart';
 import 'core/providers.dart';
 import 'core/services/background_service.dart';
 import 'features/debug/screens/debug_screen.dart';
@@ -13,7 +14,14 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final prefs = await SharedPreferences.getInstance();
-  
+
+  // Initialize build-time API key if not already set
+  final existingApiKey = prefs.getString(AppConfig.keyOpenAiApiKey);
+  if ((existingApiKey == null || existingApiKey.isEmpty) &&
+      BuildConfig.defaultApiKey.isNotEmpty) {
+    await prefs.setString(AppConfig.keyOpenAiApiKey, BuildConfig.defaultApiKey);
+  }
+
   await initializeBackgroundService();
 
   runApp(

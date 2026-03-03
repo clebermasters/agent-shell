@@ -277,10 +277,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           fontFamily: 'monospace',
           fontSize: 13,
         ),
-        codeblockDecoration: BoxDecoration(
-          color: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(8),
-        ),
+        codeblockDecoration: const BoxDecoration(),
         codeblockPadding: const EdgeInsets.all(12),
         blockquote: TextStyle(
           color: textColor.withValues(alpha: 0.8),

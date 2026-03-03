@@ -589,7 +589,7 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
       language = element.attributes['class']!.replaceFirst('language-', '');
     }
 
-    final bgColor = isDark ? const Color(0xFF0F172A) : Colors.grey.shade100;
+    final bgColor = isDark ? const Color(0xFF282C34) : Colors.grey.shade100;
     final codeColor = isDark ? Colors.grey.shade300 : Colors.grey.shade800;
 
     return Container(
@@ -654,21 +654,18 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
                 ],
               ),
             ),
-          Container(
+          Padding(
             padding: const EdgeInsets.all(12),
             child: language.isNotEmpty
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: HighlightView(
-                      code,
-                      language: _mapLanguage(language),
-                      theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
-                      padding: const EdgeInsets.all(8),
-                      textStyle: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                        height: 1.5,
-                      ),
+                ? HighlightView(
+                    code,
+                    language: _mapLanguage(language),
+                    theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
+                    padding: EdgeInsets.zero,
+                    textStyle: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      height: 1.5,
                     ),
                   )
                 : SelectableText(

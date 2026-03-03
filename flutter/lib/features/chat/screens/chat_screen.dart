@@ -364,60 +364,74 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final isRecording = chatState.isRecording;
     final isTranscribing = chatState.isTranscribing;
     final transcribedText = chatState.transcribedText;
+    final hasText = _controller.text.trim().isNotEmpty;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: surfaceColor,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, -2),
           ),
         ],
       ),
       child: SafeArea(
+        top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             if (isRecording || isTranscribing)
               _buildRecordingIndicator(chatState, isRecording, isTranscribing),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Expanded(
                   child: Container(
+                    constraints: const BoxConstraints(
+                      minHeight: 48,
+                      maxHeight: 120,
+                    ),
                     decoration: BoxDecoration(
                       color: isDarkMode
-                          ? const Color(0xFF334155)
+                          ? const Color(0xFF1E293B)
                           : const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(24),
                       border: Border.all(
-                        color: isDarkMode
-                            ? const Color(0xFF475569)
-                            : const Color(0xFFE2E8F0),
+                        color: hasText
+                            ? const Color(0xFF6366F1)
+                            : (isDarkMode
+                                  ? const Color(0xFF334155)
+                                  : const Color(0xFFE2E8F0)),
+                        width: hasText ? 1.5 : 1,
                       ),
                     ),
                     child: TextField(
                       controller: _controller,
                       maxLines: 4,
                       minLines: 1,
+                      textInputAction: TextInputAction.newline,
                       decoration: InputDecoration(
-                        hintText: isRecording
-                            ? 'Recording...'
-                            : 'Type a message...',
+                        hintText: isRecording ? 'Recording...' : 'Message...',
                         hintStyle: TextStyle(
                           color: isDarkMode
-                              ? Colors.grey.shade500
+                              ? Colors.grey.shade600
                               : const Color(0xFF94A3B8),
+                          fontSize: 15,
                         ),
                         border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(
+                        contentPadding: EdgeInsets.symmetric(
                           horizontal: 20,
-                          vertical: 12,
+                          vertical: 14,
                         ),
                       ),
-                      style: TextStyle(fontSize: 15, color: textPrimary),
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: textPrimary,
+                        height: 1.4,
+                      ),
                       onChanged: (_) => setState(() {}),
                       onSubmitted: (_) => _sendMessage(),
                     ),
@@ -425,8 +439,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ),
                 const SizedBox(width: 8),
                 _buildMicButton(isRecording, isTranscribing),
-                const SizedBox(width: 8),
-                _buildSendButton(),
+                if (!isRecording && !isTranscribing) ...[
+                  const SizedBox(width: 4),
+                  _buildSendButton(),
+                ],
               ],
             ),
           ],

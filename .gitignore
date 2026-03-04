@@ -126,4 +126,4 @@ tramp
 node_modules/
 dist/
 *.apk
-opencode.json
+opencode.jsonbackend-rust/chat_files/

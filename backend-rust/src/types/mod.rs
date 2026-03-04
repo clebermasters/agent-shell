@@ -81,14 +81,30 @@ pub struct CronJob {
     pub schedule: String,
     pub command: String,
     pub enabled: bool,
-    #[serde(alias = "lastRun", default, deserialize_with = "deserialize_optional_datetime")]
+    #[serde(
+        alias = "lastRun",
+        default,
+        deserialize_with = "deserialize_optional_datetime"
+    )]
     pub last_run: Option<DateTime<Utc>>,
-    #[serde(alias = "nextRun", default, deserialize_with = "deserialize_optional_datetime")]
+    #[serde(
+        alias = "nextRun",
+        default,
+        deserialize_with = "deserialize_optional_datetime"
+    )]
     pub next_run: Option<DateTime<Utc>>,
     pub output: Option<String>,
-    #[serde(alias = "createdAt", default, deserialize_with = "deserialize_optional_datetime")]
+    #[serde(
+        alias = "createdAt",
+        default,
+        deserialize_with = "deserialize_optional_datetime"
+    )]
     pub created_at: Option<DateTime<Utc>>,
-    #[serde(alias = "updatedAt", default, deserialize_with = "deserialize_optional_datetime")]
+    #[serde(
+        alias = "updatedAt",
+        default,
+        deserialize_with = "deserialize_optional_datetime"
+    )]
     pub updated_at: Option<DateTime<Utc>>,
     pub environment: Option<HashMap<String, String>>,
     #[serde(alias = "logOutput")]
@@ -99,9 +115,7 @@ pub struct CronJob {
     pub tmux_session: Option<String>,
 }
 
-fn deserialize_optional_datetime<'de, D>(
-    deserializer: D,
-) -> Result<Option<DateTime<Utc>>, D::Error>
+fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -249,6 +263,14 @@ pub enum WebSocketMessage {
         window_index: u32,
     },
     UnwatchChatLog,
+    // Chat file sending
+    SendFileToChat {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        file: FileAttachment,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +278,14 @@ pub enum WebSocketMessage {
 pub enum AudioAction {
     Start,
     Stop,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileAttachment {
+    pub filename: String,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    pub data: String, // base64 encoded
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -400,6 +430,13 @@ pub enum ServerMessage {
     },
     ChatLogError {
         error: String,
+    },
+    ChatFileMessage {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        message: crate::chat_log::ChatMessage,
     },
     // Terminal history bootstrap
     TerminalHistoryStart {

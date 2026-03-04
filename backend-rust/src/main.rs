@@ -28,6 +28,7 @@ struct TmuxInput {
 }
 
 mod audio;
+mod chat_file_storage;
 mod chat_log;
 mod cron;
 mod dotfiles;
@@ -57,6 +58,7 @@ pub struct AppState {
     pub enable_audio_logs: bool,
     pub broadcast_tx: mpsc::UnboundedSender<ServerMessage>,
     pub client_manager: Arc<websocket::ClientManager>,
+    pub chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
 }
 
 #[tokio::main]
@@ -96,6 +98,9 @@ async fn main() -> Result<()> {
         enable_audio_logs: args.audio,
         broadcast_tx: broadcast_tx.clone(),
         client_manager,
+        chat_file_storage: Arc::new(chat_file_storage::ChatFileStorage::new(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        )),
     };
     
     // Initialize CRON manager

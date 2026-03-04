@@ -683,24 +683,40 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         return;
       }
 
-      // Use platform-specific opener
       if (Platform.isAndroid) {
-        // For Android, use intent to open file
+        // Use content provider approach for Android
+        // Copy to cache and use file provider
+        final cacheDir = await getTemporaryDirectory();
+        final cacheFile = File('${cacheDir.path}/${filePath.split('/').last}');
+        await file.copy(cacheFile.path);
+
         final result = await Process.run('am', [
           'start',
           '-a',
           'android.intent.action.VIEW',
+          '--user',
+          '0',
           '-d',
-          'file://$filePath',
+          'content://${cacheFile.path}',
           '-t',
           mimeType ?? 'application/octet-stream',
         ]);
 
-        if (result.exitCode != 0 && mounted) {
-          // Fallback: just show file location
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('File saved to: $filePath')));
+        if (result.exitCode != 0) {
+          // Try alternative with MIME type only
+          final result2 = await Process.run('am', [
+            'start',
+            '-a',
+            'android.intent.action.VIEW',
+            '-d',
+            'file://$filePath',
+          ]);
+
+          if (result2.exitCode != 0 && mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('Saved to: $filePath')));
+          }
         }
       }
     } catch (e) {

@@ -202,10 +202,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
         messages[messages.length - 1] = lastMsg.copyWith(
           blocks: [...lastMsg.blocks, ...msg.blocks],
           content: _mergeContent(lastMsg.content, msg.content),
-          isStreaming: true,
         );
       } else {
-        messages.add(msg.copyWith(isStreaming: true));
+        messages.add(msg);
       }
 
       state = state.copyWith(messages: messages);
@@ -357,9 +356,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void addUserMessage(String content) {
-    // Clear streaming state when user sends a message
-    setStreaming(false);
-
     final message = ChatMessage(
       id: _uuid.v4(),
       type: ChatMessageType.user,

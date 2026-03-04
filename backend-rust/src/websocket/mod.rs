@@ -109,6 +109,7 @@ struct WsState {
     message_tx: mpsc::UnboundedSender<BroadcastMessage>,
     chat_log_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
+    client_manager: Arc<ClientManager>,
 }
 
 pub async fn ws_handler(
@@ -140,6 +141,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         message_tx: tx.clone(),
         chat_log_handle: Arc::new(Mutex::new(None)),
         chat_file_storage: state.chat_file_storage.clone(),
+        client_manager: state.client_manager.clone(),
     };
     
     // Clone client_id for the spawned task
@@ -886,9 +888,7 @@ async fn handle_message(
                 message: chat_message,
             };
             
-            if let Err(e) = send_message(&state.message_tx, msg).await {
-                error!("Failed to broadcast file message: {}", e);
-            }
+            state.client_manager.broadcast(msg).await;
         }
     }
     

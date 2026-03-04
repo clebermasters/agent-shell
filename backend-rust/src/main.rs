@@ -128,6 +128,23 @@ async fn main() -> Result<()> {
                 format!("{{\"clients\":{}}}", count)
             }
         }))
+        // API: Get chat file by ID
+        .route("/api/chat/files/:id", get({
+            let storage = state.chat_file_storage.clone();
+            move |axum::extract::Path(id): axum::extract::Path<String>| async move {
+                if let Some(path) = storage.get_path(&id) {
+                    if let Ok(data) = std::fs::read(&path) {
+                        let mime = storage.get_mime_type(&id).unwrap_or_else(|| "application/octet-stream".to_string());
+                        let headers = [
+                            (axum::http::header::CONTENT_TYPE, mime.to_string()),
+                            (axum::http::header::CACHE_CONTROL, "public, max-age=3600".to_string()),
+                        ];
+                        return Ok((headers, data));
+                    }
+                }
+                Err(axum::http::StatusCode::NOT_FOUND)
+            }
+        }))
         // API: Send input directly to tmux session
         .route("/api/tmux/input", axum::routing::post(|Json(payload): Json<TmuxInput>| async move {
             let session = payload.session;

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -6,18 +7,21 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../../data/models/chat_message.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
   final ChatMessage message;
   final bool showTimestamp;
   final bool isDarkMode;
+  final String? baseUrl;
 
   const ProfessionalMessageBubble({
     super.key,
     required this.message,
     this.showTimestamp = true,
     this.isDarkMode = false,
+    this.baseUrl,
   });
 
   @override
@@ -396,6 +400,10 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   }
 
   Widget _buildImageBlock(ChatBlock block, Color textColor) {
+    final imageUrl = widget.baseUrl != null && block.id != null
+        ? '${widget.baseUrl}/api/chat/files/${block.id}'
+        : null;
+
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: GestureDetector(
@@ -407,13 +415,33 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
             child: Container(
               constraints: const BoxConstraints(maxWidth: 200, maxHeight: 200),
               color: isDark ? Colors.grey[800] : Colors.grey[200],
-              child: Center(
-                child: Icon(
-                  Icons.image,
-                  size: 48,
-                  color: isDark ? Colors.grey[600] : Colors.grey[400],
-                ),
-              ),
+              child: imageUrl != null
+                  ? CachedNetworkImage(
+                      imageUrl: imageUrl,
+                      fit: BoxFit.cover,
+                      width: 200,
+                      height: 200,
+                      placeholder: (context, url) => Center(
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: isDark ? Colors.grey[600] : Colors.grey[400],
+                        ),
+                      ),
+                      errorWidget: (context, url, error) => Center(
+                        child: Icon(
+                          Icons.broken_image,
+                          size: 48,
+                          color: isDark ? Colors.grey[600] : Colors.grey[400],
+                        ),
+                      ),
+                    )
+                  : Center(
+                      child: Icon(
+                        Icons.image,
+                        size: 48,
+                        color: isDark ? Colors.grey[600] : Colors.grey[400],
+                      ),
+                    ),
             ),
           ),
         ),
@@ -423,6 +451,11 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
   void _showImageFullScreen(String? imageId) {
     if (imageId == null) return;
+
+    final imageUrl = widget.baseUrl != null
+        ? '${widget.baseUrl}/api/chat/files/$imageId'
+        : null;
+
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => Scaffold(
@@ -434,9 +467,25 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           body: Center(
             child: Hero(
               tag: 'image_$imageId',
-              child: InteractiveViewer(
-                child: Icon(Icons.image, size: 200, color: Colors.grey[700]),
-              ),
+              child: imageUrl != null
+                  ? CachedNetworkImage(
+                      imageUrl: imageUrl,
+                      fit: BoxFit.contain,
+                      placeholder: (context, url) =>
+                          const CircularProgressIndicator(),
+                      errorWidget: (context, url, error) => Icon(
+                        Icons.broken_image,
+                        size: 200,
+                        color: Colors.grey[700],
+                      ),
+                    )
+                  : InteractiveViewer(
+                      child: Icon(
+                        Icons.image,
+                        size: 200,
+                        color: Colors.grey[700],
+                      ),
+                    ),
             ),
           ),
         ),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -40,7 +41,16 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   late Animation<Offset> _slideAnimation;
   final AudioPlayer _audioPlayer = AudioPlayer();
   final Map<String, String> _audioCachePaths = {};
+  StreamSubscription<PlayerState>? _playerStateSubscription;
+  StreamSubscription<Duration?>? _durationSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
+
   String? _playingBlockId;
+  Duration _audioPosition = Duration.zero;
+  Duration? _audioDuration;
+  bool _isAudioPlaying = false;
+  bool _isAudioLoading = false;
+  bool _isAudioCompleted = false;
 
   bool get isDark => widget.isDarkMode;
 
@@ -62,11 +72,46 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           ),
         );
     _animationController.forward();
+
+    _playerStateSubscription = _audioPlayer.playerStateStream.listen((state) {
+      if (!mounted) return;
+      setState(() {
+        _isAudioPlaying = state.playing;
+        _isAudioLoading =
+            state.processingState == ProcessingState.loading ||
+            state.processingState == ProcessingState.buffering;
+        if (state.processingState == ProcessingState.completed) {
+          _isAudioCompleted = true;
+          if (_audioDuration != null) {
+            _audioPosition = _audioDuration!;
+          }
+        } else if (state.processingState == ProcessingState.ready) {
+          _isAudioCompleted = false;
+        }
+      });
+    });
+
+    _durationSubscription = _audioPlayer.durationStream.listen((duration) {
+      if (!mounted || duration == null) return;
+      setState(() {
+        _audioDuration = duration;
+      });
+    });
+
+    _positionSubscription = _audioPlayer.positionStream.listen((position) {
+      if (!mounted) return;
+      setState(() {
+        _audioPosition = position;
+      });
+    });
   }
 
   @override
   void dispose() {
     _animationController.dispose();
+    _playerStateSubscription?.cancel();
+    _durationSubscription?.cancel();
+    _positionSubscription?.cancel();
     _audioPlayer.dispose();
     super.dispose();
   }
@@ -502,10 +547,19 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   }
 
   Widget _buildAudioBlock(ChatBlock block, Color textColor) {
+    final blockId = block.id;
     final audioUrl = widget.baseUrl != null && block.id != null
         ? '${widget.baseUrl}/api/chat/files/${block.id}'
         : null;
-    final isThisPlaying = _playingBlockId == block.id;
+    final isActiveBlock = blockId != null && _playingBlockId == blockId;
+    final fallbackDuration = _durationFromSeconds(block.durationSeconds);
+    final totalDuration = isActiveBlock
+        ? (_audioDuration ?? fallbackDuration)
+        : fallbackDuration;
+    final currentPosition = isActiveBlock ? _audioPosition : Duration.zero;
+    final clampedPosition = _clampDuration(currentPosition, totalDuration);
+    final totalMillis = (totalDuration?.inMilliseconds ?? 0).toDouble();
+    final positionMillis = clampedPosition.inMilliseconds.toDouble();
 
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -516,61 +570,87 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         ),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            StreamBuilder<PlayerState>(
-              stream: _audioPlayer.playerStateStream,
-              builder: (context, snapshot) {
-                final playerState = snapshot.data;
-                final playing = playerState?.playing ?? false;
-                final isThisBlockPlaying = isThisPlaying && playing;
-                final isThisBlockPaused =
-                    isThisPlaying &&
-                    !playing &&
-                    playerState?.processingState != ProcessingState.completed;
-
-                return IconButton(
-                  icon: Icon(
-                    isThisBlockPlaying ? Icons.pause_circle : Icons.play_circle,
-                    color: isDark
-                        ? const Color(0xFF6EE7B7)
-                        : const Color(0xFF047857),
-                  ),
-                  iconSize: 36,
-                  onPressed: audioUrl != null
-                      ? () => _playAudio(
-                          block.id!,
-                          audioUrl,
-                          isThisBlockPlaying || isThisBlockPaused,
-                        )
-                      : null,
-                );
-              },
+            IconButton(
+              icon: _buildAudioButtonIcon(isActiveBlock),
+              iconSize: 36,
+              onPressed: audioUrl != null && blockId != null
+                  ? () => _onAudioButtonPressed(blockId, audioUrl)
+                  : null,
             ),
             const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  block.filename ?? 'Audio',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: textColor,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (block.durationSeconds != null)
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
                   Text(
-                    _formatDuration(block.durationSeconds!),
+                    block.filename ?? 'Audio',
                     style: TextStyle(
-                      fontSize: 10,
-                      color: textColor.withValues(alpha: 0.6),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: textColor,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 2.5,
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 5,
+                      ),
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 12,
+                      ),
+                    ),
+                    child: Slider(
+                      value: totalMillis > 0
+                          ? positionMillis.clamp(0, totalMillis)
+                          : 0,
+                      max: totalMillis > 0 ? totalMillis : 1,
+                      onChanged:
+                          isActiveBlock && totalMillis > 0 && !_isAudioLoading
+                          ? (value) {
+                              setState(() {
+                                _audioPosition = Duration(
+                                  milliseconds: value.round(),
+                                );
+                              });
+                            }
+                          : null,
+                      onChangeEnd:
+                          isActiveBlock && totalMillis > 0 && !_isAudioLoading
+                          ? (value) => _seekAudio(
+                              Duration(milliseconds: value.round()),
+                            )
+                          : null,
+                      activeColor: isDark
+                          ? const Color(0xFF6EE7B7)
+                          : const Color(0xFF047857),
                     ),
                   ),
-              ],
+                  Row(
+                    children: [
+                      Text(
+                        _formatAudioDuration(clampedPosition),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: textColor.withValues(alpha: 0.65),
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        _formatAudioDuration(totalDuration),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: textColor.withValues(alpha: 0.65),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -578,29 +658,50 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
     );
   }
 
-  Future<void> _playAudio(String blockId, String url, bool isPaused) async {
+  Widget _buildAudioButtonIcon(bool isActiveBlock) {
+    final color = isDark ? const Color(0xFF6EE7B7) : const Color(0xFF047857);
+    if (isActiveBlock && _isAudioLoading) {
+      return SizedBox(
+        width: 20,
+        height: 20,
+        child: CircularProgressIndicator(strokeWidth: 2, color: color),
+      );
+    }
+    if (isActiveBlock && _isAudioPlaying) {
+      return Icon(Icons.pause_circle, color: color);
+    }
+    if (isActiveBlock && _isAudioCompleted) {
+      return Icon(Icons.replay_circle_filled, color: color);
+    }
+    return Icon(Icons.play_circle, color: color);
+  }
+
+  Future<void> _onAudioButtonPressed(String blockId, String url) async {
     try {
-      if (isPaused) {
-        await _audioPlayer.pause();
-        setState(() {});
+      if (_isAudioLoading) return;
+
+      if (_playingBlockId != blockId) {
+        await _loadAudioSource(blockId, url);
+        await _audioPlayer.play();
         return;
       }
 
-      if (_playingBlockId != blockId) {
-        debugPrint('Audio URL: $url');
-        try {
-          await _audioPlayer.setUrl(url);
-        } catch (streamError) {
-          debugPrint(
-            'Streaming audio failed, trying local fallback: $streamError',
-          );
-          final localPath = await _downloadAudioToTemp(blockId, url);
-          await _audioPlayer.setFilePath(localPath);
-        }
-        _playingBlockId = blockId;
+      if (_isAudioPlaying) {
+        await _audioPlayer.pause();
+        return;
       }
+
+      if (_isAudioCompleted) {
+        await _audioPlayer.seek(Duration.zero);
+        if (mounted) {
+          setState(() {
+            _audioPosition = Duration.zero;
+            _isAudioCompleted = false;
+          });
+        }
+      }
+
       await _audioPlayer.play();
-      setState(() {});
     } catch (e) {
       debugPrint('Audio error: $e');
       if (mounted) {
@@ -609,6 +710,56 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         ).showSnackBar(SnackBar(content: Text('Failed to play audio: $e')));
       }
     }
+  }
+
+  Future<void> _loadAudioSource(String blockId, String url) async {
+    if (mounted) {
+      setState(() {
+        _isAudioLoading = true;
+        _isAudioCompleted = false;
+        _audioPosition = Duration.zero;
+        _audioDuration = null;
+      });
+    }
+
+    try {
+      Duration? duration;
+      debugPrint('Audio URL: $url');
+      try {
+        duration = await _audioPlayer.setUrl(url);
+      } catch (streamError) {
+        debugPrint(
+          'Streaming audio failed, trying local fallback: $streamError',
+        );
+        final localPath = await _downloadAudioToTemp(blockId, url);
+        duration = await _audioPlayer.setFilePath(localPath);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _playingBlockId = blockId;
+        _audioDuration = duration ?? _audioPlayer.duration;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAudioLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _seekAudio(Duration position) async {
+    final totalDuration = _audioDuration;
+    final safePosition = _clampDuration(position, totalDuration);
+    await _audioPlayer.seek(safePosition);
+    if (!mounted) return;
+    setState(() {
+      _audioPosition = safePosition;
+      if (totalDuration != null && safePosition < totalDuration) {
+        _isAudioCompleted = false;
+      }
+    });
   }
 
   Future<String> _downloadAudioToTemp(String blockId, String url) async {
@@ -624,9 +775,23 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
     return filePath;
   }
 
-  String _formatDuration(double seconds) {
-    final mins = (seconds / 60).floor();
-    final secs = (seconds % 60).floor();
+  Duration? _durationFromSeconds(double? seconds) {
+    if (seconds == null || seconds <= 0) return null;
+    return Duration(milliseconds: (seconds * 1000).round());
+  }
+
+  Duration _clampDuration(Duration value, Duration? max) {
+    if (value < Duration.zero) return Duration.zero;
+    if (max == null) return value;
+    if (value > max) return max;
+    return value;
+  }
+
+  String _formatAudioDuration(Duration? duration) {
+    if (duration == null) return '--:--';
+    final totalSeconds = duration.inSeconds;
+    final mins = totalSeconds ~/ 60;
+    final secs = totalSeconds % 60;
     return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 

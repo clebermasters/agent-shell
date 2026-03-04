@@ -37,7 +37,7 @@ impl ChatFileStorage {
     pub fn get_path(&self, id: &str) -> Option<PathBuf> {
         // Try common extensions
         let extensions = [
-            "png", "jpg", "jpeg", "gif", "webp", "pdf", "mp3", "wav", "ogg", "bin",
+            "png", "jpg", "jpeg", "gif", "webp", "pdf", "mp3", "wav", "ogg", "html", "txt", "bin",
         ];
 
         for ext in extensions {
@@ -65,6 +65,8 @@ impl ChatFileStorage {
                     "mp3" => "audio/mpeg",
                     "wav" => "audio/wav",
                     "ogg" => "audio/ogg",
+                    "html" => "text/html",
+                    "txt" => "text/plain",
                     _ => "application/octet-stream",
                 }
                 .to_string()

@@ -632,20 +632,83 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         SnackBar(content: Text('Downloading ${block.filename ?? 'file'}...')),
       );
 
-      // Use Dio to download
       final dio = Dio();
-      final dir = await getApplicationDocumentsDirectory();
-      final filePath = '${dir.path}/${block.filename ?? 'file'}';
+
+      // Get external storage directory (Downloads folder)
+      Directory? dir;
+      if (Platform.isAndroid) {
+        dir = Directory('/storage/emulated/0/Download');
+        if (!await dir.exists()) {
+          dir = await getExternalStorageDirectory();
+        }
+      } else {
+        dir = await getDownloadsDirectory();
+      }
+
+      dir ??= await getApplicationDocumentsDirectory();
+
+      final filename = block.filename ?? 'file';
+      final filePath = '${dir.path}/$filename';
 
       await dio.download(fileUrl, filePath);
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Downloaded to $filePath')));
+      if (!mounted) return;
+
+      // Show success and ask to open
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Downloaded to Downloads folder'),
+          action: SnackBarAction(
+            label: 'Open',
+            onPressed: () => _openFile(filePath, block.mimeType),
+          ),
+          duration: const Duration(seconds: 5),
+        ),
+      );
     } catch (e) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Failed to download: $e')));
+    }
+  }
+
+  Future<void> _openFile(String filePath, String? mimeType) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('File not found')));
+        return;
+      }
+
+      // Use platform-specific opener
+      if (Platform.isAndroid) {
+        // For Android, use intent to open file
+        final result = await Process.run('am', [
+          'start',
+          '-a',
+          'android.intent.action.VIEW',
+          '-d',
+          'file://$filePath',
+          '-t',
+          mimeType ?? 'application/octet-stream',
+        ]);
+
+        if (result.exitCode != 0 && mounted) {
+          // Fallback: just show file location
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('File saved to: $filePath')));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not open file: $e')));
+      }
     }
   }
 

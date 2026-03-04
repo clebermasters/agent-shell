@@ -655,16 +655,8 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
       if (!mounted) return;
 
-      // Show success and ask to open
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Downloaded to Downloads folder'),
-          action: SnackBarAction(
-            label: 'Open',
-            onPressed: () => _openFile(filePath, block.mimeType),
-          ),
-          duration: const Duration(seconds: 5),
-        ),
+        SnackBar(content: Text('Downloaded to Downloads/$filename')),
       );
     } catch (e) {
       ScaffoldMessenger.of(
@@ -674,33 +666,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   }
 
   Future<void> _openFile(String filePath, String? mimeType) async {
-    try {
-      final file = File(filePath);
-      if (!await file.exists()) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('File not found')));
-        return;
-      }
-
-      final uri = Uri.file(filePath);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Cannot open: $filePath')));
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('File: $filePath')));
   }
 
   IconData _getFileIcon(String? mimeType) {

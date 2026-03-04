@@ -7,11 +7,7 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use clap::Parser;
 use serde::Deserialize;
-use std::{
-    net::SocketAddr,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::signal;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -28,6 +24,7 @@ struct TmuxInput {
 }
 
 mod audio;
+mod chat_event_store;
 mod chat_file_storage;
 mod chat_log;
 mod cron;
@@ -39,7 +36,8 @@ mod types;
 mod websocket;
 
 // Global flag for audio logging
-pub static ENABLE_AUDIO_LOGS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static ENABLE_AUDIO_LOGS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Parser, Debug)]
 #[command(name = "webmux-backend")]
@@ -50,8 +48,8 @@ struct Args {
     audio: bool,
 }
 
-use tokio::sync::mpsc;
 use crate::types::ServerMessage;
+use tokio::sync::mpsc;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -59,6 +57,7 @@ pub struct AppState {
     pub broadcast_tx: mpsc::UnboundedSender<ServerMessage>,
     pub client_manager: Arc<websocket::ClientManager>,
     pub chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
+    pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
 }
 
 #[tokio::main]
@@ -75,39 +74,40 @@ async fn main() -> Result<()> {
 
     // Set the global audio logging flag
     ENABLE_AUDIO_LOGS.store(args.audio, std::sync::atomic::Ordering::Relaxed);
-    
+
     if args.audio {
         info!("Audio debug logging enabled");
     }
-    
+
     // Create broadcast channel for tmux updates
     let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel::<ServerMessage>();
-    
+
     // Create client manager
     let client_manager = Arc::new(websocket::ClientManager::new());
     let client_manager_clone = client_manager.clone();
-    
+
     // Spawn task to forward broadcasts to all clients
     tokio::spawn(async move {
         while let Some(msg) = broadcast_rx.recv().await {
             client_manager_clone.broadcast(msg).await;
         }
     });
-    
+
+    let base_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
     let state = AppState {
         enable_audio_logs: args.audio,
         broadcast_tx: broadcast_tx.clone(),
         client_manager,
-        chat_file_storage: Arc::new(chat_file_storage::ChatFileStorage::new(
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-        )),
+        chat_file_storage: Arc::new(chat_file_storage::ChatFileStorage::new(base_dir.clone())),
+        chat_event_store: Arc::new(chat_event_store::ChatEventStore::new(base_dir)?),
     };
-    
+
     // Initialize CRON manager
     if let Err(e) = crate::cron::CRON_MANAGER.initialize().await {
         error!("Failed to initialize CRON manager: {}", e);
     }
-    
+
     // Start tmux monitor
     let monitor = monitor::TmuxMonitor::new(broadcast_tx);
     tokio::spawn(async move {
@@ -115,69 +115,86 @@ async fn main() -> Result<()> {
     });
 
     // Serve static files from dist directory
-    let serve_dir = ServeDir::new("../dist")
-        .not_found_service(ServeFile::new("../dist/index.html"));
+    let serve_dir =
+        ServeDir::new("../dist").not_found_service(ServeFile::new("../dist/index.html"));
 
     // Build the router
     let app = Router::new()
         // API: Get connected clients count
-        .route("/api/clients", get({
-            let state = Arc::new(state.clone());
-            move |State(s): State<Arc<AppState>>| async move {
-                let count = s.client_manager.client_count().await;
-                format!("{{\"clients\":{}}}", count)
-            }
-        }))
+        .route(
+            "/api/clients",
+            get({
+                let state = Arc::new(state.clone());
+                move |State(s): State<Arc<AppState>>| async move {
+                    let count = s.client_manager.client_count().await;
+                    format!("{{\"clients\":{}}}", count)
+                }
+            }),
+        )
         // API: Get chat file by ID
-        .route("/api/chat/files/:id", get({
-            let storage = state.chat_file_storage.clone();
-            move |axum::extract::Path(id): axum::extract::Path<String>| async move {
-                if let Some(path) = storage.get_path(&id) {
-                    if let Ok(data) = std::fs::read(&path) {
-                        let mime = storage.get_mime_type(&id).unwrap_or_else(|| "application/octet-stream".to_string());
-                        let headers = [
-                            (axum::http::header::CONTENT_TYPE, mime.to_string()),
-                            (axum::http::header::CACHE_CONTROL, "public, max-age=3600".to_string()),
-                        ];
-                        return Ok((headers, data));
+        .route(
+            "/api/chat/files/:id",
+            get({
+                let storage = state.chat_file_storage.clone();
+                move |axum::extract::Path(id): axum::extract::Path<String>| async move {
+                    if let Some(path) = storage.get_path(&id) {
+                        if let Ok(data) = std::fs::read(&path) {
+                            let mime = storage
+                                .get_mime_type(&id)
+                                .unwrap_or_else(|| "application/octet-stream".to_string());
+                            let headers = [
+                                (axum::http::header::CONTENT_TYPE, mime.to_string()),
+                                (
+                                    axum::http::header::CACHE_CONTROL,
+                                    "public, max-age=3600".to_string(),
+                                ),
+                            ];
+                            return Ok((headers, data));
+                        }
                     }
+                    Err(axum::http::StatusCode::NOT_FOUND)
                 }
-                Err(axum::http::StatusCode::NOT_FOUND)
-            }
-        }))
+            }),
+        )
         // API: Send input directly to tmux session
-        .route("/api/tmux/input", axum::routing::post(|Json(payload): Json<TmuxInput>| async move {
-            let session = payload.session;
-            let window = payload.window.unwrap_or(0);
-            let text = payload.text;
-            
-            info!("Direct tmux input: session={}, window={}, text={}", session, window, text);
-            
-            // Execute direct tmux send-keys command
-            let target = format!("{}:{}", session, window);
-            let result = tokio::process::Command::new("tmux")
-                .args(&["send-keys", "-t", &target, &text])
-                .output()
-                .await;
-                
-            match result {
-                Ok(output) => {
-                    if output.status.success() {
-                        // Also send Enter key
-                        let _ = tokio::process::Command::new("tmux")
-                            .args(&["send-keys", "-t", &target, "Enter"])
-                            .output()
-                            .await;
-                        format!("{{\"success\":true}}")
-                    } else {
-                        format!("{{\"success\":false,\"error\":\"tmux command failed\"}}")
+        .route(
+            "/api/tmux/input",
+            axum::routing::post(|Json(payload): Json<TmuxInput>| async move {
+                let session = payload.session;
+                let window = payload.window.unwrap_or(0);
+                let text = payload.text;
+
+                info!(
+                    "Direct tmux input: session={}, window={}, text={}",
+                    session, window, text
+                );
+
+                // Execute direct tmux send-keys command
+                let target = format!("{}:{}", session, window);
+                let result = tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", &target, &text])
+                    .output()
+                    .await;
+
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            // Also send Enter key
+                            let _ = tokio::process::Command::new("tmux")
+                                .args(&["send-keys", "-t", &target, "Enter"])
+                                .output()
+                                .await;
+                            format!("{{\"success\":true}}")
+                        } else {
+                            format!("{{\"success\":false,\"error\":\"tmux command failed\"}}")
+                        }
+                    }
+                    Err(e) => {
+                        format!("{{\"success\":false,\"error\":\"{}\"}}", e)
                     }
                 }
-                Err(e) => {
-                    format!("{{\"success\":false,\"error\":\"{}\"}}", e)
-                }
-            }
-        }))
+            }),
+        )
         // WebSocket endpoint
         .route("/ws", get(websocket::ws_handler))
         // Serve static files (Vue app)
@@ -221,7 +238,10 @@ async fn main() -> Result<()> {
             info!("WebMux HTTPS server running on {}", https_addr);
             info!("  Local:    https://localhost:{}", https_port);
             info!("  Network:  https://0.0.0.0:{}", https_port);
-            info!("  Tailscale: Use your Tailscale IP with port {}", https_port);
+            info!(
+                "  Tailscale: Use your Tailscale IP with port {}",
+                https_port
+            );
             info!("  Note: You may need to accept the self-signed certificate");
 
             if let Err(e) = axum_server::bind_rustls(https_addr, config)

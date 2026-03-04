@@ -1,4 +1,3 @@
-
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -6,27 +5,24 @@ use axum::{
     },
     response::IntoResponse,
 };
+use bytes::Bytes;
 use futures::{sink::SinkExt, stream::StreamExt};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::{
-    sync::Arc,
-    io::{Read, Write},
+    cmp::Ordering,
     collections::HashMap,
+    io::{Read, Write},
+    sync::Arc,
 };
 use tokio::{
     sync::{mpsc, Mutex, RwLock},
     task::JoinHandle,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use bytes::Bytes;
 
 use crate::{
-    audio,
-    chat_file_storage,
-    tmux,
-    types::*,
-    AppState,
+    audio, chat_event_store, chat_file_storage, chat_log::ChatMessage, tmux, types::*, AppState,
 };
 use sysinfo::System;
 
@@ -51,7 +47,11 @@ impl ClientManager {
         }
     }
 
-    pub async fn add_client(&self, client_id: ClientId, tx: mpsc::UnboundedSender<BroadcastMessage>) {
+    pub async fn add_client(
+        &self,
+        client_id: ClientId,
+        tx: mpsc::UnboundedSender<BroadcastMessage>,
+    ) {
         let mut clients = self.clients.write().await;
         clients.insert(client_id, tx);
         info!("Client added. Total clients: {}", clients.len());
@@ -80,7 +80,7 @@ impl ClientManager {
             }
         }
     }
-    
+
     pub async fn broadcast_binary(&self, data: Bytes) {
         let msg = BroadcastMessage::Binary(data);
         let clients = self.clients.read().await;
@@ -109,6 +109,7 @@ struct WsState {
     message_tx: mpsc::UnboundedSender<BroadcastMessage>,
     chat_log_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
+    chat_event_store: Arc<chat_event_store::ChatEventStore>,
     client_manager: Arc<ClientManager>,
 }
 
@@ -125,13 +126,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     info!("New WebSocket connection established: {}", client_id);
 
     let (mut sender, mut receiver) = socket.split();
-    
+
     // Create channel for server messages
     let (tx, mut rx) = mpsc::unbounded_channel::<BroadcastMessage>();
-    
+
     // Register client with the manager
-    state.client_manager.add_client(client_id.clone(), tx.clone()).await;
-    
+    state
+        .client_manager
+        .add_client(client_id.clone(), tx.clone())
+        .await;
+
     let mut ws_state = WsState {
         client_id: client_id.clone(),
         current_pty: Arc::new(Mutex::new(None)),
@@ -141,12 +145,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         message_tx: tx.clone(),
         chat_log_handle: Arc::new(Mutex::new(None)),
         chat_file_storage: state.chat_file_storage.clone(),
+        chat_event_store: state.chat_event_store.clone(),
         client_manager: state.client_manager.clone(),
     };
-    
+
     // Clone client_id for the spawned task
     let _task_client_id = client_id.clone();
-    
+
     // Spawn task to forward server messages to WebSocket with backpressure handling
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -205,27 +210,29 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     info!("WebSocket connection closed: {}", client_id);
 }
 
-async fn handle_message(
-    msg: WebSocketMessage,
-    state: &mut WsState,
-) -> anyhow::Result<()> {
+async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::Result<()> {
     match msg {
         WebSocketMessage::ListSessions => {
             let sessions = tmux::list_sessions().await.unwrap_or_default();
             let response = ServerMessage::SessionsList { sessions };
             send_message(&state.message_tx, response).await?;
         }
-        
-        WebSocketMessage::AttachSession { session_name, cols, rows, window_index } => {
+
+        WebSocketMessage::AttachSession {
+            session_name,
+            cols,
+            rows,
+            window_index,
+        } => {
             info!("Attaching to session: {}", session_name);
-            
+
             // Set current session and window for input handling
             *state.current_session.lock().await = Some(session_name.clone());
             *state.current_window.lock().await = window_index;
-            
+
             attach_to_session(state, &session_name, cols, rows).await?;
         }
-        
+
         WebSocketMessage::Input { data } => {
             let pty_opt = state.current_pty.lock().await;
             if let Some(ref pty) = *pty_opt {
@@ -240,31 +247,41 @@ async fn handle_message(
             }
         }
 
-        WebSocketMessage::InputViaTmux { session_name, window_index, data } => {
+        WebSocketMessage::InputViaTmux {
+            session_name,
+            window_index,
+            data,
+        } => {
             info!("Received InputViaTmux: {:?}", data);
-            info!("  session_name: {:?}, window_index: {:?}", session_name, window_index);
-            
+            info!(
+                "  session_name: {:?}, window_index: {:?}",
+                session_name, window_index
+            );
+
             // Get session and window from message, fallback to global state
             let global_session = state.current_session.lock().await.clone();
             let global_window = *state.current_window.lock().await;
-            
-            info!("  global_session: {:?}, global_window: {:?}", global_session, global_window);
-            
+
+            info!(
+                "  global_session: {:?}, global_window: {:?}",
+                global_session, global_window
+            );
+
             let session = session_name.or(global_session);
             let idx = window_index.or(global_window);
-            
+
             info!("  Using session: {:?}, window: {:?}", session, idx);
-            
+
             if let (Some(session), Some(window_idx)) = (session, idx) {
                 let target = format!("{}:{}", session, window_idx);
-                
+
                 // Use direct tmux command - this works!
                 let text = data.trim_end_matches('\n');
                 let result = tokio::process::Command::new("tmux")
                     .args(&["send-keys", "-t", &target, text])
                     .output()
                     .await;
-                
+
                 if result.is_ok() {
                     // Also send Enter
                     let _ = tokio::process::Command::new("tmux")
@@ -293,7 +310,7 @@ async fn handle_message(
                 debug!("No session/window active, ignoring Enter key");
             }
         }
-        
+
         WebSocketMessage::Resize { cols, rows } => {
             let pty_opt = state.current_pty.lock().await;
             if let Some(ref pty) = *pty_opt {
@@ -309,14 +326,14 @@ async fn handle_message(
                 debug!("No PTY session active, ignoring resize");
             }
         }
-        
+
         WebSocketMessage::ListWindows { session_name } => {
             debug!("Listing windows for session: {}", session_name);
             match tmux::list_windows(&session_name).await {
                 Ok(windows) => {
-                    let response = ServerMessage::WindowsList { 
+                    let response = ServerMessage::WindowsList {
                         session_name: session_name.clone(),
-                        windows 
+                        windows,
                     };
                     send_message(&state.message_tx, response).await?;
                 }
@@ -329,32 +346,41 @@ async fn handle_message(
                 }
             }
         }
-        
-        WebSocketMessage::SelectWindow { session_name, window_index } => {
-            debug!("Selecting window {} in session {}", window_index, session_name);
-            
+
+        WebSocketMessage::SelectWindow {
+            session_name,
+            window_index,
+        } => {
+            debug!(
+                "Selecting window {} in session {}",
+                window_index, session_name
+            );
+
             // First, ensure we're in the right session
             let current_session = state.current_session.lock().await;
             if current_session.as_ref() != Some(&session_name) {
                 drop(current_session);
                 // Need to switch sessions first
-                info!("Switching to session {} before selecting window", session_name);
+                info!(
+                    "Switching to session {} before selecting window",
+                    session_name
+                );
                 attach_to_session(state, &session_name, 80, 24).await?;
             }
-            
+
             // Now select the window using tmux command
             match tmux::select_window(&session_name, &window_index.to_string()).await {
                 Ok(_) => {
                     // Don't send keys to PTY - just use tmux command
                     // Sending keys can interfere with running programs like Claude Code
-                    
+
                     let response = ServerMessage::WindowSelected {
                         success: true,
                         window_index: Some(window_index),
                         error: None,
                     };
                     send_message(&state.message_tx, response).await?;
-                    
+
                     // Don't broadcast windows list - let frontend handle refreshing
                 }
                 Err(e) => {
@@ -367,11 +393,11 @@ async fn handle_message(
                 }
             }
         }
-        
+
         WebSocketMessage::Ping => {
             send_message(&state.message_tx, ServerMessage::Pong).await?;
         }
-        
+
         WebSocketMessage::AudioControl { action } => {
             info!("Received audio control: {:?}", action);
             match action {
@@ -390,12 +416,13 @@ async fn handle_message(
                 }
             }
         }
-        
+
         // Session management
         WebSocketMessage::CreateSession { name } => {
-            let session_name = name.unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp_millis()));
+            let session_name = name
+                .unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp_millis()));
             info!("Creating session: {}", session_name);
-            
+
             match tmux::create_session(&session_name).await {
                 Ok(_) => {
                     info!("Successfully created session: {}", session_name);
@@ -417,10 +444,10 @@ async fn handle_message(
                 }
             }
         }
-        
+
         WebSocketMessage::KillSession { session_name } => {
             info!("Kill session request for: {}", session_name);
-            
+
             match tmux::kill_session(&session_name).await {
                 Ok(_) => {
                     info!("Successfully killed session: {}", session_name);
@@ -440,8 +467,11 @@ async fn handle_message(
                 }
             }
         }
-        
-        WebSocketMessage::RenameSession { session_name, new_name } => {
+
+        WebSocketMessage::RenameSession {
+            session_name,
+            new_name,
+        } => {
             if new_name.trim().is_empty() {
                 let response = ServerMessage::SessionRenamed {
                     success: false,
@@ -467,47 +497,53 @@ async fn handle_message(
                 }
             }
         }
-        
+
         // Window management
-        WebSocketMessage::CreateWindow { session_name, window_name } => {
-            match tmux::create_window(&session_name, window_name.as_deref()).await {
-                Ok(_) => {
-                    let response = ServerMessage::WindowCreated {
-                        success: true,
-                        error: None,
-                    };
-                    send_message(&state.message_tx, response).await?;
-                }
-                Err(e) => {
-                    let response = ServerMessage::WindowCreated {
-                        success: false,
-                        error: Some(format!("Failed to create window: {}", e)),
-                    };
-                    send_message(&state.message_tx, response).await?;
-                }
+        WebSocketMessage::CreateWindow {
+            session_name,
+            window_name,
+        } => match tmux::create_window(&session_name, window_name.as_deref()).await {
+            Ok(_) => {
+                let response = ServerMessage::WindowCreated {
+                    success: true,
+                    error: None,
+                };
+                send_message(&state.message_tx, response).await?;
             }
-        }
-        
-        WebSocketMessage::KillWindow { session_name, window_index } => {
-            match tmux::kill_window(&session_name, &window_index).await {
-                Ok(_) => {
-                    let response = ServerMessage::WindowKilled {
-                        success: true,
-                        error: None,
-                    };
-                    send_message(&state.message_tx, response).await?;
-                }
-                Err(e) => {
-                    let response = ServerMessage::WindowKilled {
-                        success: false,
-                        error: Some(format!("Failed to kill window: {}", e)),
-                    };
-                    send_message(&state.message_tx, response).await?;
-                }
+            Err(e) => {
+                let response = ServerMessage::WindowCreated {
+                    success: false,
+                    error: Some(format!("Failed to create window: {}", e)),
+                };
+                send_message(&state.message_tx, response).await?;
             }
-        }
-        
-        WebSocketMessage::RenameWindow { session_name, window_index, new_name } => {
+        },
+
+        WebSocketMessage::KillWindow {
+            session_name,
+            window_index,
+        } => match tmux::kill_window(&session_name, &window_index).await {
+            Ok(_) => {
+                let response = ServerMessage::WindowKilled {
+                    success: true,
+                    error: None,
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+            Err(e) => {
+                let response = ServerMessage::WindowKilled {
+                    success: false,
+                    error: Some(format!("Failed to kill window: {}", e)),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        },
+
+        WebSocketMessage::RenameWindow {
+            session_name,
+            window_index,
+            new_name,
+        } => {
             if new_name.trim().is_empty() {
                 let response = ServerMessage::WindowRenamed {
                     success: false,
@@ -533,7 +569,7 @@ async fn handle_message(
                 }
             }
         }
-        
+
         // System stats
         WebSocketMessage::GetStats => {
             let mut sys = System::new_all();
@@ -543,15 +579,26 @@ async fn handle_message(
             let stats = SystemStats {
                 cpu: CpuInfo {
                     cores: sys.cpus().len(),
-                    model: sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_default(),
+                    model: sys
+                        .cpus()
+                        .first()
+                        .map(|c| c.brand().to_string())
+                        .unwrap_or_default(),
                     usage: load_avg.one as f32,
-                    load_avg: [load_avg.one as f32, load_avg.five as f32, load_avg.fifteen as f32],
+                    load_avg: [
+                        load_avg.one as f32,
+                        load_avg.five as f32,
+                        load_avg.fifteen as f32,
+                    ],
                 },
                 memory: MemoryInfo {
                     total: sys.total_memory(),
                     used: sys.used_memory(),
                     free: sys.available_memory(),
-                    percent: format!("{:.1}", (sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0),
+                    percent: format!(
+                        "{:.1}",
+                        (sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0
+                    ),
                 },
                 uptime: System::uptime(),
                 hostname: System::host_name().unwrap_or_default(),
@@ -562,14 +609,14 @@ async fn handle_message(
             let response = ServerMessage::Stats { stats };
             send_message(&state.message_tx, response).await?;
         }
-        
+
         // Cron management
         WebSocketMessage::ListCronJobs => {
             let jobs = crate::cron::CRON_MANAGER.list_jobs().await;
             let response = ServerMessage::CronJobsList { jobs };
             send_message(&state.message_tx, response).await?;
         }
-        
+
         WebSocketMessage::CreateCronJob { job } => {
             match crate::cron::CRON_MANAGER.create_job(job).await {
                 Ok(created_job) => {
@@ -577,14 +624,14 @@ async fn handle_message(
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::Error { 
-                        message: format!("Failed to create cron job: {}", e) 
+                    let response = ServerMessage::Error {
+                        message: format!("Failed to create cron job: {}", e),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
+
         WebSocketMessage::UpdateCronJob { id, job } => {
             match crate::cron::CRON_MANAGER.update_job(id, job).await {
                 Ok(updated_job) => {
@@ -592,14 +639,14 @@ async fn handle_message(
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::Error { 
-                        message: format!("Failed to update cron job: {}", e) 
+                    let response = ServerMessage::Error {
+                        message: format!("Failed to update cron job: {}", e),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
+
         WebSocketMessage::DeleteCronJob { id } => {
             match crate::cron::CRON_MANAGER.delete_job(&id).await {
                 Ok(_) => {
@@ -607,14 +654,14 @@ async fn handle_message(
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::Error { 
-                        message: format!("Failed to delete cron job: {}", e) 
+                    let response = ServerMessage::Error {
+                        message: format!("Failed to delete cron job: {}", e),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
+
         WebSocketMessage::ToggleCronJob { id, enabled } => {
             match crate::cron::CRON_MANAGER.toggle_job(&id, enabled).await {
                 Ok(toggled_job) => {
@@ -622,33 +669,33 @@ async fn handle_message(
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::Error { 
-                        message: format!("Failed to toggle cron job: {}", e) 
+                    let response = ServerMessage::Error {
+                        message: format!("Failed to toggle cron job: {}", e),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
+
         WebSocketMessage::TestCronCommand { command } => {
             match crate::cron::CRON_MANAGER.test_command(&command).await {
                 Ok(output) => {
-                    let response = ServerMessage::CronCommandOutput { 
-                        output, 
-                        error: None 
+                    let response = ServerMessage::CronCommandOutput {
+                        output,
+                        error: None,
                     };
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::CronCommandOutput { 
+                    let response = ServerMessage::CronCommandOutput {
                         output: String::new(),
-                        error: Some(format!("Failed to test command: {}", e)) 
+                        error: Some(format!("Failed to test command: {}", e)),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
+
         // Dotfile management
         WebSocketMessage::ListDotfiles => {
             match crate::dotfiles::DOTFILES_MANAGER.list_dotfiles().await {
@@ -657,92 +704,99 @@ async fn handle_message(
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::Error { 
-                        message: format!("Failed to list dotfiles: {}", e) 
+                    let response = ServerMessage::Error {
+                        message: format!("Failed to list dotfiles: {}", e),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
+
         WebSocketMessage::ReadDotfile { path } => {
             match crate::dotfiles::DOTFILES_MANAGER.read_dotfile(&path).await {
                 Ok(content) => {
-                    let response = ServerMessage::DotfileContent { 
-                        path, 
+                    let response = ServerMessage::DotfileContent {
+                        path,
                         content,
-                        error: None 
+                        error: None,
                     };
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::DotfileContent { 
+                    let response = ServerMessage::DotfileContent {
                         path,
                         content: String::new(),
-                        error: Some(format!("{}", e)) 
+                        error: Some(format!("{}", e)),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
-        WebSocketMessage::WriteDotfile { path, content } => {
-            match crate::dotfiles::DOTFILES_MANAGER.write_dotfile(&path, &content).await {
-                Ok(_) => {
-                    let response = ServerMessage::DotfileWritten { 
-                        path,
-                        success: true,
-                        error: None 
-                    };
-                    send_message(&state.message_tx, response).await?;
-                }
-                Err(e) => {
-                    let response = ServerMessage::DotfileWritten { 
-                        path,
-                        success: false,
-                        error: Some(format!("{}", e)) 
-                    };
-                    send_message(&state.message_tx, response).await?;
-                }
+
+        WebSocketMessage::WriteDotfile { path, content } => match crate::dotfiles::DOTFILES_MANAGER
+            .write_dotfile(&path, &content)
+            .await
+        {
+            Ok(_) => {
+                let response = ServerMessage::DotfileWritten {
+                    path,
+                    success: true,
+                    error: None,
+                };
+                send_message(&state.message_tx, response).await?;
             }
-        }
-        
+            Err(e) => {
+                let response = ServerMessage::DotfileWritten {
+                    path,
+                    success: false,
+                    error: Some(format!("{}", e)),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        },
+
         WebSocketMessage::GetDotfileHistory { path } => {
-            match crate::dotfiles::DOTFILES_MANAGER.get_file_history(&path).await {
+            match crate::dotfiles::DOTFILES_MANAGER
+                .get_file_history(&path)
+                .await
+            {
                 Ok(versions) => {
                     let response = ServerMessage::DotfileHistory { path, versions };
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::Error { 
-                        message: format!("Failed to get dotfile history: {}", e) 
+                    let response = ServerMessage::Error {
+                        message: format!("Failed to get dotfile history: {}", e),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
+
         WebSocketMessage::RestoreDotfileVersion { path, timestamp } => {
-            match crate::dotfiles::DOTFILES_MANAGER.restore_version(&path, timestamp).await {
+            match crate::dotfiles::DOTFILES_MANAGER
+                .restore_version(&path, timestamp)
+                .await
+            {
                 Ok(_) => {
-                    let response = ServerMessage::DotfileRestored { 
+                    let response = ServerMessage::DotfileRestored {
                         path,
                         success: true,
-                        error: None 
+                        error: None,
                     };
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
-                    let response = ServerMessage::DotfileRestored { 
+                    let response = ServerMessage::DotfileRestored {
                         path,
                         success: false,
-                        error: Some(format!("{}", e)) 
+                        error: Some(format!("{}", e)),
                     };
                     send_message(&state.message_tx, response).await?;
                 }
             }
         }
-        
+
         WebSocketMessage::GetDotfileTemplates => {
             let templates = crate::dotfiles::DOTFILES_MANAGER.get_templates();
             let response = ServerMessage::DotfileTemplates { templates };
@@ -750,10 +804,17 @@ async fn handle_message(
         }
 
         // Chat log watching
-        WebSocketMessage::WatchChatLog { session_name, window_index } => {
-            info!("Starting chat log watch for {}:{}", session_name, window_index);
+        WebSocketMessage::WatchChatLog {
+            session_name,
+            window_index,
+        } => {
+            info!(
+                "Starting chat log watch for {}:{}",
+                session_name, window_index
+            );
             let message_tx = state.message_tx.clone();
-            
+            let chat_event_store = state.chat_event_store.clone();
+
             // Set current session and window for input handling
             *state.current_session.lock().await = Some(session_name.clone());
             *state.current_window.lock().await = Some(window_index);
@@ -769,7 +830,11 @@ async fn handle_message(
 
             let chat_log_handle = state.chat_log_handle.clone();
             let handle = tokio::spawn(async move {
-                tracing::info!("Detecting chat log for session '{}' window {}", session_name, window_index);
+                tracing::info!(
+                    "Detecting chat log for session '{}' window {}",
+                    session_name,
+                    window_index
+                );
                 match crate::chat_log::watcher::detect_log_file(&session_name, window_index).await {
                     Ok((path, tool)) => {
                         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -777,34 +842,62 @@ async fn handle_message(
                         // Spawn the file watcher -- the returned
                         // RecommendedWatcher must be kept alive for as long
                         // as we want notifications.
-                        let _watcher = match crate::chat_log::watcher::watch_log_file(
-                            &path, tool, event_tx,
-                        ).await {
-                            Ok(w) => w,
-                            Err(e) => {
-                                error!("Failed to start chat log watcher: {}", e);
-                                let _ = send_message(&message_tx, ServerMessage::ChatLogError {
-                                    error: e.to_string(),
-                                }).await;
-                                return;
-                            }
-                        };
+                        let _watcher =
+                            match crate::chat_log::watcher::watch_log_file(&path, tool, event_tx)
+                                .await
+                            {
+                                Ok(w) => w,
+                                Err(e) => {
+                                    error!("Failed to start chat log watcher: {}", e);
+                                    let _ = send_message(
+                                        &message_tx,
+                                        ServerMessage::ChatLogError {
+                                            error: e.to_string(),
+                                        },
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            };
 
                         // Forward events to WebSocket
                         let session_name_owned = session_name.clone();
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
                                 crate::chat_log::ChatLogEvent::History { messages, tool } => {
-                                    tracing::info!("Sending chat history: {} messages for session {}", messages.len(), session_name_owned);
+                                    let persisted_messages = match chat_event_store
+                                        .list_messages(&session_name_owned, window_index)
+                                    {
+                                        Ok(stored) => stored,
+                                        Err(e) => {
+                                            warn!(
+                                                "Failed to load persisted chat events for {}:{}: {}",
+                                                session_name_owned, window_index, e
+                                            );
+                                            Vec::new()
+                                        }
+                                    };
+
+                                    let merged_messages =
+                                        merge_history_messages(messages, persisted_messages);
+                                    tracing::info!(
+                                        "Sending merged chat history: {} messages for session {}",
+                                        merged_messages.len(),
+                                        session_name_owned
+                                    );
                                     ServerMessage::ChatHistory {
                                         session_name: session_name_owned.clone(),
                                         window_index,
-                                        messages,
+                                        messages: merged_messages,
                                         tool: Some(tool),
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::NewMessage { message } => {
-                                    tracing::info!("Sending new chat message: role={} for session {}", message.role, session_name_owned);
+                                    tracing::info!(
+                                        "Sending new chat message: role={} for session {}",
+                                        message.role,
+                                        session_name_owned
+                                    );
                                     ServerMessage::ChatEvent {
                                         session_name: session_name_owned.clone(),
                                         window_index,
@@ -822,9 +915,13 @@ async fn handle_message(
                         }
                     }
                     Err(e) => {
-                        let _ = send_message(&message_tx, ServerMessage::ChatLogError {
-                            error: e.to_string(),
-                        }).await;
+                        let _ = send_message(
+                            &message_tx,
+                            ServerMessage::ChatLogError {
+                                error: e.to_string(),
+                            },
+                        )
+                        .await;
                     }
                 }
             });
@@ -841,18 +938,29 @@ async fn handle_message(
                 handle.abort();
             }
         }
-        WebSocketMessage::SendFileToChat { session_name, window_index, file } => {
-            info!("Received file to send to chat: {} ({})", file.filename, file.mime_type);
-            
+        WebSocketMessage::SendFileToChat {
+            session_name,
+            window_index,
+            file,
+        } => {
+            info!(
+                "Received file to send to chat: {} ({})",
+                file.filename, file.mime_type
+            );
+
             // Save file to storage
-            let file_id = match state.chat_file_storage.save_file(&file.data, &file.filename, &file.mime_type) {
-                Ok(id) => id,
-                Err(e) => {
-                    error!("Failed to save file: {}", e);
-                    return Ok(());
-                }
-            };
-            
+            let file_id =
+                match state
+                    .chat_file_storage
+                    .save_file(&file.data, &file.filename, &file.mime_type)
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        error!("Failed to save file: {}", e);
+                        return Ok(());
+                    }
+                };
+
             // Create content block based on mime type
             let block = if file.mime_type.starts_with("image/") {
                 crate::chat_log::ContentBlock::Image {
@@ -874,29 +982,116 @@ async fn handle_message(
                     size_bytes: Some((file.data.len() as f64 * 0.75) as u64), // approximate decoded size
                 }
             };
-            
+
             let chat_message = crate::chat_log::ChatMessage {
                 role: "assistant".to_string(),
                 timestamp: Some(chrono::Utc::now()),
                 blocks: vec![block],
             };
-            
+
+            if let Err(e) = state.chat_event_store.append_message(
+                &session_name,
+                window_index,
+                "webhook-file",
+                &chat_message,
+            ) {
+                warn!(
+                    "Failed to persist chat file message for {}:{}: {}",
+                    session_name, window_index, e
+                );
+            }
+
             // Broadcast to all connected clients watching this session
             let msg = ServerMessage::ChatFileMessage {
                 session_name: session_name.clone(),
                 window_index,
                 message: chat_message,
             };
-            
+
             // Use client_manager.broadcast to send to ALL connected clients
             state.client_manager.broadcast(msg).await;
         }
     }
-    
+
     Ok(())
 }
 
-async fn send_message(tx: &mpsc::UnboundedSender<BroadcastMessage>, msg: ServerMessage) -> anyhow::Result<()> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HistoryMessageSource {
+    Tool,
+    Persisted,
+}
+
+#[derive(Clone, Debug)]
+struct HistoryMessageEntry {
+    message: ChatMessage,
+    source: HistoryMessageSource,
+    sequence: usize,
+}
+
+fn merge_history_messages(
+    tool_messages: Vec<ChatMessage>,
+    persisted_messages: Vec<ChatMessage>,
+) -> Vec<ChatMessage> {
+    if persisted_messages.is_empty() {
+        return tool_messages;
+    }
+    if tool_messages.is_empty() {
+        return persisted_messages;
+    }
+
+    let mut entries = Vec::with_capacity(tool_messages.len() + persisted_messages.len());
+    entries.extend(
+        tool_messages
+            .into_iter()
+            .enumerate()
+            .map(|(sequence, message)| HistoryMessageEntry {
+                message,
+                source: HistoryMessageSource::Tool,
+                sequence,
+            }),
+    );
+    entries.extend(
+        persisted_messages
+            .into_iter()
+            .enumerate()
+            .map(|(sequence, message)| HistoryMessageEntry {
+                message,
+                source: HistoryMessageSource::Persisted,
+                sequence,
+            }),
+    );
+
+    entries.sort_by(|left, right| {
+        if let (Some(left_ts), Some(right_ts)) = (
+            left.message.timestamp.as_ref(),
+            right.message.timestamp.as_ref(),
+        ) {
+            let ts_cmp = left_ts.cmp(right_ts);
+            if ts_cmp != Ordering::Equal {
+                return ts_cmp;
+            }
+        }
+
+        if left.source == right.source {
+            return left.sequence.cmp(&right.sequence);
+        }
+
+        match (left.source, right.source) {
+            (HistoryMessageSource::Tool, HistoryMessageSource::Persisted) => Ordering::Less,
+            (HistoryMessageSource::Persisted, HistoryMessageSource::Tool) => Ordering::Greater,
+            (HistoryMessageSource::Tool, HistoryMessageSource::Tool)
+            | (HistoryMessageSource::Persisted, HistoryMessageSource::Persisted) => Ordering::Equal,
+        }
+    });
+
+    entries.into_iter().map(|entry| entry.message).collect()
+}
+
+async fn send_message(
+    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    msg: ServerMessage,
+) -> anyhow::Result<()> {
     if let Ok(json) = serde_json::to_string(&msg) {
         tx.send(BroadcastMessage::Text(Arc::new(json)))?;
     }
@@ -924,11 +1119,14 @@ async fn attach_to_session(
     const QUEUE_CAP: usize = 256;
     let (live_queue_tx, live_queue_rx) = mpsc::channel::<String>(QUEUE_CAP);
     let live_queue_tx_clone = live_queue_tx.clone();
-    
+
     // Clean up any existing PTY session first
     let mut pty_guard = state.current_pty.lock().await;
     if let Some(old_pty) = pty_guard.take() {
-        debug!("Cleaning up previous PTY session for tmux: {}", old_pty.tmux_session);
+        debug!(
+            "Cleaning up previous PTY session for tmux: {}",
+            old_pty.tmux_session
+        );
         // Kill the child process
         {
             let mut child = old_pty.child.lock().await;
@@ -939,13 +1137,13 @@ async fn attach_to_session(
         old_pty.reader_task.abort();
         let _ = old_pty.reader_task.await;
     }
-    
+
     // Small delay to ensure cleanup is complete
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-    
+
     // Create new PTY session
     debug!("Creating new PTY session for: {}", session_name);
-    
+
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
         rows,
@@ -953,43 +1151,43 @@ async fn attach_to_session(
         pixel_width: 0,
         pixel_height: 0,
     })?;
-    
+
     let mut cmd = CommandBuilder::new("tmux");
     cmd.args(&["attach-session", "-t", session_name]);
     cmd.env("TERM", "xterm");
     cmd.env("COLORTERM", "truecolor");
-    
+
     // Clear SSH-related environment variables that might confuse starship
     cmd.env_remove("SSH_CLIENT");
     cmd.env_remove("SSH_CONNECTION");
     cmd.env_remove("SSH_TTY");
     cmd.env_remove("SSH_AUTH_SOCK");
-    
+
     // Set up proper environment for local terminal
     cmd.env("WEBMUX", "1");
-    
+
     // Get reader before we move master
     let reader = pair.master.try_clone_reader()?;
-    
+
     // Get writer and spawn command
     let writer = pair.master.take_writer()?;
     let writer = Arc::new(Mutex::new(writer));
-    
+
     // First check if session exists, if not create it
     let check_output = tokio::process::Command::new("tmux")
         .args(&["has-session", "-t", session_name])
         .output()
         .await?;
-    
+
     if !check_output.status.success() {
         // Create the session first
         info!("Session {} doesn't exist, creating it", session_name);
         tmux::create_session(session_name).await?;
     }
-    
+
     let child = pair.slave.spawn_command(cmd)?;
     let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> = Arc::new(Mutex::new(child));
-    
+
     // Set up reader task — queues output during bootstrap, then direct-forwards
     let tx_clone = tx.clone();
     let client_id = state.client_id.clone();
@@ -1007,7 +1205,9 @@ async fn attach_to_session(
                 Ok(0) => {
                     info!("PTY EOF for client {}", client_id);
                     if !pending_output.is_empty() && bootstrap_done_reader.load(Ordering::Relaxed) {
-                        let output = ServerMessage::Output { data: pending_output };
+                        let output = ServerMessage::Output {
+                            data: pending_output,
+                        };
                         if let Ok(json) = serde_json::to_string(&output) {
                             let _ = tx_clone.send(BroadcastMessage::Text(Arc::new(json)));
                         }
@@ -1028,10 +1228,18 @@ async fn attach_to_session(
                         if should_send && !pending_output.is_empty() {
                             if bootstrap_done_reader.load(Ordering::Relaxed) {
                                 // Direct path: bootstrap finished
-                                let output = ServerMessage::Output { data: pending_output.clone() };
+                                let output = ServerMessage::Output {
+                                    data: pending_output.clone(),
+                                };
                                 if let Ok(json) = serde_json::to_string(&output) {
-                                    if tx_clone.send(BroadcastMessage::Text(Arc::new(json))).is_err() {
-                                        error!("Client {} disconnected, stopping PTY reader", client_id);
+                                    if tx_clone
+                                        .send(BroadcastMessage::Text(Arc::new(json)))
+                                        .is_err()
+                                    {
+                                        error!(
+                                            "Client {} disconnected, stopping PTY reader",
+                                            client_id
+                                        );
                                         break;
                                     }
                                 }
@@ -1042,10 +1250,18 @@ async fn attach_to_session(
                                     Err(_) => {
                                         tracing::warn!("[history-bootstrap] queue overflow, switching to direct forward for client {}", client_id);
                                         bootstrap_done_reader.store(true, Ordering::Relaxed);
-                                        let output = ServerMessage::Output { data: pending_output.clone() };
+                                        let output = ServerMessage::Output {
+                                            data: pending_output.clone(),
+                                        };
                                         if let Ok(json) = serde_json::to_string(&output) {
-                                            if tx_clone.send(BroadcastMessage::Text(Arc::new(json))).is_err() {
-                                                error!("Client {} disconnected, stopping PTY reader", client_id);
+                                            if tx_clone
+                                                .send(BroadcastMessage::Text(Arc::new(json)))
+                                                .is_err()
+                                            {
+                                                error!(
+                                                    "Client {} disconnected, stopping PTY reader",
+                                                    client_id
+                                                );
                                                 break;
                                             }
                                         }
@@ -1066,10 +1282,16 @@ async fn attach_to_session(
                 Err(e) => {
                     consecutive_errors += 1;
                     if consecutive_errors > 5 {
-                        error!("Too many consecutive PTY read errors for client {}: {}", client_id, e);
+                        error!(
+                            "Too many consecutive PTY read errors for client {}: {}",
+                            client_id, e
+                        );
                         break;
                     }
-                    error!("PTY read error for client {} (attempt {}): {}", client_id, consecutive_errors, e);
+                    error!(
+                        "PTY read error for client {} (attempt {}): {}",
+                        client_id, consecutive_errors, e
+                    );
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
@@ -1125,51 +1347,79 @@ async fn attach_to_session(
                     history_text.len()
                 );
 
-                let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryStart {
-                    session_name: session_owned.clone(),
-                    window_index: window,
-                    total_lines,
-                    chunk_size: CHUNK_SIZE,
-                    generated_at: chrono::Utc::now(),
-                }).await;
+                let _ = send_message(
+                    &tx_bootstrap,
+                    ServerMessage::TerminalHistoryStart {
+                        session_name: session_owned.clone(),
+                        window_index: window,
+                        total_lines,
+                        chunk_size: CHUNK_SIZE,
+                        generated_at: chrono::Utc::now(),
+                    },
+                )
+                .await;
 
                 for (seq, chunk) in chunks.iter().enumerate() {
                     let line_count = chunk.lines().count();
                     let is_last = seq + 1 == total_chunks;
-                    let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryChunk {
-                        session_name: session_owned.clone(),
-                        window_index: window,
-                        seq,
-                        data: chunk.clone(),
-                        line_count,
-                        is_last,
-                    }).await;
+                    let _ = send_message(
+                        &tx_bootstrap,
+                        ServerMessage::TerminalHistoryChunk {
+                            session_name: session_owned.clone(),
+                            window_index: window,
+                            seq,
+                            data: chunk.clone(),
+                            line_count,
+                            is_last,
+                        },
+                    )
+                    .await;
                 }
 
-                let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryEnd {
-                    session_name: session_owned.clone(),
-                    window_index: window,
-                    total_lines,
-                    total_chunks,
-                }).await;
+                let _ = send_message(
+                    &tx_bootstrap,
+                    ServerMessage::TerminalHistoryEnd {
+                        session_name: session_owned.clone(),
+                        window_index: window,
+                        total_lines,
+                        total_chunks,
+                    },
+                )
+                .await;
             }
             Ok(_) => {
-                info!("[history-bootstrap] no scrollback history for {}:{}", session_owned, window);
-                let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryEnd {
-                    session_name: session_owned.clone(),
-                    window_index: window,
-                    total_lines: 0,
-                    total_chunks: 0,
-                }).await;
+                info!(
+                    "[history-bootstrap] no scrollback history for {}:{}",
+                    session_owned, window
+                );
+                let _ = send_message(
+                    &tx_bootstrap,
+                    ServerMessage::TerminalHistoryEnd {
+                        session_name: session_owned.clone(),
+                        window_index: window,
+                        total_lines: 0,
+                        total_chunks: 0,
+                    },
+                )
+                .await;
             }
             Err(e) => {
-                tracing::warn!("[history-bootstrap] failed for {}:{} — {}", session_owned, window, e);
-                let _ = send_message(&tx_bootstrap, ServerMessage::TerminalHistoryEnd {
-                    session_name: session_owned.clone(),
-                    window_index: window,
-                    total_lines: 0,
-                    total_chunks: 0,
-                }).await;
+                tracing::warn!(
+                    "[history-bootstrap] failed for {}:{} — {}",
+                    session_owned,
+                    window,
+                    e
+                );
+                let _ = send_message(
+                    &tx_bootstrap,
+                    ServerMessage::TerminalHistoryEnd {
+                        session_name: session_owned.clone(),
+                        window_index: window,
+                        total_lines: 0,
+                        total_chunks: 0,
+                    },
+                )
+                .await;
             }
         }
 
@@ -1184,16 +1434,25 @@ async fn attach_to_session(
             flushed += data.len();
             let output = ServerMessage::Output { data };
             if let Ok(json) = serde_json::to_string(&output) {
-                if tx_bootstrap.send(BroadcastMessage::Text(Arc::new(json))).is_err() {
+                if tx_bootstrap
+                    .send(BroadcastMessage::Text(Arc::new(json)))
+                    .is_err()
+                {
                     break;
                 }
             }
         }
 
         if flushed > 0 {
-            info!("[history-bootstrap] flushed {} bytes of queued live output", flushed);
+            info!(
+                "[history-bootstrap] flushed {} bytes of queued live output",
+                flushed
+            );
         }
-        info!("[history-bootstrap] complete in {:.1}ms", bootstrap_start.elapsed().as_secs_f64() * 1000.0);
+        info!(
+            "[history-bootstrap] complete in {:.1}ms",
+            bootstrap_start.elapsed().as_secs_f64() * 1000.0
+        );
     });
 
     Ok(())
@@ -1201,26 +1460,26 @@ async fn attach_to_session(
 
 async fn cleanup_session(state: &WsState) {
     info!("Cleaning up session for client: {}", state.client_id);
-    
+
     // Clean up PTY session
     let mut pty_guard = state.current_pty.lock().await;
     if let Some(pty) = pty_guard.take() {
         info!("Cleaning up PTY for tmux session: {}", pty.tmux_session);
-        
+
         // Kill the child process first
         {
             let mut child = pty.child.lock().await;
             let _ = child.kill();
             let _ = child.wait();
         }
-        
+
         // Abort the reader task
         pty.reader_task.abort();
-        
+
         // Writer and master will be dropped automatically
     }
     drop(pty_guard);
-    
+
     // Clean up chat log watcher
     {
         let mut handle_guard = state.chat_log_handle.lock().await;

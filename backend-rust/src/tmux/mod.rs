@@ -20,7 +20,8 @@ pub async fn get_pane_metadata(session: &str, window: u32) -> Result<PaneMetadat
         .args(&[
             "display-message",
             "-p",
-            "-t", &target,
+            "-t",
+            &target,
             "#{history_size}:#{pane_height}:#{pane_width}",
         ])
         .output()
@@ -50,11 +51,13 @@ pub async fn capture_history_above_viewport(session: &str, window: u32) -> Resul
     let target = format!("{}:{}", session, window);
 
     // Get history size first to know bounds
-    let meta = get_pane_metadata(session, window).await.unwrap_or(PaneMetadata {
-        history_size: 1000,
-        pane_height: 24,
-        pane_width: 80,
-    });
+    let meta = get_pane_metadata(session, window)
+        .await
+        .unwrap_or(PaneMetadata {
+            history_size: 1000,
+            pane_height: 24,
+            pane_width: 80,
+        });
 
     if meta.history_size <= 0 {
         return Ok(String::new());
@@ -67,11 +70,14 @@ pub async fn capture_history_above_viewport(session: &str, window: u32) -> Resul
         Command::new("tmux")
             .args(&[
                 "capture-pane",
-                "-p",  // Print to stdout
-                "-J",  // Join wrapped lines
-                "-t", &target,
-                "-S", &start_line, // Start from beginning of history
-                "-E", "-1",        // End just before the visible viewport
+                "-p", // Print to stdout
+                "-J", // Join wrapped lines
+                "-t",
+                &target,
+                "-S",
+                &start_line, // Start from beginning of history
+                "-E",
+                "-1", // End just before the visible viewport
             ])
             .output()
             .await
@@ -148,7 +154,7 @@ pub async fn ensure_tmux_server() -> Result<()> {
             .args(&["new-session", "-d", "-s", "__dummy__", "-c", "~", "exit"])
             .output()
             .await?;
-        
+
         // Small delay to ensure server is fully started
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
@@ -214,11 +220,14 @@ async fn list_sessions_fallback() -> Result<Vec<TmuxSession>> {
 
 pub async fn create_session(name: &str) -> Result<()> {
     ensure_tmux_server().await?;
-    
+
     // Get the home directory to start sessions there
     let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-    
-    info!("Executing tmux new-session for: {} in directory: {}", name, home_dir);
+
+    info!(
+        "Executing tmux new-session for: {} in directory: {}",
+        name, home_dir
+    );
     let status = Command::new("tmux")
         .args(&["new-session", "-d", "-s", name, "-c", &home_dir])
         .env("HOME", &home_dir)
@@ -236,7 +245,7 @@ pub async fn create_session(name: &str) -> Result<()> {
 
 pub async fn kill_session(name: &str) -> Result<()> {
     info!("Executing tmux kill-session for: {}", name);
-    
+
     // First try regular kill-session
     let status = Command::new("tmux")
         .args(&["kill-session", "-t", name])
@@ -245,12 +254,15 @@ pub async fn kill_session(name: &str) -> Result<()> {
 
     if !status.success() {
         // If that fails, try with -C flag to kill all clients
-        error!("tmux kill-session failed, trying with -C flag for: {}", name);
+        error!(
+            "tmux kill-session failed, trying with -C flag for: {}",
+            name
+        );
         let status2 = Command::new("tmux")
             .args(&["kill-session", "-C", "-t", name])
             .status()
             .await?;
-            
+
         if !status2.success() {
             error!("tmux kill-session -C also failed for: {}", name);
             anyhow::bail!("Failed to kill session");
@@ -321,9 +333,9 @@ pub async fn list_windows(session_name: &str) -> Result<Vec<TmuxWindow>> {
 pub async fn create_window(session_name: &str, window_name: Option<&str>) -> Result<()> {
     // Try to get the current pane's working directory
     let current_dir = get_current_pane_directory(session_name).await.ok();
-    
+
     let args = vec!["new-window", "-a", "-t", session_name];
-    
+
     // Store the directory in a variable that lives long enough
     let dir_args: Vec<String>;
     if let Some(dir) = current_dir {
@@ -331,22 +343,19 @@ pub async fn create_window(session_name: &str, window_name: Option<&str>) -> Res
     } else {
         dir_args = vec![];
     }
-    
+
     // Convert args to the correct format
     let mut final_args: Vec<&str> = args.into_iter().collect();
     for arg in &dir_args {
         final_args.push(arg);
     }
-    
+
     if let Some(name) = window_name {
         final_args.push("-n");
         final_args.push(name);
     }
 
-    let status = Command::new("tmux")
-        .args(&final_args)
-        .status()
-        .await?;
+    let status = Command::new("tmux").args(&final_args).status().await?;
 
     if !status.success() {
         anyhow::bail!("Failed to create window");
@@ -363,7 +372,7 @@ async fn get_current_pane_directory(session_name: &str) -> Result<String> {
             "-p",
             "-t",
             session_name,
-            "#{pane_current_path}"
+            "#{pane_current_path}",
         ])
         .output()
         .await?;
@@ -430,16 +439,19 @@ pub async fn capture_pane(session_name: &str) -> Result<String> {
     let output = Command::new("tmux")
         .args(&[
             "capture-pane",
-            "-t", session_name,
-            "-p",  // Print to stdout
-            "-e",  // Include escape sequences
-            "-J",  // Join wrapped lines
-            "-S", "-",  // Start from beginning of visible area
-            "-E", "-",  // End at bottom
+            "-t",
+            session_name,
+            "-p", // Print to stdout
+            "-e", // Include escape sequences
+            "-J", // Join wrapped lines
+            "-S",
+            "-", // Start from beginning of visible area
+            "-E",
+            "-", // End at bottom
         ])
         .output()
         .await?;
-    
+
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
@@ -450,18 +462,18 @@ pub async fn capture_pane(session_name: &str) -> Result<String> {
 
 pub async fn send_keys_to_session(session_name: &str, window_index: u32, keys: &str) -> Result<()> {
     let target = format!("{}:{}", session_name, window_index);
-    
+
     // Use send-keys WITHOUT -l flag (literal mode) to send plain text
     // The -l flag interprets keys as literal characters (like special keys)
     let status = Command::new("tmux")
         .args(&["send-keys", "-t", &target, keys])
         .status()
         .await?;
-    
+
     if !status.success() {
         anyhow::bail!("Failed to send keys to session");
     }
-    
+
     Ok(())
 }
 
@@ -471,11 +483,11 @@ pub async fn send_special_key(session_name: &str, window_index: u32, key: &str) 
         .args(&["send-keys", "-t", &target, key])
         .status()
         .await?;
-    
+
     if !status.success() {
         anyhow::bail!("Failed to send special key");
     }
-    
+
     Ok(())
 }
 
@@ -490,44 +502,42 @@ impl TmuxCommandBatch {
             commands: Vec::new(),
         }
     }
-    
+
     pub fn add_command(&mut self, args: &[&str]) {
         let cmd = args.join(" ");
         self.commands.push(cmd);
     }
-    
+
     pub async fn execute(&self) -> Result<Vec<Result<String>>> {
         if self.commands.is_empty() {
             return Ok(vec![]);
         }
-        
+
         // Execute multiple commands in a single tmux invocation
         let script = self.commands.join(" \\; ");
         let output = Command::new("tmux")
-            .args(&["-C"])  // Control mode
+            .args(&["-C"]) // Control mode
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        
+
         let mut child = output;
-        
+
         // Write commands
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
             stdin.write_all(script.as_bytes()).await?;
             stdin.write_all(b"\nexit\n").await?;
         }
-        
+
         let output = child.wait_with_output().await?;
-        
+
         // Parse results
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let results: Vec<Result<String>> = stdout
-            .lines()
-            .map(|line| Ok(line.to_string()))
-            .collect();
-        
+        let results: Vec<Result<String>> =
+            stdout.lines().map(|line| Ok(line.to_string())).collect();
+
         Ok(results)
     }
 }

@@ -238,6 +238,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final msg = _parseMessage(msgData);
 
       final messages = List<ChatMessage>.from(state.messages);
+      if (_isDuplicateFileMessage(messages, msg)) {
+        print('DEBUG: Skipping duplicate file message');
+        return;
+      }
       messages.add(msg);
 
       state = state.copyWith(messages: messages);
@@ -245,6 +249,39 @@ class ChatNotifier extends StateNotifier<ChatState> {
     } catch (e, stack) {
       print('ERROR parsing chat file message: $e\n$stack');
     }
+  }
+
+  bool _isDuplicateFileMessage(
+    List<ChatMessage> existingMessages,
+    ChatMessage incomingMessage,
+  ) {
+    final incomingAttachmentIds = incomingMessage.blocks
+        .where(_isAttachmentBlock)
+        .map((block) => block.id)
+        .whereType<String>()
+        .toSet();
+
+    if (incomingAttachmentIds.isEmpty) {
+      return false;
+    }
+
+    for (final message in existingMessages) {
+      for (final block in message.blocks) {
+        if (_isAttachmentBlock(block) &&
+            block.id != null &&
+            incomingAttachmentIds.contains(block.id)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  bool _isAttachmentBlock(ChatBlock block) {
+    return block.type == ChatBlockType.image ||
+        block.type == ChatBlockType.audio ||
+        block.type == ChatBlockType.file;
   }
 
   ChatMessage _parseMessage(Map<String, dynamic> data) {

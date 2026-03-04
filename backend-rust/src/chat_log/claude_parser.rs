@@ -114,10 +114,9 @@ fn convert_content(content: RawContent) -> Vec<ContentBlock> {
                 vec![ContentBlock::Text { text: s }]
             }
         }
-        RawContent::Blocks(raw_blocks) => raw_blocks
-            .into_iter()
-            .filter_map(convert_block)
-            .collect(),
+        RawContent::Blocks(raw_blocks) => {
+            raw_blocks.into_iter().filter_map(convert_block).collect()
+        }
     }
 }
 
@@ -175,9 +174,7 @@ pub fn generate_tool_summary(name: &str, input: Option<&serde_json::Value>) -> S
         _ => return name.to_string(),
     };
 
-    let value = input
-        .and_then(|v| v.get(field))
-        .and_then(|v| v.as_str());
+    let value = input.and_then(|v| v.get(field)).and_then(|v| v.as_str());
 
     match value {
         Some(s) => format!("{name}: {s}"),
@@ -287,10 +284,8 @@ mod tests {
 
     #[test]
     fn bash_tool_summary() {
-        let summary = generate_tool_summary(
-            "Bash",
-            Some(&serde_json::json!({"command": "cargo test"})),
-        );
+        let summary =
+            generate_tool_summary("Bash", Some(&serde_json::json!({"command": "cargo test"})));
         assert_eq!(summary, "Bash: cargo test");
     }
 

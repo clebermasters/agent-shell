@@ -21,7 +21,8 @@ impl ChatFileStorage {
             .unwrap_or("bin")
             .split(';')
             .next()
-            .unwrap_or("bin");
+            .unwrap_or("bin")
+            .trim_start_matches("x-"); // Handle audio/x-wav -> wav
 
         let file_path = self.storage_dir.join(format!("{}.{}", id, extension));
 

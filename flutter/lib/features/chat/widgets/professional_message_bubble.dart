@@ -9,8 +9,9 @@ import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../data/models/chat_message.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
@@ -37,6 +38,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  final Map<String, String> _audioCachePaths = {};
+  String? _playingBlockId;
 
   bool get isDark => widget.isDarkMode;
 
@@ -63,6 +67,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   @override
   void dispose() {
     _animationController.dispose();
+    _audioPlayer.dispose();
     super.dispose();
   }
 
@@ -497,6 +502,11 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   }
 
   Widget _buildAudioBlock(ChatBlock block, Color textColor) {
+    final audioUrl = widget.baseUrl != null && block.id != null
+        ? '${widget.baseUrl}/api/chat/files/${block.id}'
+        : null;
+    final isThisPlaying = _playingBlockId == block.id;
+
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Container(
@@ -508,16 +518,33 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              icon: Icon(
-                Icons.play_circle,
-                color: isDark
-                    ? const Color(0xFF6EE7B7)
-                    : const Color(0xFF047857),
-              ),
-              iconSize: 36,
-              onPressed: () {
-                // TODO: Implement audio playback
+            StreamBuilder<PlayerState>(
+              stream: _audioPlayer.playerStateStream,
+              builder: (context, snapshot) {
+                final playerState = snapshot.data;
+                final playing = playerState?.playing ?? false;
+                final isThisBlockPlaying = isThisPlaying && playing;
+                final isThisBlockPaused =
+                    isThisPlaying &&
+                    !playing &&
+                    playerState?.processingState != ProcessingState.completed;
+
+                return IconButton(
+                  icon: Icon(
+                    isThisBlockPlaying ? Icons.pause_circle : Icons.play_circle,
+                    color: isDark
+                        ? const Color(0xFF6EE7B7)
+                        : const Color(0xFF047857),
+                  ),
+                  iconSize: 36,
+                  onPressed: audioUrl != null
+                      ? () => _playAudio(
+                          block.id!,
+                          audioUrl,
+                          isThisBlockPlaying || isThisBlockPaused,
+                        )
+                      : null,
+                );
               },
             ),
             const SizedBox(width: 8),
@@ -526,12 +553,14 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Audio',
+                  block.filename ?? 'Audio',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: textColor,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 if (block.durationSeconds != null)
                   Text(
@@ -547,6 +576,52 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         ),
       ),
     );
+  }
+
+  Future<void> _playAudio(String blockId, String url, bool isPaused) async {
+    try {
+      if (isPaused) {
+        await _audioPlayer.pause();
+        setState(() {});
+        return;
+      }
+
+      if (_playingBlockId != blockId) {
+        debugPrint('Audio URL: $url');
+        try {
+          await _audioPlayer.setUrl(url);
+        } catch (streamError) {
+          debugPrint(
+            'Streaming audio failed, trying local fallback: $streamError',
+          );
+          final localPath = await _downloadAudioToTemp(blockId, url);
+          await _audioPlayer.setFilePath(localPath);
+        }
+        _playingBlockId = blockId;
+      }
+      await _audioPlayer.play();
+      setState(() {});
+    } catch (e) {
+      debugPrint('Audio error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to play audio: $e')));
+      }
+    }
+  }
+
+  Future<String> _downloadAudioToTemp(String blockId, String url) async {
+    final cachedPath = _audioCachePaths[blockId];
+    if (cachedPath != null && await File(cachedPath).exists()) {
+      return cachedPath;
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    final filePath = '${tempDir.path}/chat_audio_$blockId.bin';
+    await Dio().download(url, filePath, deleteOnError: true);
+    _audioCachePaths[blockId] = filePath;
+    return filePath;
   }
 
   String _formatDuration(double seconds) {
@@ -628,18 +703,17 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
       return;
     }
 
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         SnackBar(content: Text('Downloading ${block.filename ?? 'file'}...')),
       );
 
       final dio = Dio();
 
-      // Use app's external storage directory - guaranteed to be writable
       final dir = await getExternalStorageDirectory();
       final downloadsDir = Directory('${dir?.path}/Downloads');
 
-      // Create Downloads folder if it doesn't exist
       if (!await downloadsDir.exists()) {
         await downloadsDir.create(recursive: true);
       }
@@ -651,20 +725,20 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Downloaded to Downloads/$filename')),
+      scaffoldMessenger.hideCurrentSnackBar();
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Downloaded. Opening...'),
+          duration: const Duration(seconds: 1),
+        ),
       );
-    } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to download: $e')));
-    }
-  }
 
-  Future<void> _openFile(String filePath, String? mimeType) async {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('File: $filePath')));
+      await OpenFile.open(filePath);
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Failed to download: $e')),
+      );
+    }
   }
 
   IconData _getFileIcon(String? mimeType) {

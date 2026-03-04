@@ -23,6 +23,7 @@ use bytes::Bytes;
 
 use crate::{
     audio,
+    chat_file_storage,
     tmux,
     types::*,
     AppState,
@@ -107,6 +108,7 @@ struct WsState {
     audio_tx: Option<mpsc::UnboundedSender<BroadcastMessage>>,
     message_tx: mpsc::UnboundedSender<BroadcastMessage>,
     chat_log_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
 }
 
 pub async fn ws_handler(
@@ -137,6 +139,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         audio_tx: None,
         message_tx: tx.clone(),
         chat_log_handle: Arc::new(Mutex::new(None)),
+        chat_file_storage: state.chat_file_storage.clone(),
     };
     
     // Clone client_id for the spawned task

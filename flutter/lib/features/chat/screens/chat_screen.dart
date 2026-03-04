@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/professional_message_bubble.dart';
+import '../../hosts/providers/hosts_provider.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String sessionName;
@@ -278,10 +279,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         itemCount: chatState.messages.length,
                         itemBuilder: (context, index) {
                           final message = chatState.messages[index];
+                          final hostsState = ref.watch(hostsProvider);
                           return ProfessionalMessageBubble(
                             message: message,
                             showTimestamp: true,
                             isDarkMode: isDarkMode,
+                            baseUrl: hostsState.selectedHost?.httpUrl,
                           );
                         },
                       ),

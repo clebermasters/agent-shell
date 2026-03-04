@@ -1,5 +1,15 @@
 # Android File Opening Issue - Investigation & Solutions
 
+## Status
+
+Resolved in Flutter chat file handling by:
+
+1. Downloading files to app cache (`getTemporaryDirectory()/chat_downloads`) instead of external storage paths.
+2. Opening files via `OpenFile.open(filePath, type: mimeType)` and handling `OpenResult`.
+3. Sanitizing filenames before writing to disk.
+
+This avoids `file://` URI exposure and scoped-storage edge cases from shared external paths.
+
 ## Problem Summary
 
 When users tap on a downloaded file in the Flutter app, we want to open it with the appropriate app (e.g., open HTML files in browser, PDF in PDF viewer, etc.). However, Android's security model prevents sharing direct `file://` URIs across app boundaries.
@@ -89,21 +99,23 @@ await channel.invokeMethod('openFile', {
 
 ---
 
-### Current Solution (Simplified)
-
-For now, we simply show the file location after download. The user can manually open files using a file manager app:
+### Current Solution (Implemented)
 
 ```dart
-ScaffoldMessenger.of(context).showSnackBar(
-  SnackBar(content: Text('Downloaded to Downloads/$filename')),
-);
+final cacheDir = await getTemporaryDirectory();
+final downloadsDir = Directory('${cacheDir.path}/chat_downloads');
+final filePath = '${downloadsDir.path}/${_sanitizeFilename(filename)}';
+await dio.download(fileUrl, filePath);
+final openResult = await OpenFile.open(filePath, type: mimeType);
 ```
+
+If `openResult.type != ResultType.done`, the app shows an actionable error snackbar.
 
 ---
 
-## Recommended Solutions
+## Notes
 
-### Option 1: Use `open_file` package (Easiest)
+### Option 1: Keep using `open_file` package (Current)
 
 There's a Flutter package specifically for this: **`open_file`** (https://pub.dev/packages/open_file)
 
@@ -117,37 +129,7 @@ void openFile(String filePath) {
 }
 ```
 
-**Steps to implement:**
-1. Add to `pubspec.yaml`:
-   ```yaml
-   dependencies:
-     open_file: ^3.5.0
-   ```
-
-2. Add to `AndroidManifest.xml`:
-   ```xml
-   <provider
-       android:name="androidx.core.content.FileProvider"
-       android:authorities="${applicationId}.fileprovider"
-       android:exported="false"
-       android:grantUriPermissions="true">
-       <meta-data
-           android:name="android.support.FILE_PROVIDER_PATHS"
-           android:resource="@xml/file_paths" />
-   </provider>
-   ```
-
-3. Create `android/app/src/main/res/xml/file_paths.xml`:
-   ```xml
-   <?xml version="1.0" encoding="utf-8"?>
-   <paths>
-       <external-path name="external_files" path="." />
-       <cache-path name="cache" path="." />
-       <files-path name="files" path="." />
-   </paths>
-   ```
-
-4. Update download code to use `OpenFile.open(filePath)` instead of custom logic
+`open_file` already provides Android `FileProvider` integration via its plugin manifest.
 
 ---
 
@@ -208,14 +190,9 @@ If you need full control:
 
 ---
 
-## Files to Modify
+## Files Modified
 
-When implementing the fix, modify:
-
-1. **`flutter/pubspec.yaml`** - Add dependency
-2. **`flutter/lib/features/chat/widgets/professional_message_bubble.dart`** - Update `_downloadAndOpenFile` and `_openFile` methods
-3. **`flutter/android/app/src/main/AndroidManifest.xml`** - Add FileProvider (if not using open_file package)
-4. **`flutter/android/app/src/main/res/xml/file_paths.xml`** - Create this file for path configuration
+1. **`flutter/lib/features/chat/widgets/professional_message_bubble.dart`** - Updated `_downloadAndOpenFile()` and added filename sanitization
 
 ---
 
@@ -239,7 +216,7 @@ To test file opening:
 
 2. In Flutter app, tap on the file attachment
 3. File downloads to Downloads folder
-4. Tap "Open" or file should auto-open
+4. The app opens the file with the associated app, or shows a specific open failure message
 
 ---
 

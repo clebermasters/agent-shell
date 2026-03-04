@@ -280,7 +280,7 @@ pub enum AudioAction {
     Stop,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileAttachment {
     pub filename: String,
     #[serde(rename = "mimeType")]

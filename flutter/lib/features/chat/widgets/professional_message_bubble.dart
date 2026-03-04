@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
@@ -236,7 +237,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
     return MarkdownBody(
       data: text,
       selectable: true,
-      builders: {'code': CodeBlockBuilder(isUser: isUser, isDark: isDark)},
+      builders: {'pre': CodeBlockBuilder(isUser: isUser, isDark: isDark)},
       styleSheet: MarkdownStyleSheet(
         p: TextStyle(color: textColor, fontSize: 14, height: 1.6),
         h1: TextStyle(
@@ -277,8 +278,10 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           fontFamily: 'monospace',
           fontSize: 13,
         ),
-        codeblockDecoration: const BoxDecoration(),
-        codeblockPadding: const EdgeInsets.all(12),
+        codeblockDecoration: const BoxDecoration(
+          color: Colors.transparent,
+        ),
+        codeblockPadding: EdgeInsets.zero,
         blockquote: TextStyle(
           color: textColor.withValues(alpha: 0.8),
           fontStyle: FontStyle.italic,
@@ -578,16 +581,32 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
   CodeBlockBuilder({this.isUser = false, this.isDark = false});
 
   @override
-  Widget? visitElementAfter(element, preferredStyle) {
+  Widget? visitElementAfter(md.Element element, preferredStyle) {
     final code = element.textContent;
     var language = '';
 
-    if (element.attributes['class'] != null) {
+    // In a 'pre' tag, the language class is usually on its 'code' child
+    if (element.children != null && element.children!.isNotEmpty) {
+      final child = element.children!.first;
+      if (child is md.Element && child.attributes['class'] != null) {
+        language = child.attributes['class']!.replaceFirst('language-', '');
+      }
+    }
+
+    if (language.isEmpty && element.attributes['class'] != null) {
       language = element.attributes['class']!.replaceFirst('language-', '');
     }
 
     final codeColor = isDark ? Colors.grey.shade300 : Colors.grey.shade800;
     final hasLanguage = language.isNotEmpty;
+    
+    final Map<String, TextStyle> customTheme = Map.from(
+      isDark ? atomOneDarkTheme : atomOneLightTheme,
+    );
+    customTheme['root'] = TextStyle(
+      color: customTheme['root']?.color,
+      backgroundColor: Colors.transparent,
+    );
 
     if (hasLanguage) {
       // Single container for entire code block - no separate header
@@ -656,9 +675,9 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
             Container(
               padding: const EdgeInsets.all(12),
               child: HighlightView(
-                code,
+                code.trimRight(),
                 language: _mapLanguage(language),
-                theme: isDark ? atomOneDarkTheme : atomOneLightTheme,
+                theme: customTheme,
                 padding: EdgeInsets.zero,
                 textStyle: const TextStyle(
                   fontFamily: 'monospace',
@@ -680,12 +699,9 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
             ? Colors.grey.shade800.withValues(alpha: 0.3)
             : Colors.grey.shade100,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
-        ),
       ),
       child: SelectableText(
-        code,
+        code.trimRight(),
         style: TextStyle(
           fontFamily: 'monospace',
           fontSize: 13,

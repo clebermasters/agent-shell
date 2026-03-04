@@ -18,6 +18,75 @@ External processes can send files to a specific chat session via WebSocket. The 
 
 ---
 
+## Prerequisites
+
+Before sending files to chat, you need to know the **tmux session name** where your process is running.
+
+### How to Get the Current Session Name
+
+There are several ways to determine the tmux session name:
+
+#### Option 1: Using tmux Command (Recommended)
+
+Run this command inside your tmux session to get the current session name:
+
+```bash
+tmux display-message -p '#{session_name}'
+```
+
+This returns the session name (e.g., `my-project`, `work`, etc.)
+
+#### Option 2: Using tmux Command for Full Path
+
+If you have multiple sessions with the same name pattern, get the full pane path:
+
+```bash
+tmux display-message -p '#{session_name}:#{window_index}:#{pane_index}'
+```
+
+Or get the current working directory of the pane:
+
+```bash
+tmux display-message -p '#{pane_current_path}'
+```
+
+#### Option 3: Using WebSocket API
+
+Connect to WebSocket and request the list of sessions:
+
+```json
+{
+  "type": "list-sessions"
+}
+```
+
+The server responds with:
+
+```json
+{
+  "type": "sessions-list",
+  "sessions": [
+    {
+      "name": "my-project",
+      "attached": true,
+      "created": "2024-01-01T00:00:00Z",
+      "windows": 3,
+      "dimensions": "80x24"
+    }
+  ]
+}
+```
+
+#### Option 4: Using Environment Variable (Future)
+
+> **Note**: Not yet implemented. Coming soon.
+
+WebMux may set environment variables for processes running in tmux. Check for:
+- `WEBMUX_SESSION` - The current tmux session name
+- `WEBMUX_WINDOW` - The current window index
+
+---
+
 ## WebSocket Connection
 
 ### Connect to WebSocket

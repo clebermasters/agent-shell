@@ -211,6 +211,8 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           switch (block.type) {
             case ChatBlockType.text:
               return _buildMarkdownBlock(block.text ?? '', textColor, isUser);
+            case ChatBlockType.thinking:
+              return _buildThinkingBlock(block.content ?? '', textColor);
             case ChatBlockType.toolCall:
               return _buildToolCallCard(block);
             case ChatBlockType.toolResult:
@@ -278,9 +280,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           fontFamily: 'monospace',
           fontSize: 13,
         ),
-        codeblockDecoration: const BoxDecoration(
-          color: Colors.transparent,
-        ),
+        codeblockDecoration: const BoxDecoration(color: Colors.transparent),
         codeblockPadding: EdgeInsets.zero,
         blockquote: TextStyle(
           color: textColor.withValues(alpha: 0.8),
@@ -385,6 +385,59 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
                 ),
               )
             : null,
+      ),
+    );
+  }
+
+  Widget _buildThinkingBlock(String content, Color textColor) {
+    if (content.isEmpty) return const SizedBox.shrink();
+
+    final thinkingColor = isDark
+        ? const Color(0xFFFBBF24)
+        : const Color(0xFFD97706);
+    final bgColor = isDark ? const Color(0xFF422006) : const Color(0xFFFEF3C7);
+    final borderColor = isDark
+        ? const Color(0xFF78350F)
+        : const Color(0xFFFDE68A);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: borderColor, width: 1),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.psychology, size: 14, color: thinkingColor),
+                const SizedBox(width: 6),
+                Text(
+                  'Thinking',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: thinkingColor,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SelectableText(
+              content,
+              style: TextStyle(
+                fontSize: 12,
+                color: textColor.withValues(alpha: 0.9),
+                height: 1.5,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -599,7 +652,7 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
 
     final codeColor = isDark ? Colors.grey.shade300 : Colors.grey.shade800;
     final hasLanguage = language.isNotEmpty;
-    
+
     final Map<String, TextStyle> customTheme = Map.from(
       isDark ? atomOneDarkTheme : atomOneLightTheme,
     );

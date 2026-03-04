@@ -10,7 +10,7 @@ enum ChatMessageType {
   error,
 }
 
-enum ChatBlockType { text, toolCall, toolResult }
+enum ChatBlockType { text, toolCall, toolResult, thinking }
 
 class ChatBlock extends Equatable {
   final ChatBlockType type;
@@ -31,6 +31,9 @@ class ChatBlock extends Equatable {
 
   factory ChatBlock.text(String? text) =>
       ChatBlock(type: ChatBlockType.text, text: text ?? '');
+
+  factory ChatBlock.thinking(String? content) =>
+      ChatBlock(type: ChatBlockType.thinking, content: content ?? '');
 
   factory ChatBlock.toolCall({
     String? toolName,

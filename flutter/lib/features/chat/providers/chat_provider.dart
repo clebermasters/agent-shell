@@ -89,7 +89,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _messageSubscription = _ws!.messages.listen((message) {
       final type = message['type'] as String?;
       print('DEBUG: Received message of type: $type');
-      
+
       if (type == 'chat-history' || type == 'chat-event') {
         print('DEBUG: Full chat message: $message');
       }
@@ -110,7 +110,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void _handleChatHistory(Map<String, dynamic> message) {
     try {
-      final sessionName = (message['sessionName'] ?? message['session-name']) as String?;
+      final sessionName =
+          (message['sessionName'] ?? message['session-name']) as String?;
       final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
@@ -118,7 +119,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         'DEBUG: Chat history received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
       );
 
-      if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+      if (sessionName != state.sessionName ||
+          windowIndex != state.windowIndex) {
         print(
           'Ignoring chat history for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
         );
@@ -147,16 +149,22 @@ class ChatNotifier extends StateNotifier<ChatState> {
         isLoading: false,
         error: null,
       );
-      print('DEBUG: isLoading set to false, messages count: ${messages.length}');
+      print(
+        'DEBUG: isLoading set to false, messages count: ${messages.length}',
+      );
     } catch (e, stack) {
       print('ERROR parsing chat history: $e\n$stack');
-      state = state.copyWith(isLoading: false, error: 'Failed to parse chat history');
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Failed to parse chat history',
+      );
     }
   }
 
   void _handleChatEvent(Map<String, dynamic> message) {
     try {
-      final sessionName = (message['sessionName'] ?? message['session-name']) as String?;
+      final sessionName =
+          (message['sessionName'] ?? message['session-name']) as String?;
       final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
@@ -164,7 +172,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         'DEBUG: Chat event received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
       );
 
-      if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+      if (sessionName != state.sessionName ||
+          windowIndex != state.windowIndex) {
         print(
           'Ignoring chat event for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
         );
@@ -178,7 +187,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       // Skip user messages from backend ONLY for live events since we already add them locally
       if (msg.type == ChatMessageType.user) {
-        print('  -> Skipping live user message from backend (already added locally)');
+        print(
+          '  -> Skipping live user message from backend (already added locally)',
+        );
         return;
       }
 
@@ -228,6 +239,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
             content: block['content'] as String?,
             summary: block['summary'] as String?,
           );
+        case 'thinking':
+          return ChatBlock.thinking(block['content'] as String? ?? '');
         default:
           return ChatBlock.text(block['text'] as String? ?? '');
       }
@@ -305,7 +318,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       sessionName: sessionName,
       windowIndex: windowIndex,
     );
-    
+
     // Give a small delay to ensure WebSocket is connected if it was just switched
     if (_ws == null || !_ws!.isConnected) {
       await Future.delayed(const Duration(milliseconds: 500));

@@ -83,10 +83,10 @@ pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result
          ORDER BY time_updated DESC LIMIT 1",
     )?;
 
-    let result: Result<(String, i64, i64), _> = stmt
-        .query_row(rusqlite::params![dir_str, process_start_epoch_ms, process_start_epoch_ms], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        });
+    let result: Result<(String, i64, i64), _> = stmt.query_row(
+        rusqlite::params![dir_str, process_start_epoch_ms, process_start_epoch_ms],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    );
 
     let (session_id, time_created, time_updated) = match result {
         Ok(data) => {
@@ -98,7 +98,9 @@ pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result
         }
         Err(_) => {
             // Fallback: get the most recently updated session
-            debug!("Could not match by start time window, falling back to most recent for directory");
+            debug!(
+                "Could not match by start time window, falling back to most recent for directory"
+            );
             let mut stmt = conn.prepare(
                 "SELECT id, time_created, time_updated FROM session 
                  WHERE directory = ? 
@@ -187,7 +189,6 @@ fn get_process_uptime_ms(pid: u32) -> Result<i64> {
     Ok((uptime * 1000.0) as i64)
 }
 
-
 /// Fetch all new messages since the last fetch
 pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<Vec<ChatMessage>> {
     let conn = Connection::open(db_path)?;
@@ -205,7 +206,10 @@ pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<V
     let mut rows = match stmt.query(rusqlite::params![state.session_id, state.last_time_updated]) {
         Ok(r) => r,
         Err(e) => {
-            error!("Failed to query opencode messages for session {}: {}", state.session_id, e);
+            error!(
+                "Failed to query opencode messages for session {}: {}",
+                state.session_id, e
+            );
             return Err(e.into());
         }
     };
@@ -274,6 +278,28 @@ fn parse_part(
 
             ContentBlock::Text {
                 text: new_chunk.to_string(),
+            }
+        }
+        "reasoning" => {
+            // Extract thinking/reasoning content from AI models
+            let content = part.text.as_deref().unwrap_or_default();
+            let last_len = state
+                .seen_text_lengths
+                .get(&format!("reasoning_{}", id))
+                .copied()
+                .unwrap_or(0);
+
+            if content.len() <= last_len {
+                return None;
+            }
+
+            let new_chunk = &content[last_len..];
+            state
+                .seen_text_lengths
+                .insert(format!("reasoning_{}", id), content.len());
+
+            ContentBlock::Thinking {
+                content: new_chunk.to_string(),
             }
         }
         "tool" => {

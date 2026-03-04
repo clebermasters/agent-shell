@@ -13,6 +13,9 @@ pub enum ContentBlock {
     Text {
         text: String,
     },
+    Thinking {
+        content: String,
+    },
     ToolCall {
         name: String,
         summary: String,

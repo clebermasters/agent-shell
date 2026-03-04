@@ -241,6 +241,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
           );
         case 'thinking':
           return ChatBlock.thinking(block['content'] as String? ?? '');
+        case 'image':
+          return ChatBlock.image(
+            id: block['id'] as String,
+            mimeType: block['mimeType'] as String,
+            altText: block['altText'] as String?,
+          );
+        case 'audio':
+          return ChatBlock.audio(
+            id: block['id'] as String,
+            mimeType: block['mimeType'] as String,
+            durationSeconds: (block['durationSeconds'] as num?)?.toDouble(),
+          );
+        case 'file':
+          return ChatBlock.file(
+            id: block['id'] as String,
+            filename: block['filename'] as String,
+            mimeType: block['mimeType'] as String,
+            sizeBytes: block['sizeBytes'] as int?,
+          );
         default:
           return ChatBlock.text(block['text'] as String? ?? '');
       }

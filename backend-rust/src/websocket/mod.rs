@@ -836,6 +836,57 @@ async fn handle_message(
                 handle.abort();
             }
         }
+        WebSocketMessage::SendFileToChat { session_name, window_index, file } => {
+            info!("Received file to send to chat: {} ({})", file.filename, file.mime_type);
+            
+            // Save file to storage
+            let file_id = match state.chat_file_storage.save_file(&file.data, &file.filename, &file.mime_type) {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("Failed to save file: {}", e);
+                    return Ok(());
+                }
+            };
+            
+            // Create content block based on mime type
+            let block = if file.mime_type.starts_with("image/") {
+                crate::chat_log::ContentBlock::Image {
+                    id: file_id,
+                    mime_type: file.mime_type.clone(),
+                    alt_text: Some(file.filename.clone()),
+                }
+            } else if file.mime_type.starts_with("audio/") {
+                crate::chat_log::ContentBlock::Audio {
+                    id: file_id,
+                    mime_type: file.mime_type.clone(),
+                    duration_seconds: None,
+                }
+            } else {
+                crate::chat_log::ContentBlock::File {
+                    id: file_id,
+                    filename: file.filename.clone(),
+                    mime_type: file.mime_type.clone(),
+                    size_bytes: Some((file.data.len() as f64 * 0.75) as u64), // approximate decoded size
+                }
+            };
+            
+            let chat_message = crate::chat_log::ChatMessage {
+                role: "assistant".to_string(),
+                timestamp: Some(chrono::Utc::now()),
+                blocks: vec![block],
+            };
+            
+            // Broadcast to all connected clients
+            let msg = ServerMessage::ChatFileMessage {
+                session_name: session_name.clone(),
+                window_index,
+                message: chat_message,
+            };
+            
+            if let Err(e) = send_message(&state.message_tx, msg).await {
+                error!("Failed to broadcast file message: {}", e);
+            }
+        }
     }
     
     Ok(())

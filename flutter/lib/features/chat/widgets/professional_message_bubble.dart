@@ -217,6 +217,12 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
               return _buildToolCallCard(block);
             case ChatBlockType.toolResult:
               return _buildToolResultCard(block);
+            case ChatBlockType.image:
+              return _buildImageBlock(block, textColor);
+            case ChatBlockType.audio:
+              return _buildAudioBlock(block, textColor);
+            case ChatBlockType.file:
+              return _buildFileBlock(block, textColor);
           }
         }).toList(),
       );
@@ -387,6 +393,204 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
             : null,
       ),
     );
+  }
+
+  Widget _buildImageBlock(ChatBlock block, Color textColor) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: GestureDetector(
+        onTap: () => _showImageFullScreen(block.id),
+        child: Hero(
+          tag: 'image_${block.id}',
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 200, maxHeight: 200),
+              color: isDark ? Colors.grey[800] : Colors.grey[200],
+              child: Center(
+                child: Icon(
+                  Icons.image,
+                  size: 48,
+                  color: isDark ? Colors.grey[600] : Colors.grey[400],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showImageFullScreen(String? imageId) {
+    if (imageId == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            iconTheme: const IconThemeData(color: Colors.white),
+          ),
+          body: Center(
+            child: Hero(
+              tag: 'image_$imageId',
+              child: InteractiveViewer(
+                child: Icon(Icons.image, size: 200, color: Colors.grey[700]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAudioBlock(ChatBlock block, Color textColor) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: Icon(
+                Icons.play_circle,
+                color: isDark
+                    ? const Color(0xFF6EE7B7)
+                    : const Color(0xFF047857),
+              ),
+              iconSize: 36,
+              onPressed: () {
+                // TODO: Implement audio playback
+              },
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Audio',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
+                  ),
+                ),
+                if (block.durationSeconds != null)
+                  Text(
+                    _formatDuration(block.durationSeconds!),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: textColor.withValues(alpha: 0.6),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatDuration(double seconds) {
+    final mins = (seconds / 60).floor();
+    final secs = (seconds % 60).floor();
+    return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildFileBlock(ChatBlock block, Color textColor) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: InkWell(
+        onTap: () {
+          // TODO: Implement file download
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+            ),
+          ),
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _getFileIcon(block.mimeType),
+                size: 32,
+                color: isDark
+                    ? const Color(0xFF6EE7B7)
+                    : const Color(0xFF047857),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    block.filename ?? 'File',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: textColor,
+                    ),
+                  ),
+                  if (block.sizeBytes != null)
+                    Text(
+                      _formatFileSize(block.sizeBytes!),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: textColor.withValues(alpha: 0.6),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.download,
+                size: 18,
+                color: textColor.withValues(alpha: 0.6),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _getFileIcon(String? mimeType) {
+    if (mimeType == null) return Icons.insert_drive_file;
+    if (mimeType.contains('pdf')) return Icons.picture_as_pdf;
+    if (mimeType.contains('word') || mimeType.contains('document')) {
+      return Icons.description;
+    }
+    if (mimeType.contains('excel') || mimeType.contains('spreadsheet')) {
+      return Icons.table_chart;
+    }
+    if (mimeType.contains('zip') || mimeType.contains('archive')) {
+      return Icons.folder_zip;
+    }
+    if (mimeType.contains('text')) return Icons.text_snippet;
+    return Icons.insert_drive_file;
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
   Widget _buildThinkingBlock(String content, Color textColor) {

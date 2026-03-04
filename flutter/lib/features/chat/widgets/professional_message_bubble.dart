@@ -10,6 +10,7 @@ import 'package:flutter_highlight/themes/atom-one-light.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../data/models/chat_message.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
@@ -683,47 +684,21 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         return;
       }
 
-      if (Platform.isAndroid) {
-        // Use content provider approach for Android
-        // Copy to cache and use file provider
-        final cacheDir = await getTemporaryDirectory();
-        final cacheFile = File('${cacheDir.path}/${filePath.split('/').last}');
-        await file.copy(cacheFile.path);
-
-        final result = await Process.run('am', [
-          'start',
-          '-a',
-          'android.intent.action.VIEW',
-          '--user',
-          '0',
-          '-d',
-          'content://${cacheFile.path}',
-          '-t',
-          mimeType ?? 'application/octet-stream',
-        ]);
-
-        if (result.exitCode != 0) {
-          // Try alternative with MIME type only
-          final result2 = await Process.run('am', [
-            'start',
-            '-a',
-            'android.intent.action.VIEW',
-            '-d',
-            'file://$filePath',
-          ]);
-
-          if (result2.exitCode != 0 && mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('Saved to: $filePath')));
-          }
+      final uri = Uri.file(filePath);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Cannot open: $filePath')));
         }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Could not open file: $e')));
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
   }

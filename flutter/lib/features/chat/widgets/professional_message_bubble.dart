@@ -137,10 +137,32 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
             color: headerColor,
           ),
         ),
+        if (!isUser && widget.message.isStreaming) ...[
+          const SizedBox(width: 8),
+          _buildStreamingIndicator(headerColor),
+        ],
         if (isUser) ...[
           const SizedBox(width: 4),
           Icon(icon, size: 14, color: headerColor),
         ],
+      ],
+    );
+  }
+
+  Widget _buildStreamingIndicator(Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _AnimatedDots(color: color),
+        const SizedBox(width: 4),
+        Text(
+          'Thinking',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            color: color.withValues(alpha: 0.8),
+          ),
+        ),
       ],
     );
   }
@@ -802,5 +824,60 @@ extension StringExtension on String {
   String take(int count) {
     if (length <= count) return this;
     return '${substring(0, count)}...';
+  }
+}
+
+class _AnimatedDots extends StatefulWidget {
+  final Color color;
+
+  const _AnimatedDots({required this.color});
+
+  @override
+  State<_AnimatedDots> createState() => _AnimatedDotsState();
+}
+
+class _AnimatedDotsState extends State<_AnimatedDots>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 1200),
+      vsync: this,
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (index) {
+            final delay = index * 0.2;
+            final value = (_controller.value - delay).clamp(0.0, 1.0);
+            final opacity = value < 0.5 ? value * 2 : 2 - value * 2;
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 1),
+              width: 4,
+              height: 4,
+              decoration: BoxDecoration(
+                color: widget.color.withValues(alpha: opacity.clamp(0.3, 1.0)),
+                shape: BoxShape.circle,
+              ),
+            );
+          }),
+        );
+      },
+    );
   }
 }

@@ -881,13 +881,14 @@ async fn handle_message(
                 blocks: vec![block],
             };
             
-            // Broadcast to all connected clients
+            // Broadcast to all connected clients watching this session
             let msg = ServerMessage::ChatFileMessage {
                 session_name: session_name.clone(),
                 window_index,
                 message: chat_message,
             };
             
+            // Use client_manager.broadcast to send to ALL connected clients
             state.client_manager.broadcast(msg).await;
         }
     }

@@ -635,21 +635,17 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
       final dio = Dio();
 
-      // Get external storage directory (Downloads folder)
-      Directory? dir;
-      if (Platform.isAndroid) {
-        dir = Directory('/storage/emulated/0/Download');
-        if (!await dir.exists()) {
-          dir = await getExternalStorageDirectory();
-        }
-      } else {
-        dir = await getDownloadsDirectory();
+      // Use app's external storage directory - guaranteed to be writable
+      final dir = await getExternalStorageDirectory();
+      final downloadsDir = Directory('${dir?.path}/Downloads');
+
+      // Create Downloads folder if it doesn't exist
+      if (!await downloadsDir.exists()) {
+        await downloadsDir.create(recursive: true);
       }
 
-      dir ??= await getApplicationDocumentsDirectory();
-
       final filename = block.filename ?? 'file';
-      final filePath = '${dir.path}/$filename';
+      final filePath = '${downloadsDir.path}/$filename';
 
       await dio.download(fileUrl, filePath);
 

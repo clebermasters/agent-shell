@@ -8,6 +8,8 @@ import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../../data/models/chat_message.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
@@ -553,12 +555,14 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   }
 
   Widget _buildFileBlock(ChatBlock block, Color textColor) {
+    final fileUrl = widget.baseUrl != null && block.id != null
+        ? '${widget.baseUrl}/api/chat/files/${block.id}'
+        : null;
+
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: InkWell(
-        onTap: () {
-          // TODO: Implement file download
-        },
+        onTap: () => _downloadAndOpenFile(block, fileUrl),
         borderRadius: BorderRadius.circular(12),
         child: Container(
           decoration: BoxDecoration(
@@ -613,6 +617,36 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         ),
       ),
     );
+  }
+
+  Future<void> _downloadAndOpenFile(ChatBlock block, String? fileUrl) async {
+    if (fileUrl == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Cannot download file')));
+      return;
+    }
+
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Downloading ${block.filename ?? 'file'}...')),
+      );
+
+      // Use Dio to download
+      final dio = Dio();
+      final dir = await getApplicationDocumentsDirectory();
+      final filePath = '${dir.path}/${block.filename ?? 'file'}';
+
+      await dio.download(fileUrl, filePath);
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Downloaded to $filePath')));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to download: $e')));
+    }
   }
 
   IconData _getFileIcon(String? mimeType) {

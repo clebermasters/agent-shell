@@ -101,6 +101,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
         case 'chat-event':
           _handleChatEvent(message);
           break;
+        case 'chat-file-message':
+          _handleChatFileMessage(message);
+          break;
         case 'chat-log-error':
           _handleChatError(message);
           break;
@@ -216,6 +219,32 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void _handleChatError(Map<String, dynamic> message) {
     final error = message['error'] as String? ?? 'Unknown error';
     state = state.copyWith(error: error, isLoading: false);
+  }
+
+  void _handleChatFileMessage(Map<String, dynamic> message) {
+    try {
+      final sessionName = message['sessionName'] as String?;
+      final windowIndexRaw = message['windowIndex'];
+      final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
+
+      if (sessionName != state.sessionName ||
+          windowIndex != state.windowIndex) {
+        return;
+      }
+
+      final msgData = message['message'] as Map<String, dynamic>?;
+      if (msgData == null) return;
+
+      final msg = _parseMessage(msgData);
+
+      final messages = List<ChatMessage>.from(state.messages);
+      messages.add(msg);
+
+      state = state.copyWith(messages: messages);
+      print('DEBUG: Added file message to chat');
+    } catch (e, stack) {
+      print('ERROR parsing chat file message: $e\n$stack');
+    }
   }
 
   ChatMessage _parseMessage(Map<String, dynamic> data) {

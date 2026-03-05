@@ -206,9 +206,16 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   }
 
   void injectText(String text) {
-    if (_activeSessionName != null) {
-      terminalService.writeToTerminal(_activeSessionName!, text);
+    final sessionName = _activeSessionName;
+    if (sessionName == null || text.isEmpty) {
+      return;
     }
+
+    // Send transcription as real terminal input so tmux receives it.
+    final shouldAutoEnter =
+        _prefs?.getBool(AppConfig.keyVoiceAutoEnter) ?? false;
+    final payload = shouldAutoEnter && !text.endsWith('\n') ? '$text\n' : text;
+    _wsService.sendTerminalData(sessionName, payload);
   }
 
   @override

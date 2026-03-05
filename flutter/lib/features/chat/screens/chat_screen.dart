@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../../core/config/app_config.dart';
+import '../../../core/providers.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/professional_message_bubble.dart';
 import '../../hosts/providers/hosts_provider.dart';
@@ -136,16 +138,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _sendMessage() {
     final content = _controller.text.trim();
-    if (content.isNotEmpty) {
-      ref.read(chatProvider.notifier).addUserMessage(content);
-      ref.read(chatProvider.notifier).sendInput(content);
-      _controller.clear();
-      _scrollToBottom();
-      setState(() {
-        _autoScroll = true;
-        _showScrollButton = false;
-      });
-    }
+    _submitMessage(content);
+  }
+
+  void _submitMessage(String content) {
+    if (content.isEmpty) return;
+
+    ref.read(chatProvider.notifier).addUserMessage(content);
+    ref.read(chatProvider.notifier).sendInput(content);
+    _controller.clear();
+    _scrollToBottom();
+    setState(() {
+      _autoScroll = true;
+      _showScrollButton = false;
+    });
   }
 
   void _scrollToBottom() {
@@ -158,16 +164,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatProvider);
+    final prefs = ref.read(sharedPreferencesProvider);
+    final shouldAutoEnterVoiceText =
+        prefs.getBool(AppConfig.keyVoiceAutoEnter) ?? false;
 
     if (chatState.transcribedText != null &&
         chatState.transcribedText!.isNotEmpty &&
         chatState.transcribedText != _lastTranscribedText) {
-      _controller.text = chatState.transcribedText!;
-      _controller.selection = TextSelection.fromPosition(
-        TextPosition(offset: _controller.text.length),
-      );
+      final transcribedText = chatState.transcribedText!.trim();
       _lastTranscribedText = chatState.transcribedText;
       ref.read(chatProvider.notifier).clearTranscribedText();
+
+      if (shouldAutoEnterVoiceText && transcribedText.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _submitMessage(transcribedText);
+        });
+      } else {
+        _controller.text = transcribedText;
+        _controller.selection = TextSelection.fromPosition(
+          TextPosition(offset: _controller.text.length),
+        );
+      }
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {

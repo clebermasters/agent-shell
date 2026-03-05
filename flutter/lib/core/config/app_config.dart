@@ -39,6 +39,7 @@ class AppConfig {
   static const String keyThemeMode = 'theme_mode';
   static const String keyTerminalFontSize = 'terminal_font_size';
   static const String keyOpenAiApiKey = 'openai_api_key';
+  static const String keyVoiceAutoEnter = 'voice_auto_enter';
 
   // Build-time defaults
   static String get defaultServerList => BuildConfig.defaultServerList;

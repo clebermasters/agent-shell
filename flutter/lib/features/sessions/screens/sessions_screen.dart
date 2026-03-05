@@ -57,6 +57,11 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
               ref.read(sessionsProvider.notifier).refresh();
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            onPressed: () => _showCreateSessionDialog(context, ref),
+            tooltip: 'New Session',
+          ),
         ],
       ),
       body: sessionsState.isLoading

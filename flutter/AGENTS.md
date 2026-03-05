@@ -6,31 +6,7 @@ WebMux is a Flutter application providing terminal management and related featur
 
 ## Build Commands
 
-```bash
-# Install dependencies
-flutter pub get
-
-# Run the app on connected device/emulator
-flutter run
-
-# Run tests
-flutter test                    # Run all tests
-flutter test test/widget_test.dart  # Run single test file
-flutter test --name "test name"      # Run tests matching pattern
-
-# Analyze/lint
-flutter analyze                 # Run static analysis
-flutter analyze lib/           # Analyze specific directory
-
-# Build APK (debug)
-flutter build apk --debug
-
-# Build APK (release)
-flutter build apk --release
-
-# Docker build (using flutter/build.sh)
-
-The `flutter/build.sh` script builds the Flutter APK using Docker. It supports both debug and release builds with optional auto-install to a connected Android device.
+All Flutter builds use Docker via the [`flutter/build.sh`](flutter/build.sh) script. This ensures consistent builds without requiring Flutter to be installed on the host machine.
 
 ```bash
 # From the flutter directory
@@ -53,20 +29,18 @@ The script will output the APK to the project root:
 The build script also reads from a `.env` file in the project root for:
 - `SERVER_LIST` - Default server list
 - `OPENAI_API_KEY` - API key for builds
-```
 
 ## Code Style Guidelines
 
 ### Formatting
 
 - Use **2 spaces** for indentation (Flutter default)
-- Run `flutter format lib/` before committing
 - Maximum line length: 80 characters (recommended)
 - Use trailing commas for better formatting
 
 ### Imports
 
-Organize imports in the following order (use `flutter format` to enforce):
+Organize imports in the following order:
 
 1. Dart SDK imports (`package:flutter/...`)
 2. External packages (`package:...`)
@@ -236,7 +210,5 @@ lib/
 
 Before committing code:
 
-1. Run `flutter analyze` - fix all warnings/errors
-2. Run `flutter test` - ensure tests pass
-3. Run `flutter format lib/` - format code
-4. Verify no secrets/keys in code
+1. Verify code follows the formatting and style guidelines in this document
+2. Verify no secrets/keys in code

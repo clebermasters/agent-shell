@@ -85,25 +85,31 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     });
   }
 
-  void connect(String sessionName) async {
+  void connect(String sessionName, {int windowIndex = 0}) async {
     _activeSessionName = sessionName;
     state = state.copyWith(isLoading: true, error: null);
 
     final terminal = terminalService.createTerminal(sessionName);
 
     // Create or get existing controller for this session
-    if (!_controllers.containsKey(sessionName)) {
-      _controllers[sessionName] = TerminalController();
+    final controllerKey = '${sessionName}_$windowIndex';
+    if (!_controllers.containsKey(controllerKey)) {
+      _controllers[controllerKey] = TerminalController();
     }
 
     // Send attach-session message
-    _wsService.attachSession(sessionName, cols: 80, rows: 24);
+    _wsService.attachSession(
+      sessionName,
+      cols: 80,
+      rows: 24,
+      windowIndex: windowIndex,
+    );
 
     state = state.copyWith(
       isLoading: false,
       isConnected: _wsService.isConnected,
       terminal: terminal,
-      controller: _controllers[sessionName],
+      controller: _controllers[controllerKey],
     );
 
     // Start background service to keep socket alive

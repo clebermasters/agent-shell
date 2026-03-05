@@ -6,6 +6,7 @@ import '../../../core/providers.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/professional_message_bubble.dart';
 import '../../hosts/providers/hosts_provider.dart';
+import '../../terminal/screens/terminal_screen.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String sessionName;
@@ -230,6 +231,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: Icon(Icons.terminal, color: textSecondary),
+            onPressed: () {
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) =>
+                      TerminalScreen(sessionName: widget.sessionName),
+                ),
+              );
+            },
+            tooltip: 'Switch to Terminal',
+          ),
           if (chatState.isLoading)
             const Padding(
               padding: EdgeInsets.all(12.0),
@@ -242,6 +255,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ),
               ),
             ),
+          IconButton(
+            icon: const Icon(Icons.terminal, size: 20),
+            onPressed: () {
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) => TerminalScreen(
+                    sessionName: widget.sessionName,
+                    windowIndex: widget.windowIndex,
+                  ),
+                ),
+              );
+            },
+            tooltip: 'Switch to Terminal',
+          ),
           IconButton(
             icon: Icon(Icons.delete_outline, color: textSecondary),
             onPressed: () {

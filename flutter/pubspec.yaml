@@ -51,6 +51,7 @@ dependencies:
   just_audio: ^0.9.36
   open_file: ^3.3.2
   url_launcher: ^6.2.5
+  gal: ^2.3.0
 
 dev_dependencies:
   flutter_test:

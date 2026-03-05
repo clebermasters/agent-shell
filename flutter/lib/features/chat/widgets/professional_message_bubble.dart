@@ -13,6 +13,7 @@ import 'package:dio/dio.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:gal/gal.dart';
 import '../../../data/models/chat_message.dart';
 import 'chat_audio_tile.dart';
 
@@ -526,37 +527,8 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => Scaffold(
-          backgroundColor: Colors.black,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            iconTheme: const IconThemeData(color: Colors.white),
-          ),
-          body: Center(
-            child: Hero(
-              tag: 'image_$imageId',
-              child: imageUrl != null
-                  ? CachedNetworkImage(
-                      imageUrl: imageUrl,
-                      fit: BoxFit.contain,
-                      placeholder: (context, url) =>
-                          const CircularProgressIndicator(),
-                      errorWidget: (context, url, error) => Icon(
-                        Icons.broken_image,
-                        size: 200,
-                        color: Colors.grey[700],
-                      ),
-                    )
-                  : InteractiveViewer(
-                      child: Icon(
-                        Icons.image,
-                        size: 200,
-                        color: Colors.grey[700],
-                      ),
-                    ),
-            ),
-          ),
-        ),
+        builder: (context) =>
+            _FullScreenImageViewer(imageUrl: imageUrl, imageId: imageId),
       ),
     );
   }
@@ -1306,5 +1278,112 @@ extension StringExtension on String {
   String take(int count) {
     if (length <= count) return this;
     return '${substring(0, count)}...';
+  }
+}
+
+class _FullScreenImageViewer extends StatefulWidget {
+  final String? imageUrl;
+  final String imageId;
+
+  const _FullScreenImageViewer({required this.imageUrl, required this.imageId});
+
+  @override
+  State<_FullScreenImageViewer> createState() => _FullScreenImageViewerState();
+}
+
+class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
+  bool _isSaving = false;
+
+  Future<void> _saveImageToGallery() async {
+    if (widget.imageUrl == null || _isSaving) return;
+
+    setState(() => _isSaving = true);
+
+    try {
+      final scaffoldMessenger = ScaffoldMessenger.of(context);
+      final dio = Dio();
+      final tempDir = await getTemporaryDirectory();
+      final filePath = '${tempDir.path}/webmux_image_${widget.imageId}.png';
+      final file = File(filePath);
+
+      if (await file.exists()) {
+        await file.delete();
+      }
+
+      await dio.download(widget.imageUrl!, filePath);
+
+      await Gal.putImage(filePath, album: 'WebMux');
+
+      await file.delete();
+
+      if (!mounted) return;
+
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(
+          content: Text('Image saved to gallery'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save image: $e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            icon: _isSaving
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.save_alt, color: Colors.white),
+            onPressed: _isSaving ? null : _saveImageToGallery,
+            tooltip: 'Save to gallery',
+          ),
+        ],
+      ),
+      body: Center(
+        child: Hero(
+          tag: 'image_${widget.imageId}',
+          child: widget.imageUrl != null
+              ? CachedNetworkImage(
+                  imageUrl: widget.imageUrl!,
+                  fit: BoxFit.contain,
+                  placeholder: (context, url) =>
+                      const CircularProgressIndicator(),
+                  errorWidget: (context, url, error) => Icon(
+                    Icons.broken_image,
+                    size: 200,
+                    color: Colors.grey[700],
+                  ),
+                )
+              : InteractiveViewer(
+                  child: Icon(Icons.image, size: 200, color: Colors.grey[700]),
+                ),
+        ),
+      ),
+    );
   }
 }

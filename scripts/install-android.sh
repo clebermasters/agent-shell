@@ -16,6 +16,7 @@ WIRELESS_IP_FILE="$CONFIG_DIR/wireless_ip"
 # Default APK path
 APK_PATH=""
 WIRELESS_MODE=false
+FORCE_INSTALL=false
 LAUNCH_APP=false
 PACKAGE_NAME="com.example.webmux"
 ADB_PORT=5555
@@ -33,6 +34,9 @@ for arg in "$@"; do
         --wireless|-w)
             WIRELESS_MODE=true
             ;;
+        --force|-f)
+            FORCE_INSTALL=true
+            ;;
         --launch|-l)
             LAUNCH_APP=true
             ;;
@@ -41,6 +45,7 @@ for arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --wireless, -w   Force wireless mode (skip USB)"
+            echo "  --force, -f      Force install even on Work Profile (not recommended)"
             echo "  --launch, -l     Launch app after installation"
             echo "  --help, -h       Show this help"
             echo ""
@@ -299,6 +304,38 @@ echo "  Model:     $DEVICE_MODEL"
 echo "  Android:   $DEVICE_ANDROID"
 echo "  Type:      $CONNECTION_TYPE"
 echo ""
+
+# Check for Work Profile
+check_work_profile() {
+    local users_output=$($ADB_CMD shell pm list users 2>/dev/null)
+    local user_count=$(echo "$users_output" | grep -c "UserInfo{" || echo "0")
+    
+    if [ "$user_count" -gt 1 ]; then
+        return 0  # Work Profile detected
+    fi
+    return 1  # No Work Profile
+}
+
+if [ "$FORCE_INSTALL" = false ]; then
+    if check_work_profile; then
+        echo ""
+        echo -e "${RED}=========================================="
+        echo "  Work Profile Detected!"
+        echo "==========================================${NC}"
+        echo ""
+        echo -e "${YELLOW}This device has a Work Profile enabled.${NC}"
+        echo "Installing apps on Work Profile can cause issues."
+        echo ""
+        echo -e "To force installation anyway, run with ${GREEN}--force${NC} flag"
+        echo ""
+        echo -e "${YELLOW}Alternatively, disable Work Profile in:${NC}"
+        echo "  Settings > Accounts > Work Profile"
+        echo ""
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}Warning: Force install enabled (Work Profile check skipped)${NC}"
+fi
 
 # Get the adb command with device selection
 get_adb_cmd() {

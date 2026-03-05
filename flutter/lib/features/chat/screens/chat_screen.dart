@@ -256,20 +256,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           IconButton(
-            icon: const Icon(Icons.terminal, size: 20),
-            onPressed: () {
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) => TerminalScreen(
-                    sessionName: widget.sessionName,
-                    windowIndex: widget.windowIndex,
-                  ),
-                ),
-              );
-            },
-            tooltip: 'Switch to Terminal',
-          ),
-          IconButton(
             icon: Icon(Icons.delete_outline, color: textSecondary),
             onPressed: () {
               ref.read(chatProvider.notifier).clear();

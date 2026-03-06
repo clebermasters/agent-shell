@@ -30,6 +30,33 @@ impl ChatFileStorage {
         Ok(id)
     }
 
+    pub fn save_file_to_directory(
+        &self,
+        data: &str,
+        filename: &str,
+        mime_type: &str,
+        target_dir: &Path,
+    ) -> Result<PathBuf, String> {
+        std::fs::create_dir_all(target_dir)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+
+        let extension = extension_from_filename(filename)
+            .or_else(|| extension_from_mime_type(mime_type))
+            .unwrap_or_else(|| "bin".to_string());
+
+        let safe_filename = sanitize_filename(filename);
+        let target_path = target_dir.join(format!("{}_{}", Uuid::new_v4(), safe_filename));
+
+        let decoded = BASE64
+            .decode(data)
+            .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+        std::fs::write(&target_path, decoded)
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+
+        Ok(target_path)
+    }
+
     pub fn get_path(&self, id: &str) -> Option<PathBuf> {
         let prefix = format!("{id}.");
         let entries = std::fs::read_dir(&self.storage_dir).ok()?;
@@ -156,4 +183,22 @@ fn extension_from_mime_type(mime_type: &str) -> Option<String> {
     };
 
     Some(mapped.to_string())
+}
+
+fn sanitize_filename(filename: &str) -> String {
+    let path = Path::new(filename);
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| {
+            s.chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| "file".to_string())
 }

@@ -271,6 +271,23 @@ class WebSocketService {
     send({'type': 'unwatch-chat-log'});
   }
 
+  void sendFileToChat({
+    required String sessionName,
+    required int windowIndex,
+    required String filename,
+    required String mimeType,
+    required String base64Data,
+    String? prompt,
+  }) {
+    send({
+      'type': 'send-file-to-chat',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+      'file': {'filename': filename, 'mimeType': mimeType, 'data': base64Data},
+      'prompt': prompt,
+    });
+  }
+
   void disconnect() {
     _log('Disconnecting...');
     _pingTimer?.cancel();

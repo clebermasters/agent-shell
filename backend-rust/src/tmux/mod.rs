@@ -1,10 +1,33 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
 use crate::types::{TmuxSession, TmuxWindow};
+
+/// Get the current working directory of a tmux session.
+pub fn get_session_path(session_name: &str) -> Option<PathBuf> {
+    let output = std::process::Command::new("tmux")
+        .args([
+            "display-message",
+            "-p",
+            "-F",
+            "#{pane_current_path}",
+            "-t",
+            session_name,
+        ])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Some(PathBuf::from(path))
+    } else {
+        None
+    }
+}
 
 /// Metadata about a tmux pane, used for history capture.
 pub struct PaneMetadata {

@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:convert';
+import 'dart:io';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
+import '../../../data/services/websocket_service.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/professional_message_bubble.dart';
 import '../../hosts/providers/hosts_provider.dart';
+import '../../sessions/providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -31,6 +36,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String? _lastTranscribedText;
   bool _wasAtBottom = true;
   static const double _bottomThreshold = 100;
+  PlatformFile? _selectedFile;
+  bool _isUploading = false;
 
   bool get isDarkMode {
     return Theme.of(context).brightness == Brightness.dark;
@@ -139,7 +146,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _sendMessage() {
     final content = _controller.text.trim();
-    _submitMessage(content);
+
+    if (_selectedFile != null) {
+      _sendFileWithPrompt();
+    } else if (content.isNotEmpty) {
+      _submitMessage(content);
+    }
   }
 
   void _submitMessage(String content) {
@@ -160,6 +172,170 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _autoScroll = true;
     });
     _smoothScrollToBottom();
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+      );
+
+      if (result != null && result.files.isNotEmpty) {
+        setState(() {
+          _selectedFile = result.files.first;
+        });
+      }
+    } catch (e) {
+      print('Error picking file: $e');
+    }
+  }
+
+  void _removeSelectedFile() {
+    setState(() {
+      _selectedFile = null;
+    });
+  }
+
+  Widget _buildSelectedFilePreview() {
+    if (_selectedFile == null) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDarkMode ? const Color(0xFF2D3748) : const Color(0xFFE2E8F0),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            _getFileIcon(_selectedFile!.extension ?? ''),
+            size: 20,
+            color: textSecondary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _selectedFile!.name,
+              style: TextStyle(fontSize: 14, color: textPrimary),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (_isUploading)
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            GestureDetector(
+              onTap: _removeSelectedFile,
+              child: Icon(Icons.close, size: 18, color: textSecondary),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAttachButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _isUploading ? null : _pickFile,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: isDarkMode
+                ? const Color(0xFF4A5568)
+                : const Color(0xFFE2E8F0),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            Icons.attach_file,
+            size: 20,
+            color: isDarkMode ? Colors.white : Colors.grey.shade700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _getFileIcon(String extension) {
+    switch (extension.toLowerCase()) {
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'gif':
+      case 'webp':
+      case 'bmp':
+        return Icons.image;
+      case 'mp3':
+      case 'wav':
+      case 'ogg':
+      case 'm4a':
+        return Icons.audio_file;
+      case 'pdf':
+        return Icons.picture_as_pdf;
+      case 'doc':
+      case 'docx':
+        return Icons.description;
+      case 'xls':
+      case 'xlsx':
+        return Icons.table_chart;
+      case 'zip':
+      case 'rar':
+      case '7z':
+      case 'tar':
+      case 'gz':
+        return Icons.folder_zip;
+      default:
+        return Icons.insert_drive_file;
+    }
+  }
+
+  Future<void> _sendFileWithPrompt() async {
+    if (_selectedFile == null) return;
+
+    final ws = ref.read(sharedWebSocketServiceProvider);
+
+    setState(() {
+      _isUploading = true;
+    });
+
+    try {
+      final filePath = _selectedFile!.path;
+      if (filePath == null) return;
+
+      final file = File(filePath);
+      final bytes = await file.readAsBytes();
+      final base64Data = base64Encode(bytes);
+
+      final prompt = _controller.text.trim();
+
+      ws.sendFileToChat(
+        sessionName: widget.sessionName,
+        windowIndex: widget.windowIndex,
+        filename: _selectedFile!.name,
+        mimeType: _selectedFile!.extension ?? 'application/octet-stream',
+        base64Data: base64Data,
+        prompt: prompt.isNotEmpty ? prompt : null,
+      );
+
+      _controller.clear();
+      setState(() {
+        _selectedFile = null;
+        _autoScroll = true;
+      });
+      _scrollToBottom();
+    } catch (e) {
+      print('Error sending file: $e');
+    } finally {
+      setState(() {
+        _isUploading = false;
+      });
+    }
   }
 
   @override
@@ -398,6 +574,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final isRecording = chatState.isRecording;
     final isTranscribing = chatState.isTranscribing;
     final hasText = _controller.text.trim().isNotEmpty;
+    final hasFile = _selectedFile != null;
 
     return Container(
       decoration: BoxDecoration(
@@ -423,9 +600,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   isRecording,
                   isTranscribing,
                 ),
+              if (hasFile) _buildSelectedFilePreview(),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
+                  _buildAttachButton(),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Container(
                       decoration: BoxDecoration(
@@ -462,7 +642,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
                   const SizedBox(width: 8),
                   _buildMicButton(isRecording, isTranscribing),
-                  if (hasText && !isRecording && !isTranscribing) ...[
+                  if ((hasText || hasFile) &&
+                      !isRecording &&
+                      !isTranscribing &&
+                      !_isUploading) ...[
                     const SizedBox(width: 8),
                     _buildSendButton(),
                   ],

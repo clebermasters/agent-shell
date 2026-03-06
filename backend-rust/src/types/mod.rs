@@ -270,6 +270,7 @@ pub enum WebSocketMessage {
         #[serde(rename = "windowIndex")]
         window_index: u32,
         file: FileAttachment,
+        prompt: Option<String>,
     },
 }
 

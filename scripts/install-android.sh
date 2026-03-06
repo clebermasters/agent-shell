@@ -305,10 +305,21 @@ echo "  Android:   $DEVICE_ANDROID"
 echo "  Type:      $CONNECTION_TYPE"
 echo ""
 
+# Get the adb command with device selection
+get_adb_cmd() {
+    if [ -n "$DEVICE_SERIAL" ]; then
+        echo "adb -s $DEVICE_SERIAL"
+    else
+        echo "adb"
+    fi
+}
+
+ADB_CMD=$(get_adb_cmd)
+
 # Check for Work Profile
 check_work_profile() {
     local users_output=$($ADB_CMD shell pm list users 2>/dev/null)
-    local user_count=$(echo "$users_output" | grep -c "UserInfo{" || echo "0")
+    local user_count=$(echo "$users_output" | grep -c "UserInfo{" || true)
     
     if [ "$user_count" -gt 1 ]; then
         return 0  # Work Profile detected
@@ -337,16 +348,6 @@ else
     echo -e "${YELLOW}Warning: Force install enabled (Work Profile check skipped)${NC}"
 fi
 
-# Get the adb command with device selection
-get_adb_cmd() {
-    if [ -n "$DEVICE_SERIAL" ]; then
-        echo "adb -s $DEVICE_SERIAL"
-    else
-        echo "adb"
-    fi
-}
-
-ADB_CMD=$(get_adb_cmd)
 
 # Check if app is already installed
 if $ADB_CMD shell pm list packages 2>/dev/null | grep -q "^package:$PACKAGE_NAME$"; then

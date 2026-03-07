@@ -160,4 +160,20 @@ impl ChatEventStore {
         let events = self.list_events(session_name, window_index)?;
         Ok(events.into_iter().map(|event| event.message).collect())
     }
+
+    pub fn clear_messages(&self, session_name: &str, window_index: u32) -> Result<()> {
+        let conn = Connection::open(&self.db_path)
+            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+
+        conn.execute(
+            r#"
+            DELETE FROM chat_events
+            WHERE session_name = ?1 AND window_index = ?2
+            "#,
+            params![session_name, i64::from(window_index)],
+        )?;
+
+        Ok(())
+    }
 }

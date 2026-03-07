@@ -107,6 +107,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
         case 'chat-log-error':
           _handleChatError(message);
           break;
+        case 'chat-log-cleared':
+          _handleChatLogCleared(message);
+          break;
       }
     });
   }
@@ -219,6 +222,28 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void _handleChatError(Map<String, dynamic> message) {
     final error = message['error'] as String? ?? 'Unknown error';
     state = state.copyWith(error: error, isLoading: false);
+  }
+
+  void _handleChatLogCleared(Map<String, dynamic> message) {
+    final sessionName = message['sessionName'] as String?;
+    final windowIndexRaw = message['windowIndex'];
+    final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
+    final success = message['success'] as bool? ?? false;
+
+    if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+      return;
+    }
+
+    if (success) {
+      state = const ChatState();
+      state = state.copyWith(
+        sessionName: sessionName,
+        windowIndex: windowIndex,
+      );
+    } else {
+      final error = message['error'] as String? ?? 'Failed to clear chat';
+      state = state.copyWith(error: error, isLoading: false);
+    }
   }
 
   void _handleChatFileMessage(Map<String, dynamic> message) {
@@ -504,7 +529,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void clear() {
-    state = const ChatState();
+    if (state.sessionName != null && state.windowIndex != null && _ws != null) {
+      _ws!.clearChatLog(state.sessionName!, state.windowIndex!);
+    } else {
+      state = const ChatState();
+    }
   }
 
   Future<bool> checkMicrophonePermission() async {

@@ -79,9 +79,10 @@ pub async fn watch_log_file(
     path: &Path,
     tool: AiTool,
     event_tx: mpsc::UnboundedSender<ChatLogEvent>,
+    cleared_at: Option<i64>,
 ) -> Result<LogWatcher> {
     if let AiTool::Opencode { cwd, pid } = &tool {
-        return watch_opencode_db(path, cwd, *pid, event_tx).await;
+        return watch_opencode_db(path, cwd, *pid, event_tx, cleared_at).await;
     }
     // --- initial history read ---
     let file =
@@ -89,9 +90,25 @@ pub async fn watch_log_file(
     let mut reader = BufReader::new(file);
     let history = read_all_messages(&mut reader, &tool);
 
+    // Filter messages based on cleared_at timestamp
+    let filtered_history = if let Some(ts) = cleared_at {
+        history
+            .into_iter()
+            .filter(|msg| {
+                if let Some(msg_ts) = msg.timestamp {
+                    msg_ts.timestamp_millis() > ts
+                } else {
+                    true // Keep messages without timestamp if we can't determine
+                }
+            })
+            .collect()
+    } else {
+        history
+    };
+
     event_tx
         .send(ChatLogEvent::History {
-            messages: history,
+            messages: filtered_history,
             tool: tool.clone(),
         })
         .ok();
@@ -158,17 +175,19 @@ async fn watch_opencode_db(
     cwd: &Path,
     pid: u32,
     event_tx: mpsc::UnboundedSender<ChatLogEvent>,
+    cleared_at: Option<i64>,
 ) -> Result<LogWatcher> {
-    let mut state = opencode_parser::init_opencode_state(db_path, cwd, pid)?;
+    let mut state = opencode_parser::init_opencode_state(db_path, cwd, pid, cleared_at)?;
 
     let db_path_owned = db_path.to_path_buf();
     let cwd_owned = cwd.to_path_buf();
     let initial_pid = pid;
 
     info!(
-        "Starting OpenCode watcher for PID {} in directory {}",
+        "Starting OpenCode watcher for PID {} in directory {} (cleared_at: {:?})",
         pid,
-        cwd_owned.display()
+        cwd_owned.display(),
+        cleared_at
     );
 
     // Small delay to ensure client has subscribed to the channel if this was triggered by a message
@@ -208,7 +227,9 @@ async fn watch_opencode_db(
 
                 // Re-detect using get_descendant_pids approach to find any opencode in this CWD
                 if let Ok(new_pid) = find_opencode_pid_for_cwd(&cwd_owned) {
-                    match opencode_parser::init_opencode_state(&db_path_owned, &cwd_owned, new_pid)
+                    // Use the cleared_at from the current state when re-detecting
+                    let cleared_at = state.cleared_at;
+                    match opencode_parser::init_opencode_state(&db_path_owned, &cwd_owned, new_pid, cleared_at)
                     {
                         Ok(new_state) => {
                             debug!("Re-detected OpenCode session with PID {}", new_pid);

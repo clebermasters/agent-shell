@@ -22,7 +22,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    audio, chat_event_store, chat_file_storage, chat_log::ChatMessage, tmux, types::*, AppState,
+    audio, chat_clear_store, chat_event_store, chat_file_storage, chat_log::ChatMessage, tmux,
+    types::*, AppState,
 };
 use sysinfo::System;
 
@@ -110,6 +111,7 @@ struct WsState {
     chat_log_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
     chat_event_store: Arc<chat_event_store::ChatEventStore>,
+    chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
     client_manager: Arc<ClientManager>,
 }
 
@@ -146,6 +148,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         chat_log_handle: Arc::new(Mutex::new(None)),
         chat_file_storage: state.chat_file_storage.clone(),
         chat_event_store: state.chat_event_store.clone(),
+        chat_clear_store: state.chat_clear_store.clone(),
         client_manager: state.client_manager.clone(),
     };
 
@@ -829,12 +832,19 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
             }
 
             let chat_log_handle = state.chat_log_handle.clone();
+            let chat_clear_store = state.chat_clear_store.clone();
             let handle = tokio::spawn(async move {
                 tracing::info!(
                     "Detecting chat log for session '{}' window {}",
                     session_name,
                     window_index
                 );
+
+                // Get the clear timestamp if one exists
+                let cleared_at = chat_clear_store
+                    .get_cleared_at(&session_name, window_index)
+                    .await;
+
                 match crate::chat_log::watcher::detect_log_file(&session_name, window_index).await {
                     Ok((path, tool)) => {
                         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -843,7 +853,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
                         // RecommendedWatcher must be kept alive for as long
                         // as we want notifications.
                         let _watcher =
-                            match crate::chat_log::watcher::watch_log_file(&path, tool, event_tx)
+                            match crate::chat_log::watcher::watch_log_file(&path, tool, event_tx, cleared_at)
                                 .await
                             {
                                 Ok(w) => w,
@@ -936,6 +946,170 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
             let mut handle_guard = state.chat_log_handle.lock().await;
             if let Some(handle) = handle_guard.take() {
                 handle.abort();
+            }
+        }
+        WebSocketMessage::ClearChatLog {
+            session_name,
+            window_index,
+        } => {
+            info!(
+                "Clearing chat log for session {}:{}",
+                session_name, window_index
+            );
+
+            // Stop current watcher if running
+            {
+                let mut handle_guard = state.chat_log_handle.lock().await;
+                if let Some(handle) = handle_guard.take() {
+                    handle.abort();
+                }
+            }
+
+            // Set the clear timestamp
+            let timestamp = chrono::Utc::now().timestamp_millis();
+            state
+                .chat_clear_store
+                .set_cleared_at(&session_name, window_index, timestamp)
+                .await;
+
+            // Also clear persisted messages
+            if let Err(e) = state
+                .chat_event_store
+                .clear_messages(&session_name, window_index)
+            {
+                warn!(
+                    "Failed to clear persisted messages for {}:{}: {}",
+                    session_name, window_index, e
+                );
+            }
+
+            // Send confirmation to client
+            let _ = send_message(
+                &state.message_tx,
+                ServerMessage::ChatLogCleared {
+                    session_name: session_name.clone(),
+                    window_index,
+                    success: true,
+                    error: None,
+                },
+            )
+            .await;
+
+            // Restart the watcher with the clear timestamp
+            state
+                .current_session
+                .lock()
+                .await
+                .clone_from(&Some(session_name.clone()));
+            state
+                .current_window
+                .lock()
+                .await
+                .clone_from(&Some(window_index));
+
+            let message_tx = state.message_tx.clone();
+            let chat_event_store = state.chat_event_store.clone();
+            let chat_clear_store = state.chat_clear_store.clone();
+            let session_name_owned = session_name.clone();
+            let window_index_owned = window_index;
+
+            let handle = tokio::spawn(async move {
+                match crate::chat_log::watcher::detect_log_file(&session_name_owned, window_index_owned)
+                    .await
+                {
+                    Ok((path, tool)) => {
+                        let (event_tx, mut event_rx) =
+                            tokio::sync::mpsc::unbounded_channel();
+
+                        // Get the clear timestamp
+                        let cleared_at = chat_clear_store
+                            .get_cleared_at(&session_name_owned, window_index_owned)
+                            .await;
+
+                        let _watcher = match crate::chat_log::watcher::watch_log_file(
+                            &path,
+                            tool.clone(),
+                            event_tx,
+                            cleared_at,
+                        )
+                        .await
+                        {
+                            Ok(w) => w,
+                            Err(e) => {
+                                error!("Failed to start chat log watcher: {}", e);
+                                let _ = send_message(
+                                    &message_tx,
+                                    ServerMessage::ChatLogError {
+                                        error: e.to_string(),
+                                    },
+                                )
+                                .await;
+                                return;
+                            }
+                        };
+
+                        // Forward events to WebSocket
+                        while let Some(event) = event_rx.recv().await {
+                            let msg = match event {
+                                crate::chat_log::ChatLogEvent::History { messages, tool } => {
+                                    let persisted_messages = match chat_event_store
+                                        .list_messages(&session_name_owned, window_index_owned)
+                                    {
+                                        Ok(stored) => stored,
+                                        Err(e) => {
+                                            warn!(
+                                                "Failed to load persisted chat events for {}:{}: {}",
+                                                session_name_owned, window_index_owned, e
+                                            );
+                                            Vec::new()
+                                        }
+                                    };
+
+                                    let merged_messages =
+                                        crate::websocket::merge_history_messages(
+                                            messages,
+                                            persisted_messages,
+                                        );
+
+                                    ServerMessage::ChatHistory {
+                                        session_name: session_name_owned.clone(),
+                                        window_index: window_index_owned,
+                                        messages: merged_messages,
+                                        tool: Some(tool),
+                                    }
+                                }
+                                crate::chat_log::ChatLogEvent::NewMessage { message } => {
+                                    ServerMessage::ChatEvent {
+                                        session_name: session_name_owned.clone(),
+                                        window_index: window_index_owned,
+                                        message,
+                                    }
+                                }
+                                crate::chat_log::ChatLogEvent::Error { error } => {
+                                    tracing::warn!("Chat log error: {}", error);
+                                    ServerMessage::ChatLogError { error }
+                                }
+                            };
+                            if send_message(&message_tx, msg).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = send_message(
+                            &message_tx,
+                            ServerMessage::ChatLogError {
+                                error: e.to_string(),
+                            },
+                        )
+                        .await;
+                    }
+                }
+            });
+
+            {
+                let mut handle_guard = state.chat_log_handle.lock().await;
+                *handle_guard = Some(handle);
             }
         }
         WebSocketMessage::SendFileToChat {

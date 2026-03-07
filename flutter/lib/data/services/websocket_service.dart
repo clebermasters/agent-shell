@@ -271,6 +271,14 @@ class WebSocketService {
     send({'type': 'unwatch-chat-log'});
   }
 
+  void clearChatLog(String sessionName, int windowIndex) {
+    send({
+      'type': 'clear-chat-log',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+    });
+  }
+
   void sendFileToChat({
     required String sessionName,
     required int windowIndex,

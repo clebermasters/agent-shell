@@ -263,6 +263,13 @@ pub enum WebSocketMessage {
         window_index: u32,
     },
     UnwatchChatLog,
+    // Clear chat history for a session
+    ClearChatLog {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+    },
     // Chat file sending
     SendFileToChat {
         #[serde(rename = "sessionName")]
@@ -431,6 +438,15 @@ pub enum ServerMessage {
     },
     ChatLogError {
         error: String,
+    },
+    ChatLogCleared {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     ChatFileMessage {
         #[serde(rename = "sessionName")]

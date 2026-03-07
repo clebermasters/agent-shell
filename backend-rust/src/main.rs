@@ -24,6 +24,7 @@ struct TmuxInput {
 }
 
 mod audio;
+mod chat_clear_store;
 mod chat_event_store;
 mod chat_file_storage;
 mod chat_log;
@@ -58,6 +59,7 @@ pub struct AppState {
     pub client_manager: Arc<websocket::ClientManager>,
     pub chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
+    pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
 }
 
 #[tokio::main]
@@ -100,7 +102,8 @@ async fn main() -> Result<()> {
         broadcast_tx: broadcast_tx.clone(),
         client_manager,
         chat_file_storage: Arc::new(chat_file_storage::ChatFileStorage::new(base_dir.clone())),
-        chat_event_store: Arc::new(chat_event_store::ChatEventStore::new(base_dir)?),
+        chat_event_store: Arc::new(chat_event_store::ChatEventStore::new(base_dir.clone())?),
+        chat_clear_store: Arc::new(chat_clear_store::ChatClearStore::new(&base_dir)),
     };
 
     // Initialize CRON manager

@@ -14,6 +14,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../data/models/chat_message.dart';
 import 'chat_audio_tile.dart';
 
@@ -317,7 +318,15 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
     return MarkdownBody(
       data: text,
-      selectable: true,
+      selectable: false,
+      onTapLink: (text, href, title) async {
+        if (href != null) {
+          final uri = Uri.tryParse(href);
+          if (uri != null && await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          }
+        }
+      },
       builders: {'pre': CodeBlockBuilder(isUser: isUser, isDark: isDark)},
       styleSheet: MarkdownStyleSheet(
         p: TextStyle(color: textColor, fontSize: 14, height: 1.6),

@@ -279,6 +279,16 @@ pub enum WebSocketMessage {
         file: FileAttachment,
         prompt: Option<String>,
     },
+    // Chat message sending (webhook)
+    SendChatMessage {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        message: String,
+        #[serde(default)]
+        notify: Option<bool>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -454,6 +464,13 @@ pub enum ServerMessage {
         #[serde(rename = "windowIndex")]
         window_index: u32,
         message: crate::chat_log::ChatMessage,
+    },
+    ChatNotification {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        preview: String,
     },
     // Terminal history bootstrap
     TerminalHistoryStart {

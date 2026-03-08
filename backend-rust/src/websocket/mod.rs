@@ -1255,6 +1255,82 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
                 }
             }
         }
+        WebSocketMessage::SendChatMessage {
+            session_name,
+            window_index,
+            message,
+            notify,
+        } => {
+            info!(
+                "Received chat message to send: {} (notify: {:?})",
+                message, notify
+            );
+
+            if message.trim().is_empty() {
+                warn!("Empty message received, skipping");
+                return Ok(());
+            }
+
+            let chat_message = crate::chat_log::ChatMessage {
+                role: "user".to_string(),
+                timestamp: Some(chrono::Utc::now()),
+                blocks: vec![crate::chat_log::ContentBlock::Text {
+                    text: message.trim().to_string(),
+                }],
+            };
+
+            if let Err(e) = state.chat_event_store.append_message(
+                &session_name,
+                window_index,
+                "webhook",
+                &chat_message,
+            ) {
+                warn!(
+                    "Failed to persist chat message for {}:{}: {}",
+                    session_name, window_index, e
+                );
+            }
+
+            let msg = ServerMessage::ChatEvent {
+                session_name: session_name.clone(),
+                window_index,
+                message: chat_message,
+            };
+
+            state.client_manager.broadcast(msg).await;
+
+            let should_notify = notify.unwrap_or(true);
+            if should_notify {
+                let notify_msg = ServerMessage::ChatNotification {
+                    session_name: session_name.clone(),
+                    window_index,
+                    preview: if message.len() > 50 {
+                        format!("{}...", &message[..50])
+                    } else {
+                        message.clone()
+                    },
+                };
+                state.client_manager.broadcast(notify_msg).await;
+            }
+
+            let target = format!("{}:{}", session_name, window_index);
+            let text = message.trim();
+
+            let result = tokio::process::Command::new("tmux")
+                .args(&["send-keys", "-t", &target, "-l", text])
+                .output()
+                .await;
+
+            if result.is_ok() {
+                let _ = tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", &target, "C-m"])
+                    .output()
+                    .await;
+                info!("Sent webhook message to tmux: {:?}", text);
+            } else {
+                error!("Failed to send webhook message to tmux session {}", target);
+            }
+        }
     }
 
     Ok(())

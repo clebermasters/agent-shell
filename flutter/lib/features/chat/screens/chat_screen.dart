@@ -106,6 +106,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       });
     }
 
+    // Load more messages when scrolled near the top
+    final isNearTop = position.pixels < 100;
+    if (isNearTop) {
+      final chatState = ref.read(chatProvider);
+      if (chatState.hasMoreMessages &&
+          !chatState.isLoadingMore &&
+          !chatState.isLoading) {
+        ref.read(chatProvider.notifier).loadMoreMessages();
+      }
+    }
+
     _wasAtBottom = atBottom;
   }
 

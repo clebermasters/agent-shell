@@ -259,16 +259,32 @@ class WebSocketService {
     send({'type': 'get-stats'});
   }
 
-  void watchChatLog(String sessionName, int windowIndex) {
+  void watchChatLog(String sessionName, int windowIndex, {int? limit}) {
     send({
       'type': 'watch-chat-log',
       'sessionName': sessionName,
       'windowIndex': windowIndex,
+      if (limit != null) 'limit': limit,
     });
   }
 
   void unwatchChatLog() {
     send({'type': 'unwatch-chat-log'});
+  }
+
+  void loadMoreChatHistory(
+    String sessionName,
+    int windowIndex,
+    int offset,
+    int limit,
+  ) {
+    send({
+      'type': 'load-more-chat-history',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+      'offset': offset,
+      'limit': limit,
+    });
   }
 
   void clearChatLog(String sessionName, int windowIndex) {

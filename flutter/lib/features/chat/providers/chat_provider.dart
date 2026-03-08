@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -13,6 +15,7 @@ import '../../sessions/providers/sessions_provider.dart';
 class ChatState {
   final List<ChatMessage> messages;
   final bool isLoading;
+  final bool isLoadingMore;
   final String? error;
   final String? detectedTool;
   final String? sessionName;
@@ -21,10 +24,13 @@ class ChatState {
   final Duration recordingDuration;
   final bool isTranscribing;
   final String? transcribedText;
+  final int? totalMessageCount;
+  final bool hasMoreMessages;
 
   const ChatState({
     this.messages = const [],
     this.isLoading = false,
+    this.isLoadingMore = false,
     this.error,
     this.detectedTool,
     this.sessionName,
@@ -33,11 +39,14 @@ class ChatState {
     this.recordingDuration = Duration.zero,
     this.isTranscribing = false,
     this.transcribedText,
+    this.totalMessageCount,
+    this.hasMoreMessages = false,
   });
 
   ChatState copyWith({
     List<ChatMessage>? messages,
     bool? isLoading,
+    bool? isLoadingMore,
     String? error,
     String? detectedTool,
     String? sessionName,
@@ -46,10 +55,13 @@ class ChatState {
     Duration? recordingDuration,
     bool? isTranscribing,
     String? transcribedText,
+    int? totalMessageCount,
+    bool? hasMoreMessages,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
       isLoading: isLoading ?? this.isLoading,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       error: error,
       detectedTool: detectedTool ?? this.detectedTool,
       sessionName: sessionName ?? this.sessionName,
@@ -58,6 +70,8 @@ class ChatState {
       recordingDuration: recordingDuration ?? this.recordingDuration,
       isTranscribing: isTranscribing ?? this.isTranscribing,
       transcribedText: transcribedText,
+      totalMessageCount: totalMessageCount ?? this.totalMessageCount,
+      hasMoreMessages: hasMoreMessages ?? this.hasMoreMessages,
     );
   }
 }
@@ -104,11 +118,17 @@ class ChatNotifier extends StateNotifier<ChatState> {
         case 'chat-file-message':
           _handleChatFileMessage(message);
           break;
+        case 'chat-notification':
+          _handleChatNotification(message);
+          break;
         case 'chat-log-error':
           _handleChatError(message);
           break;
         case 'chat-log-cleared':
           _handleChatLogCleared(message);
+          break;
+        case 'chat-history-chunk':
+          _handleChatHistoryChunk(message);
           break;
       }
     });
@@ -149,14 +169,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
           .map((msg) => _parseMessage(msg as Map<String, dynamic>))
           .toList();
 
+      // Get pagination info
+      final totalCount = message['totalCount'] as int?;
+      final hasMore = message['hasMore'] as bool? ?? false;
+
       state = state.copyWith(
         messages: messages,
         detectedTool: toolStr,
         isLoading: false,
         error: null,
+        totalMessageCount: totalCount,
+        hasMoreMessages: hasMore,
       );
       print(
-        'DEBUG: isLoading set to false, messages count: ${messages.length}',
+        'DEBUG: isLoading set to false, messages count: ${messages.length}, total: $totalCount, hasMore: $hasMore',
       );
     } catch (e, stack) {
       print('ERROR parsing chat history: $e\n$stack');
@@ -165,6 +191,62 @@ class ChatNotifier extends StateNotifier<ChatState> {
         error: 'Failed to parse chat history',
       );
     }
+  }
+
+  void _handleChatHistoryChunk(Map<String, dynamic> message) {
+    try {
+      final sessionName =
+          (message['sessionName'] ?? message['session-name']) as String?;
+      final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
+      final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
+
+      if (sessionName != state.sessionName ||
+          windowIndex != state.windowIndex) {
+        return;
+      }
+
+      final messagesData = message['messages'] as List<dynamic>? ?? [];
+      final hasMore = message['hasMore'] as bool? ?? false;
+
+      final newMessages = messagesData
+          .map((msg) => _parseMessage(msg as Map<String, dynamic>))
+          .toList();
+
+      // Append new messages to existing list
+      final allMessages = [...state.messages, ...newMessages];
+
+      state = state.copyWith(
+        messages: allMessages,
+        isLoadingMore: false,
+        hasMoreMessages: hasMore,
+      );
+      print(
+        'DEBUG: Loaded ${newMessages.length} more messages. Total: ${allMessages.length}, hasMore: $hasMore',
+      );
+    } catch (e, stack) {
+      print('ERROR parsing chat history chunk: $e\n$stack');
+      state = state.copyWith(
+        isLoadingMore: false,
+        error: 'Failed to load more messages',
+      );
+    }
+  }
+
+  void loadMoreMessages() {
+    if (state.isLoadingMore || !state.hasMoreMessages || _ws == null) {
+      return;
+    }
+
+    final offset = state.messages.length;
+    const limit = 50;
+
+    state = state.copyWith(isLoadingMore: true);
+    _ws!.loadMoreChatHistory(
+      state.sessionName!,
+      state.windowIndex!,
+      offset,
+      limit,
+    );
   }
 
   void _handleChatEvent(Map<String, dynamic> message) {
@@ -274,6 +356,47 @@ class ChatNotifier extends StateNotifier<ChatState> {
     } catch (e, stack) {
       print('ERROR parsing chat file message: $e\n$stack');
     }
+  }
+
+  static final FlutterLocalNotificationsPlugin
+  _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  void _handleChatNotification(Map<String, dynamic> message) {
+    try {
+      final sessionName = message['sessionName'] as String? ?? 'Unknown';
+      final preview = message['preview'] as String? ?? 'New message';
+
+      _showLocalNotification(
+        title: 'New message from $sessionName',
+        body: preview,
+      );
+    } catch (e) {
+      print('ERROR handling chat notification: $e');
+    }
+  }
+
+  Future<void> _showLocalNotification({
+    required String title,
+    required String body,
+  }) async {
+    const androidDetails = AndroidNotificationDetails(
+      'webmux_chat',
+      'Chat Messages',
+      channelDescription: 'Notifications for new chat messages',
+      importance: Importance.high,
+      priority: Priority.high,
+      showWhen: true,
+    );
+
+    const notificationDetails = NotificationDetails(android: androidDetails);
+
+    final plugin = FlutterLocalNotificationsPlugin();
+    await plugin.show(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      notificationDetails: notificationDetails,
+    );
   }
 
   bool _isDuplicateFileMessage(
@@ -420,13 +543,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
     return '$a\n$b';
   }
 
-  void watchChatLog(String sessionName, int windowIndex) async {
+  void watchChatLog(String sessionName, int windowIndex, {int? limit}) async {
     state = state.copyWith(
       messages: [],
       isLoading: true,
       error: null,
       sessionName: sessionName,
       windowIndex: windowIndex,
+      hasMoreMessages: false,
+      totalMessageCount: null,
     );
 
     // Give a small delay to ensure WebSocket is connected if it was just switched
@@ -441,8 +566,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
       rows: 24,
       windowIndex: windowIndex,
     );
-    // Then watch the chat log
-    _ws?.watchChatLog(sessionName, windowIndex);
+    // Then watch the chat log with limit for initial load
+    _ws?.watchChatLog(sessionName, windowIndex, limit: limit ?? 50);
   }
 
   void unwatchChatLog() {

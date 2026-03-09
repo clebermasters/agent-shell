@@ -605,17 +605,29 @@ class ChatNotifier extends StateNotifier<ChatState> {
         ? ChatMessageType.tool
         : ChatMessageType.assistant;
 
-    state = state.copyWith(
-      messages: [
-        ...state.messages,
+    // Merge consecutive chunks into the same message
+    final messages = List<ChatMessage>.from(state.messages);
+    if (messages.isNotEmpty &&
+        messages.last.type == msgType &&
+        msgType == ChatMessageType.assistant) {
+      // Append to existing assistant message
+      final lastMsg = messages.last;
+      messages[messages.length - 1] = lastMsg.copyWith(
+        content: (lastMsg.content ?? '') + content,
+      );
+    } else {
+      // Create new message
+      messages.add(
         ChatMessage(
           id: _uuid.v4(),
           type: msgType,
           content: content,
           timestamp: DateTime.now(),
         ),
-      ],
-    );
+      );
+    }
+
+    state = state.copyWith(messages: messages);
   }
 
   void _handleAcpToolCall(Map<String, dynamic> message) {

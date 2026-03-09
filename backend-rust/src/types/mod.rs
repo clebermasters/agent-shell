@@ -445,6 +445,8 @@ pub enum ServerMessage {
         #[serde(rename = "windowIndex")]
         window_index: u32,
         message: crate::chat_log::ChatMessage,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     ChatLogError {
         error: String,

@@ -271,10 +271,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final msgData = message['message'] as Map<String, dynamic>?;
       if (msgData == null) return;
 
+      final source = message['source'] as String?;
       final msg = _parseMessage(msgData);
 
       // Skip user messages from backend ONLY for live events since we already add them locally
-      if (msg.type == ChatMessageType.user) {
+      // But NOT for webhook messages - they need to be added
+      if (msg.type == ChatMessageType.user && source != 'webhook') {
         print(
           '  -> Skipping live user message from backend (already added locally)',
         );

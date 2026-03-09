@@ -912,6 +912,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
                                         session_name: session_name_owned.clone(),
                                         window_index,
                                         message,
+                                        source: None,
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::Error { error } => {
@@ -1083,6 +1084,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
                                         session_name: session_name_owned.clone(),
                                         window_index: window_index_owned,
                                         message,
+                                        source: None,
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::Error { error } => {
@@ -1295,6 +1297,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
                 session_name: session_name.clone(),
                 window_index,
                 message: chat_message,
+                source: Some("webhook".to_string()),
             };
 
             state.client_manager.broadcast(msg).await;

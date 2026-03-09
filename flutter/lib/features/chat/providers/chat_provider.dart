@@ -148,8 +148,45 @@ class ChatNotifier extends StateNotifier<ChatState> {
         case 'chat-history-chunk':
           _handleChatHistoryChunk(message);
           break;
+        case 'acp-history-loaded':
+          _handleAcpHistoryLoaded(message);
+          break;
       }
     });
+  }
+
+  void _handleAcpHistoryLoaded(Map<String, dynamic> message) {
+    try {
+      final sessionId = message['sessionId'] as String?;
+      if (sessionId != state.sessionName) {
+        print(
+          'DEBUG: Ignoring history for session $sessionId (current: ${state.sessionName})',
+        );
+        return;
+      }
+
+      final messagesData = message['messages'] as List<dynamic>? ?? [];
+      final hasMore = message['hasMore'] as bool? ?? false;
+
+      final messages = messagesData
+          .map((msg) => _parseMessage(msg as Map<String, dynamic>))
+          .toList();
+
+      state = state.copyWith(
+        messages: messages,
+        isLoading: false,
+        hasMoreMessages: hasMore,
+      );
+      print(
+        'DEBUG: ACP history loaded: ${messages.length} messages, hasMore: $hasMore',
+      );
+    } catch (e, stack) {
+      print('ERROR parsing ACP history: $e\n$stack');
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Failed to parse history',
+      );
+    }
   }
 
   void _handleChatHistory(Map<String, dynamic> message) {
@@ -669,13 +706,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void startAcpChat(String sessionName) {
     state = state.copyWith(
       messages: [],
-      isLoading: false,
+      isLoading: true,
       error: null,
       sessionName: sessionName,
       windowIndex: 0,
-      hasMoreMessages: false,
-      totalMessageCount: 0,
     );
+
+    _ws!.acpLoadHistory(sessionName, offset: 0, limit: 50);
   }
 
   void watchChatLog(String sessionName, int windowIndex, {int? limit}) async {

@@ -1895,7 +1895,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             info!("ACP permission response: {} -> {}", request_id, option_id);
         }
         WebSocketMessage::AcpLoadHistory { session_id, offset, limit } => {
-            info!("DEBUG: ACP load history message received: {} offset={:?} limit={:?}", session_id, offset, limit);
+            info!("ACP load history: {} offset={:?} limit={:?}", session_id, offset, limit);
             
             // History loading doesn't require ACP client to be initialized - just read from database
             let offset = offset.unwrap_or(0);

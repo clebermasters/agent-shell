@@ -156,12 +156,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void _handleAcpHistoryLoaded(Map<String, dynamic> message) {
-    print('DEBUG: _handleAcpHistoryLoaded called with: $message');
     try {
       final sessionId = message['sessionId'] as String?;
-      print(
-        'DEBUG: History sessionId: $sessionId, current state.sessionName: ${state.sessionName}',
-      );
       if (sessionId != state.sessionName) {
         print(
           'DEBUG: Ignoring history for session $sessionId (current: ${state.sessionName})',
@@ -708,7 +704,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void startAcpChat(String sessionName) {
-    print('DEBUG: startAcpChat called with sessionName: $sessionName');
     state = state.copyWith(
       messages: [],
       isLoading: true,
@@ -717,7 +712,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
       windowIndex: 0,
     );
 
-    print('DEBUG: Calling acpLoadHistory with sessionName: $sessionName');
     _ws!.acpLoadHistory(sessionName, offset: 0, limit: 50);
   }
 

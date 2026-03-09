@@ -145,11 +145,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
+      if (!_autoScroll) return;
 
       final maxScroll = _scrollController.position.maxScrollExtent;
       final currentScroll = _scrollController.position.pixels;
 
-      if (maxScroll - currentScroll > 50) {
+      // Always scroll to bottom when autoScroll is enabled
+      // This handles both: user scrolled up (show new message) and user at bottom (show new message)
+      if (maxScroll - currentScroll > 10) {
         _scrollController.animateTo(
           maxScroll,
           duration: const Duration(milliseconds: 400),

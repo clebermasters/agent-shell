@@ -1743,6 +1743,9 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::AcpRespondPermission { request_id, option_id } => {
             info!("ACP permission response: {} -> {}", request_id, option_id);
         }
+        WebSocketMessage::AcpLoadHistory { session_id, offset, limit } => {
+            info!("ACP load history: {} offset={:?} limit={:?}", session_id, offset, limit);
+        }
     }
 
     Ok(())

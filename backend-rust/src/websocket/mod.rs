@@ -1563,29 +1563,48 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::AcpListSessions => {
             info!("ACP list sessions");
             
-            let acp_guard = app_state.acp_client.read().await;
-            if let Some(client) = acp_guard.as_ref() {
-                match client.list_sessions().await {
-                    Ok(result) => {
-                        info!("ACP sessions: {:?}", result.sessions);
-                        let response = ServerMessage::AcpSessionsListed {
-                            sessions: result.sessions,
-                        };
-                        send_message(&state.message_tx, response).await?;
+            // Auto-initialize ACP client if not initialized
+            let list_result = {
+                let mut acp_guard = app_state.acp_client.write().await;
+                if acp_guard.is_none() {
+                    info!("ACP client not initialized, auto-initializing...");
+                    let (event_tx, _event_rx) = tokio::sync::mpsc::channel::<crate::acp::AcpEvent>(100);
+                    let mut client = crate::acp::AcpClient::new(event_tx);
+                    match client.start().await {
+                        Ok(init_result) => {
+                            info!("ACP client auto-initialized: {:?}", init_result.agent_info);
+                            *acp_guard = Some(client);
+                            acp_guard.as_mut().unwrap().list_sessions().await
+                        }
+                        Err(e) => {
+                            error!("Failed to auto-initialize ACP client: {}", e);
+                            let response = ServerMessage::AcpError {
+                                message: format!("Failed to initialize ACP: {}", e),
+                            };
+                            send_message(&state.message_tx, response).await?;
+                            return Ok(());
+                        }
                     }
-                    Err(e) => {
-                        error!("Failed to list ACP sessions: {}", e);
-                        let response = ServerMessage::AcpError {
-                            message: e,
-                        };
-                        send_message(&state.message_tx, response).await?;
-                    }
+                } else {
+                    acp_guard.as_mut().unwrap().list_sessions().await
                 }
-            } else {
-                let response = ServerMessage::AcpError {
-                    message: "ACP client not initialized".to_string(),
-                };
-                send_message(&state.message_tx, response).await?;
+            };
+            
+            match list_result {
+                Ok(result) => {
+                    info!("ACP sessions: {:?}", result.sessions);
+                    let response = ServerMessage::AcpSessionsListed {
+                        sessions: result.sessions,
+                    };
+                    send_message(&state.message_tx, response).await?;
+                }
+                Err(e) => {
+                    error!("Failed to list ACP sessions: {}", e);
+                    let response = ServerMessage::AcpError {
+                        message: e,
+                    };
+                    send_message(&state.message_tx, response).await?;
+                }
             }
         }
         WebSocketMessage::AcpSendPrompt { session_id, message } => {
@@ -1781,41 +1800,34 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::AcpLoadHistory { session_id, offset, limit } => {
             info!("ACP load history: {} offset={:?} limit={:?}", session_id, offset, limit);
             
-            let acp_guard = app_state.acp_client.read().await;
-            if acp_guard.is_some() {
-                let offset = offset.unwrap_or(0);
-                let limit = limit.unwrap_or(50);
-                
-                let session_key = format!("acp_{}", session_id);
-                
-                let messages = match app_state.chat_event_store.list_messages(&session_key, 0) {
-                    Ok(msgs) => msgs,
-                    Err(e) => {
-                        error!("Failed to load ACP history: {}", e);
-                        let response = ServerMessage::AcpError {
-                            message: format!("Failed to load history: {}", e),
-                        };
-                        send_message(&state.message_tx, response).await?;
-                        return Ok(());
-                    }
-                };
-                
-                let total = messages.len();
-                let has_more = offset + limit < total;
-                let paginated: Vec<_> = messages.into_iter().skip(offset).take(limit).collect();
-                
-                let response = ServerMessage::AcpHistoryLoaded {
-                    session_id,
-                    messages: paginated,
-                    has_more,
-                };
-                send_message(&state.message_tx, response).await?;
-            } else {
-                let response = ServerMessage::AcpError {
-                    message: "ACP client not initialized".to_string(),
-                };
-                send_message(&state.message_tx, response).await?;
-            }
+            // History loading doesn't require ACP client to be initialized - just read from database
+            let offset = offset.unwrap_or(0);
+            let limit = limit.unwrap_or(50);
+            
+            let session_key = format!("acp_{}", session_id);
+            
+            let messages = match app_state.chat_event_store.list_messages(&session_key, 0) {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    error!("Failed to load ACP history: {}", e);
+                    let response = ServerMessage::AcpError {
+                        message: format!("Failed to load history: {}", e),
+                    };
+                    send_message(&state.message_tx, response).await?;
+                    return Ok(());
+                }
+            };
+            
+            let total = messages.len();
+            let has_more = offset + limit < total;
+            let paginated: Vec<_> = messages.into_iter().skip(offset).take(limit).collect();
+            
+            let response = ServerMessage::AcpHistoryLoaded {
+                session_id,
+                messages: paginated,
+                has_more,
+            };
+            send_message(&state.message_tx, response).await?;
         }
     }
 

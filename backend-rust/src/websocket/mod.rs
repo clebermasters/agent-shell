@@ -1568,11 +1568,108 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 let mut acp_guard = app_state.acp_client.write().await;
                 if acp_guard.is_none() {
                     info!("ACP client not initialized, auto-initializing...");
-                    let (event_tx, _event_rx) = tokio::sync::mpsc::channel::<crate::acp::AcpEvent>(100);
+                    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<crate::acp::AcpEvent>(100);
                     let mut client = crate::acp::AcpClient::new(event_tx);
                     match client.start().await {
                         Ok(init_result) => {
                             info!("ACP client auto-initialized: {:?}", init_result.agent_info);
+                            
+                            // Spawn event handler
+                            let broadcast_tx = app_state.broadcast_tx.clone();
+                            let app_state_clone = app_state.clone();
+                            tokio::spawn(async move {
+                                while let Some(event) = event_rx.recv().await {
+                                    match event {
+                                        crate::acp::AcpEvent::SessionUpdate { session_id, update } => {
+                                            let msg = match update {
+                                                crate::acp::SessionUpdate::AgentMessageChunk { content } => {
+                                                    let text = content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                    
+                                                    // Persist the assistant message
+                                                    let session_key = format!("acp_{}", session_id);
+                                                    let chat_message = crate::chat_log::ChatMessage {
+                                                        role: "assistant".to_string(),
+                                                        timestamp: Some(chrono::Utc::now()),
+                                                        blocks: vec![crate::chat_log::ContentBlock::Text { text: text.clone() }],
+                                                    };
+                                                    if let Err(e) = app_state_clone.chat_event_store.append_message(
+                                                        &session_key,
+                                                        0,
+                                                        "acp",
+                                                        &chat_message,
+                                                    ) {
+                                                        tracing::warn!("Failed to persist ACP message: {}", e);
+                                                    }
+                                                    
+                                                    ServerMessage::AcpMessageChunk {
+                                                        session_id: session_id.clone(),
+                                                        content: text,
+                                                        is_thinking: false,
+                                                    }
+                                                }
+                                                crate::acp::SessionUpdate::AgentThoughtChunk { content } => {
+                                                    ServerMessage::AcpMessageChunk {
+                                                        session_id: session_id.clone(),
+                                                        content: content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                                        is_thinking: true,
+                                                    }
+                                                }
+                                                crate::acp::SessionUpdate::ToolCall { tool_call_id, title, kind, status, .. } => {
+                                                    ServerMessage::AcpToolCall {
+                                                        session_id: session_id.clone(),
+                                                        tool_call_id,
+                                                        title,
+                                                        kind,
+                                                        status,
+                                                    }
+                                                }
+                                                crate::acp::SessionUpdate::ToolCallUpdate { tool_call_id, status, content, .. } => {
+                                                    let output = content.unwrap_or_default().iter()
+                                                        .filter_map(|c| c.as_object())
+                                                        .filter_map(|c| c.get("content").and_then(|v| v.as_object()))
+                                                        .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n");
+                                                    ServerMessage::AcpToolResult {
+                                                        session_id: session_id.clone(),
+                                                        tool_call_id,
+                                                        status,
+                                                        output,
+                                                    }
+                                                }
+                                                _ => continue,
+                                            };
+                                            if let Err(e) = broadcast_tx.send(msg) {
+                                                tracing::error!("Failed to broadcast ACP message: {}", e);
+                                            }
+                                        }
+                                        crate::acp::AcpEvent::PermissionRequest { request_id, session_id, tool_call, .. } => {
+                                            let tool = tool_call.get("title").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                            let command = tool_call.get("rawInput")
+                                                .and_then(|v| v.get("command"))
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let msg = ServerMessage::AcpPermissionRequest {
+                                                request_id,
+                                                session_id,
+                                                tool: tool.to_string(),
+                                                command: command.to_string(),
+                                            };
+                                            if let Err(e) = broadcast_tx.send(msg) {
+                                                tracing::error!("Failed to broadcast ACP permission request: {}", e);
+                                            }
+                                        }
+                                        crate::acp::AcpEvent::Error { message } => {
+                                            tracing::error!("ACP error: {}", message);
+                                            let msg = ServerMessage::AcpError { message };
+                                            if let Err(e) = broadcast_tx.send(msg) {
+                                                tracing::error!("Failed to broadcast ACP error: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                            
                             *acp_guard = Some(client);
                             acp_guard.as_mut().unwrap().list_sessions().await
                         }

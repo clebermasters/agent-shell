@@ -68,7 +68,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
       ),
       body: sessionsState.isLoading
           ? const Center(child: CircularProgressIndicator())
-          : sessionsState.sessions.isEmpty
+          : sessionsState.sessions.isEmpty && sessionsState.acpSessions.isEmpty
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -91,62 +91,102 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                 ],
               ),
             )
-          : ListView.builder(
-              itemCount: sessionsState.sessions.length,
-              itemBuilder: (context, index) {
-                final session = sessionsState.sessions[index];
-                return _SessionTile(
-                  session: session,
-                  onAttach: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            TerminalScreen(sessionName: session.name),
-                      ),
-                    );
-                  },
-                  onChat: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          sessionName: session.name,
-                          windowIndex: 0,
-                        ),
-                      ),
-                    );
-                  },
-                  onKill: () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Kill Session'),
-                        content: Text(
-                          'Are you sure you want to kill "${session.name}"?',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: const Text('Cancel'),
+          : ListView(
+              children: [
+                if (sessionsState.sessions.isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text(
+                      'Terminal Sessions',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  ...sessionsState.sessions.map(
+                    (session) => _SessionTile(
+                      session: session,
+                      onAttach: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                TerminalScreen(sessionName: session.name),
                           ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            style: TextButton.styleFrom(
-                              foregroundColor: Colors.red,
+                        );
+                      },
+                      onChat: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ChatScreen(
+                              sessionName: session.name,
+                              windowIndex: 0,
                             ),
-                            child: const Text('Kill'),
                           ),
-                        ],
+                        );
+                      },
+                      onKill: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Kill Session'),
+                            content: Text(
+                              'Are you sure you want to kill "${session.name}"?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                ),
+                                child: const Text('Kill'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true) {
+                          ref
+                              .read(sessionsProvider.notifier)
+                              .killSession(session.name);
+                        }
+                      },
+                    ),
+                  ),
+                ],
+                if (sessionsState.acpSessions.isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text(
+                      'Direct Sessions (ACP)',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  ...sessionsState.acpSessions.map(
+                    (session) => ListTile(
+                      leading: const Icon(Icons.smart_toy),
+                      title: Text(
+                        session.title.isEmpty
+                            ? session.cwd.split('/').last
+                            : session.title,
                       ),
-                    );
-
-                    if (confirmed == true) {
-                      ref
-                          .read(sessionsProvider.notifier)
-                          .killSession(session.name);
-                    }
-                  },
-                );
-              },
+                      subtitle: Text(session.cwd),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ChatScreen(
+                              sessionName: session.sessionId,
+                              windowIndex: 0,
+                              isAcp: true,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ],
             ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showCreateSessionDialog(context, ref),
@@ -157,12 +197,14 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
 
   void _showCreateSessionDialog(BuildContext context, WidgetRef ref) {
     final controller = TextEditingController();
-    final selectedBackend = ref.read(selectedBackendProvider);
 
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
+          // Read current backend from provider each time the widget rebuilds
+          final currentBackend = ref.watch(selectedBackendProvider);
+
           return AlertDialog(
             title: const Text('New Session'),
             content: Column(
@@ -172,9 +214,13 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                 TextField(
                   controller: controller,
                   autofocus: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Session Name',
-                    hintText: 'Enter session name',
+                  decoration: InputDecoration(
+                    labelText: currentBackend == 'tmux'
+                        ? 'Session Name'
+                        : 'Working Directory',
+                    hintText: currentBackend == 'tmux'
+                        ? 'e.g., my-session'
+                        : 'e.g., /home/user/project',
                   ),
                   onSubmitted: (value) {
                     if (value.isNotEmpty) {
@@ -202,17 +248,16 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                       icon: Icon(Icons.smart_toy),
                     ),
                   ],
-                  selected: {selectedBackend},
+                  selected: {currentBackend},
                   onSelectionChanged: (Set<String> selection) {
-                    setDialogState(() {
-                      ref.read(selectedBackendProvider.notifier).state =
-                          selection.first;
-                    });
+                    ref.read(selectedBackendProvider.notifier).state =
+                        selection.first;
+                    setDialogState(() {});
                   },
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  selectedBackend == 'tmux'
+                  currentBackend == 'tmux'
                       ? 'Terminal mode: Full terminal with tmux'
                       : 'Direct mode: Chat-focused (ACP)',
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
@@ -227,11 +272,11 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
               ElevatedButton(
                 onPressed: () {
                   if (controller.text.isNotEmpty) {
+                    final ws = ref.read(sharedWebSocketServiceProvider);
                     final backend = ref.read(selectedBackendProvider);
                     if (backend == 'acp') {
-                      ref
-                          .read(sharedWebSocketServiceProvider)
-                          .acpCreateSession(controller.text);
+                      ws.selectBackend('acp');
+                      ws.acpCreateSession(controller.text);
                     } else {
                       ref
                           .read(sessionsProvider.notifier)

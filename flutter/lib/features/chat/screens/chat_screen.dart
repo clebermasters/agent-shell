@@ -16,11 +16,13 @@ import '../../terminal/screens/terminal_screen.dart';
 class ChatScreen extends ConsumerStatefulWidget {
   final String sessionName;
   final int windowIndex;
+  final bool isAcp;
 
   const ChatScreen({
     super.key,
     required this.sessionName,
     this.windowIndex = 0,
+    this.isAcp = false,
   });
 
   @override
@@ -58,9 +60,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref
-          .read(chatProvider.notifier)
-          .watchChatLog(widget.sessionName, widget.windowIndex);
+      if (widget.isAcp) {
+        // First select ACP backend to ensure client is initialized, then resume the session
+        final ws = ref.read(sharedWebSocketServiceProvider);
+        ws.selectBackend('acp');
+        // Resume the session to attach to it
+        ws.acpResumeSession(widget.sessionName, '');
+        ref.read(chatProvider.notifier).startAcpChat(widget.sessionName);
+      } else {
+        ref
+            .read(chatProvider.notifier)
+            .watchChatLog(widget.sessionName, widget.windowIndex);
+      }
 
       // Initialize scroll position tracking
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -169,7 +180,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (content.isEmpty) return;
 
     ref.read(chatProvider.notifier).addUserMessage(content);
-    ref.read(chatProvider.notifier).sendInput(content);
+
+    if (widget.isAcp) {
+      ref
+          .read(sharedWebSocketServiceProvider)
+          .acpSendPrompt(widget.sessionName, content);
+    } else {
+      ref.read(chatProvider.notifier).sendInput(content);
+    }
+
     _controller.clear();
     _scrollToBottom();
     setState(() {

@@ -335,6 +335,12 @@ pub enum WebSocketMessage {
         #[serde(rename = "optionId")]
         option_id: String,
     },
+    AcpLoadHistory {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -659,5 +665,11 @@ pub enum ServerMessage {
     AcpPermissionResponse {
         #[serde(rename = "requestId")]
         request_id: String,
+    },
+    AcpHistoryLoaded {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        messages: Vec<crate::chat_log::ChatMessage>,
+        has_more: bool,
     },
 }

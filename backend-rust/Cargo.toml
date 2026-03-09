@@ -28,6 +28,9 @@ sysinfo = "0.30"
 # Error handling
 anyhow = "1.0"
 
+# Async traits
+async-trait = "0.1"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

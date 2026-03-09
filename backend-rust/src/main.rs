@@ -35,6 +35,8 @@ mod terminal_buffer;
 mod tmux;
 mod types;
 mod websocket;
+mod agent;
+mod acp;
 
 // Global flag for audio logging
 pub static ENABLE_AUDIO_LOGS: std::sync::atomic::AtomicBool =

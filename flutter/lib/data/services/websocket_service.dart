@@ -28,6 +28,7 @@ class WebSocketService {
 
   void _log(String message) {
     final timestamp = DateTime.now().toIso8601String();
+    print('WS LOG: [$timestamp] $message');
     _logController.add('[$timestamp] $message');
   }
 
@@ -67,6 +68,10 @@ class WebSocketService {
     _log('Received: $dataStr');
     try {
       final message = jsonDecode(data as String) as Map<String, dynamic>;
+      final type = message['type'];
+      if (type != 'output' && type != 'system-stats' && type != 'pong') {
+        print('WS RECV TYPE: $type');
+      }
       _messageController.add(message);
     } catch (e) {
       _log('Failed to parse message: $e');

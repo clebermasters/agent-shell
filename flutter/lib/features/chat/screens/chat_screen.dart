@@ -142,20 +142,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _smoothScrollToBottom() {
     if (!_scrollController.hasClients) return;
+    if (!_autoScroll) return;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Use a small delay to ensure widget is fully rendered (especially for big messages)
+    Future.delayed(const Duration(milliseconds: 50), () {
       if (!_scrollController.hasClients) return;
       if (!_autoScroll) return;
 
       final maxScroll = _scrollController.position.maxScrollExtent;
       final currentScroll = _scrollController.position.pixels;
 
-      // Always scroll to bottom when autoScroll is enabled
-      // This handles both: user scrolled up (show new message) and user at bottom (show new message)
       if (maxScroll - currentScroll > 10) {
         _scrollController.animateTo(
           maxScroll,
-          duration: const Duration(milliseconds: 400),
+          duration: const Duration(milliseconds: 300),
           curve: Curves.easeOutCubic,
         );
       }
@@ -400,6 +400,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     }
 
+    // Check scroll after build completes
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAndScrollToBottom(chatState.messages.length);
     });

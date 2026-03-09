@@ -37,12 +37,13 @@ pub struct MetaCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitializeResult {
+    #[serde(rename = "protocolVersion")]
     pub protocol_version: usize,
-    #[serde(rename = "capabilities")]
-    pub capabilities: ServerCapabilities,
-    #[serde(rename = "serverInfo")]
-    pub server_info: ServerInfo,
-    #[serde(rename = "authMethods", skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "capabilities", skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<ServerCapabilities>,
+    #[serde(rename = "serverInfo", skip_serializing_if = "Option::is_none")]
+    pub server_info: Option<ServerInfo>,
+    #[serde(rename = "authMethods", skip_serializing_if = "Vec::is_empty", default)]
     pub auth_methods: Vec<AuthMethod>,
     #[serde(rename = "agentCapabilities", skip_serializing_if = "Option::is_none")]
     pub agent_capabilities: Option<AgentCapabilities>,
@@ -143,9 +144,10 @@ pub enum McpServer {
 pub struct CreateSessionResult {
     #[serde(rename = "sessionId")]
     pub session_id: String,
-    pub models: ModelsInfo,
     #[serde(default)]
-    pub modes: ModesInfo,
+    pub models: Option<ModelsInfo>,
+    #[serde(default)]
+    pub modes: Option<ModesInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +160,7 @@ pub struct ModelsInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
+    #[serde(rename = "modelId")]
     pub id: String,
     pub name: String,
 }

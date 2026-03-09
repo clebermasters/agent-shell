@@ -113,6 +113,7 @@ struct WsState {
     chat_event_store: Arc<chat_event_store::ChatEventStore>,
     chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
     client_manager: Arc<ClientManager>,
+    acp_client: Arc<tokio::sync::RwLock<Option<crate::acp::AcpClient>>>,
 }
 
 pub async fn ws_handler(
@@ -150,6 +151,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         chat_event_store: state.chat_event_store.clone(),
         chat_clear_store: state.chat_clear_store.clone(),
         client_manager: state.client_manager.clone(),
+        acp_client: state.acp_client.clone(),
     };
 
     // Clone client_id for the spawned task
@@ -188,7 +190,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 match serde_json::from_str::<WebSocketMessage>(&text) {
                     Ok(ws_msg) => {
                         info!("Parsed message type: {:?}", std::mem::discriminant(&ws_msg));
-                        if let Err(e) = handle_message(ws_msg, &mut ws_state).await {
+                        if let Err(e) = handle_message(ws_msg, &mut ws_state, state.clone()).await {
                             error!("Error handling message: {}", e);
                         }
                     }
@@ -213,10 +215,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     info!("WebSocket connection closed: {}", client_id);
 }
 
-async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::Result<()> {
+async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: Arc<AppState>) -> anyhow::Result<()> {
     match msg {
         WebSocketMessage::ListSessions => {
+            info!("Listing tmux sessions...");
             let sessions = tmux::list_sessions().await.unwrap_or_default();
+            info!("Found {} tmux sessions", sessions.len());
             let response = ServerMessage::SessionsList { sessions };
             send_message(&state.message_tx, response).await?;
         }
@@ -1334,20 +1338,370 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
                 error!("Failed to send webhook message to tmux session {}", target);
             }
         }
-        // ACP message handlers - to be implemented
+        // ACP message handlers
         WebSocketMessage::SelectBackend { backend } => {
             info!("Backend selection: {}", backend);
-            let response = ServerMessage::BackendSelected {
-                backend: backend.clone(),
-            };
-            send_message(&state.message_tx, response).await?;
+            
+            if backend == "acp" {
+                // Initialize ACP client globally in AppState
+                let mut acp_guard = app_state.acp_client.write().await;
+                if acp_guard.is_none() {
+                    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<crate::acp::AcpEvent>(100);
+                    let mut client = crate::acp::AcpClient::new(event_tx);
+                    
+                    match client.start().await {
+                        Ok(init_result) => {
+                            info!("ACP client initialized: {:?}", init_result.agent_info);
+                            *acp_guard = Some(client);
+                            
+                            // Spawn event handler
+                            let broadcast_tx = app_state.broadcast_tx.clone();
+                            tokio::spawn(async move {
+                                while let Some(event) = event_rx.recv().await {
+                                    match event {
+                                        crate::acp::AcpEvent::SessionUpdate { session_id, update } => {
+                                            let msg = match update {
+                                                crate::acp::SessionUpdate::AgentMessageChunk { content } => {
+                                                    ServerMessage::AcpMessageChunk {
+                                                        session_id: session_id.clone(),
+                                                        content: content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                                        is_thinking: false,
+                                                    }
+                                                }
+                                                crate::acp::SessionUpdate::AgentThoughtChunk { content } => {
+                                                    ServerMessage::AcpMessageChunk {
+                                                        session_id: session_id.clone(),
+                                                        content: content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                                        is_thinking: true,
+                                                    }
+                                                }
+                                                crate::acp::SessionUpdate::ToolCall { tool_call_id, title, kind, status, .. } => {
+                                                    ServerMessage::AcpToolCall {
+                                                        session_id: session_id.clone(),
+                                                        tool_call_id,
+                                                        title,
+                                                        kind,
+                                                        status,
+                                                    }
+                                                }
+                                                crate::acp::SessionUpdate::ToolCallUpdate { tool_call_id, status, content, .. } => {
+                                                    let output = content.unwrap_or_default().iter()
+                                                        .filter_map(|c| c.as_object())
+                                                        .filter_map(|c| c.get("content").and_then(|v| v.as_object()))
+                                                        .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n");
+                                                    ServerMessage::AcpToolResult {
+                                                        session_id: session_id.clone(),
+                                                        tool_call_id,
+                                                        status,
+                                                        output,
+                                                    }
+                                                }
+                                                _ => continue,
+                                            };
+                                            if let Err(e) = broadcast_tx.send(msg) {
+                                                tracing::error!("Failed to broadcast ACP message: {}", e);
+                                            }
+                                        }
+                                        crate::acp::AcpEvent::PermissionRequest { request_id, session_id, tool_call, .. } => {
+                                            let tool = tool_call.get("title").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                            let command = tool_call.get("rawInput")
+                                                .and_then(|v| v.get("command"))
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let msg = ServerMessage::AcpPermissionRequest {
+                                                request_id,
+                                                session_id,
+                                                tool: tool.to_string(),
+                                                command: command.to_string(),
+                                            };
+                                            if let Err(e) = broadcast_tx.send(msg) {
+                                                tracing::error!("Failed to broadcast ACP permission request: {}", e);
+                                            }
+                                        }
+                                        crate::acp::AcpEvent::Error { message } => {
+                                            tracing::error!("ACP error: {}", message);
+                                            let msg = ServerMessage::AcpError { message };
+                                            if let Err(e) = broadcast_tx.send(msg) {
+                                                tracing::error!("Failed to broadcast ACP error: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                            
+                            let response = ServerMessage::AcpInitialized { success: true, error: None };
+                            send_message(&state.message_tx, response).await?;
+                        }
+                        Err(e) => {
+                            error!("Failed to initialize ACP client: {}", e);
+                            let response = ServerMessage::AcpInitialized { success: false, error: Some(e) };
+                            send_message(&state.message_tx, response).await?;
+                        }
+                    }
+                } else {
+                    let response = ServerMessage::BackendSelected { backend: backend.clone() };
+                    send_message(&state.message_tx, response).await?;
+                }
+            } else {
+                let response = ServerMessage::BackendSelected { backend: backend.clone() };
+                send_message(&state.message_tx, response).await?;
+            }
         }
         WebSocketMessage::AcpCreateSession { cwd } => {
             info!("ACP create session: {}", cwd);
-            let response = ServerMessage::AcpError {
-                message: "ACP not yet implemented".to_string(),
-            };
-            send_message(&state.message_tx, response).await?;
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.create_session(&cwd).await {
+                    Ok(result) => {
+                        info!("ACP session created: {:?}", result.session_id);
+                        let response = ServerMessage::AcpSessionCreated {
+                            session_id: result.session_id,
+                            current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
+                            available_models: result.models.as_ref().map(|m| m.available_models.clone()),
+                            current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to create ACP session: {}", e);
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized. Select ACP backend first.".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        }
+        WebSocketMessage::AcpResumeSession { session_id, cwd } => {
+            info!("ACP resume session: {} in {}", session_id, cwd);
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.resume_session(&session_id, &cwd).await {
+                    Ok(result) => {
+                        info!("ACP session resumed: {:?}", result.session_id);
+                        let response = ServerMessage::AcpSessionCreated {
+                            session_id: result.session_id,
+                            current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
+                            available_models: result.models.as_ref().map(|m| m.available_models.clone()),
+                            current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to resume ACP session: {}", e);
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        }
+        WebSocketMessage::AcpForkSession { session_id, cwd } => {
+            info!("ACP fork session: {} in {}", session_id, cwd);
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.fork_session(&session_id, &cwd).await {
+                    Ok(result) => {
+                        let response = ServerMessage::AcpSessionCreated {
+                            session_id: result.session_id,
+                            current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
+                            available_models: result.models.as_ref().map(|m| m.available_models.clone()),
+                            current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to fork ACP session: {}", e);
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        }
+        WebSocketMessage::AcpListSessions => {
+            info!("ACP list sessions");
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.list_sessions().await {
+                    Ok(result) => {
+                        info!("ACP sessions: {:?}", result.sessions);
+                        let response = ServerMessage::AcpSessionsListed {
+                            sessions: result.sessions,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to list ACP sessions: {}", e);
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        }
+        WebSocketMessage::AcpSendPrompt { session_id, message } => {
+            info!("ACP send prompt to {}: {}", session_id, message);
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.send_prompt(&session_id, &message).await {
+                    Ok(_result) => {
+                        let response = ServerMessage::AcpPromptSent {
+                            session_id: session_id.clone(),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to send prompt: {}", e);
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        }
+        WebSocketMessage::AcpCancelPrompt { session_id } => {
+            info!("ACP cancel prompt: {}", session_id);
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.cancel_prompt(&session_id).await {
+                    Ok(_) => {
+                        let response = ServerMessage::AcpPromptCancelled {
+                            session_id: session_id.clone(),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        error!("Failed to cancel prompt: {}", e);
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        }
+        WebSocketMessage::AcpSetModel { session_id, model_id } => {
+            info!("ACP set model for {}: {}", session_id, model_id);
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.set_model(&session_id, &model_id).await {
+                    Ok(_) => {
+                        let response = ServerMessage::AcpModelSet {
+                            session_id: session_id.clone(),
+                            model_id: model_id.clone(),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        }
+        WebSocketMessage::AcpSetMode { session_id, mode_id } => {
+            info!("ACP set mode for {}: {}", session_id, mode_id);
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.set_mode(&session_id, &mode_id).await {
+                    Ok(_) => {
+                        let response = ServerMessage::AcpModeSet {
+                            session_id: session_id.clone(),
+                            mode_id: mode_id.clone(),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
+        }
+        WebSocketMessage::AcpRespondPermission { request_id, option_id } => {
+            info!("ACP respond to permission {} with option {}", request_id, option_id);
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                match client.respond_to_permission(&request_id, &option_id).await {
+                    Ok(_) => {
+                        let response = ServerMessage::AcpPermissionResponse {
+                            request_id: request_id.clone(),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                    Err(e) => {
+                        let response = ServerMessage::AcpError {
+                            message: e,
+                        };
+                        send_message(&state.message_tx, response).await?;
+                    }
+                }
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
         }
         WebSocketMessage::AcpResumeSession { session_id, cwd } => {
             info!("ACP resume session: {} in {}", session_id, cwd);

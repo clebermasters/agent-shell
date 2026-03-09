@@ -127,6 +127,24 @@ class ChatNotifier extends StateNotifier<ChatState> {
         case 'chat-log-cleared':
           _handleChatLogCleared(message);
           break;
+        case 'acp-message-chunk':
+          _handleAcpMessageChunk(message);
+          break;
+        case 'acp-tool-call':
+          _handleAcpToolCall(message);
+          break;
+        case 'acp-tool-result':
+          _handleAcpToolResult(message);
+          break;
+        case 'acp-permission-request':
+          _handleAcpPermissionRequest(message);
+          break;
+        case 'acp-prompt-done':
+          _handleAcpPromptDone(message);
+          break;
+        case 'acp-error':
+          state = state.copyWith(error: message['message']?.toString());
+          break;
         case 'chat-history-chunk':
           _handleChatHistoryChunk(message);
           break;
@@ -537,12 +555,127 @@ class ChatNotifier extends StateNotifier<ChatState> {
     return null;
   }
 
+  void _handleAcpMessageChunk(Map<String, dynamic> message) {
+    final sessionId = message['sessionId'] as String?;
+    if (sessionId != state.sessionName) return;
+
+    final content = message['content'] as String? ?? '';
+    final isThinking = message['isThinking'] as bool? ?? false;
+
+    if (content.isEmpty) return;
+
+    final msgType = isThinking
+        ? ChatMessageType.tool
+        : ChatMessageType.assistant;
+
+    state = state.copyWith(
+      messages: [
+        ...state.messages,
+        ChatMessage(
+          id: _uuid.v4(),
+          type: msgType,
+          content: content,
+          timestamp: DateTime.now(),
+        ),
+      ],
+    );
+  }
+
+  void _handleAcpToolCall(Map<String, dynamic> message) {
+    final sessionId = message['sessionId'] as String?;
+    if (sessionId != state.sessionName) return;
+
+    final toolCallId = message['toolCallId'] as String? ?? '';
+    final title = message['title'] as String? ?? 'Unknown Tool';
+    final kind = message['kind'] as String? ?? '';
+
+    state = state.copyWith(
+      messages: [
+        ...state.messages,
+        ChatMessage(
+          id: toolCallId,
+          type: ChatMessageType.toolCall,
+          content: 'Tool: $title ($kind)',
+          timestamp: DateTime.now(),
+        ),
+      ],
+    );
+  }
+
+  void _handleAcpToolResult(Map<String, dynamic> message) {
+    final sessionId = message['sessionId'] as String?;
+    if (sessionId != state.sessionName) return;
+
+    final toolCallId = message['toolCallId'] as String? ?? '';
+    final output = message['output'] as String? ?? '';
+
+    state = state.copyWith(
+      messages: [
+        ...state.messages,
+        ChatMessage(
+          id: toolCallId,
+          type: ChatMessageType.toolResult,
+          content: output,
+          timestamp: DateTime.now(),
+        ),
+      ],
+    );
+  }
+
+  void _handleAcpPermissionRequest(Map<String, dynamic> message) {
+    final requestId = message['requestId'] as String? ?? '';
+    final tool = message['tool'] as String? ?? 'Unknown';
+    final command = message['command'] as String? ?? '';
+
+    state = state.copyWith(
+      messages: [
+        ...state.messages,
+        ChatMessage(
+          id: requestId,
+          type: ChatMessageType.system,
+          content: 'Permission Request: $tool\n$command',
+          timestamp: DateTime.now(),
+        ),
+      ],
+    );
+  }
+
+  void _handleAcpPromptDone(Map<String, dynamic> message) {
+    final sessionId = message['sessionId'] as String?;
+    if (sessionId != state.sessionName) return;
+
+    final stopReason = message['stopReason'] as String? ?? '';
+    state = state.copyWith(
+      messages: [
+        ...state.messages,
+        ChatMessage(
+          id: _uuid.v4(),
+          type: ChatMessageType.system,
+          content: 'Done (reason: $stopReason)',
+          timestamp: DateTime.now(),
+        ),
+      ],
+    );
+  }
+
   String _mergeContent(String? left, String? right) {
     final a = (left ?? '').trim();
     final b = (right ?? '').trim();
     if (a.isEmpty) return b;
     if (b.isEmpty) return a;
     return '$a\n$b';
+  }
+
+  void startAcpChat(String sessionName) {
+    state = state.copyWith(
+      messages: [],
+      isLoading: false,
+      error: null,
+      sessionName: sessionName,
+      windowIndex: 0,
+      hasMoreMessages: false,
+      totalMessageCount: 0,
+    );
   }
 
   void watchChatLog(String sessionName, int windowIndex, {int? limit}) async {

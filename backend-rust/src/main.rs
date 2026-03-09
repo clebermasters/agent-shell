@@ -62,6 +62,7 @@ pub struct AppState {
     pub chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
     pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
+    pub acp_client: Arc<tokio::sync::RwLock<Option<acp::AcpClient>>>,
 }
 
 #[tokio::main]
@@ -106,6 +107,7 @@ async fn main() -> Result<()> {
         chat_file_storage: Arc::new(chat_file_storage::ChatFileStorage::new(base_dir.clone())),
         chat_event_store: Arc::new(chat_event_store::ChatEventStore::new(base_dir.clone())?),
         chat_clear_store: Arc::new(chat_clear_store::ChatClearStore::new(&base_dir)),
+        acp_client: Arc::new(tokio::sync::RwLock::new(None)),
     };
 
     // Initialize CRON manager

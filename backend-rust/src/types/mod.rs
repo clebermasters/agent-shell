@@ -568,11 +568,11 @@ pub enum ServerMessage {
         #[serde(rename = "sessionId")]
         session_id: String,
         #[serde(rename = "currentModelId")]
-        current_model_id: String,
+        current_model_id: Option<String>,
         #[serde(rename = "availableModels")]
-        available_models: Vec<crate::acp::ModelInfo>,
+        available_models: Option<Vec<crate::acp::ModelInfo>>,
         #[serde(rename = "currentModeId")]
-        current_mode_id: String,
+        current_mode_id: Option<String>,
     },
     AcpSessionResumed {
         #[serde(rename = "sessionId")]
@@ -635,5 +635,29 @@ pub enum ServerMessage {
     },
     AcpError {
         message: String,
+    },
+    AcpPromptSent {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    AcpPromptCancelled {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    AcpModelSet {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "modelId")]
+        model_id: String,
+    },
+    AcpModeSet {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "modeId")]
+        mode_id: String,
+    },
+    AcpPermissionResponse {
+        #[serde(rename = "requestId")]
+        request_id: String,
     },
 }

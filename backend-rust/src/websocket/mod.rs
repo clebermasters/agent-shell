@@ -1334,6 +1334,61 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState) -> anyhow::R
                 error!("Failed to send webhook message to tmux session {}", target);
             }
         }
+        // ACP message handlers - to be implemented
+        WebSocketMessage::SelectBackend { backend } => {
+            info!("Backend selection: {}", backend);
+            let response = ServerMessage::BackendSelected {
+                backend: backend.clone(),
+            };
+            send_message(&state.message_tx, response).await?;
+        }
+        WebSocketMessage::AcpCreateSession { cwd } => {
+            info!("ACP create session: {}", cwd);
+            let response = ServerMessage::AcpError {
+                message: "ACP not yet implemented".to_string(),
+            };
+            send_message(&state.message_tx, response).await?;
+        }
+        WebSocketMessage::AcpResumeSession { session_id, cwd } => {
+            info!("ACP resume session: {} in {}", session_id, cwd);
+            let response = ServerMessage::AcpError {
+                message: "ACP not yet implemented".to_string(),
+            };
+            send_message(&state.message_tx, response).await?;
+        }
+        WebSocketMessage::AcpForkSession { session_id, cwd } => {
+            info!("ACP fork session: {} in {}", session_id, cwd);
+            let response = ServerMessage::AcpError {
+                message: "ACP not yet implemented".to_string(),
+            };
+            send_message(&state.message_tx, response).await?;
+        }
+        WebSocketMessage::AcpListSessions => {
+            info!("ACP list sessions");
+            let response = ServerMessage::AcpError {
+                message: "ACP not yet implemented".to_string(),
+            };
+            send_message(&state.message_tx, response).await?;
+        }
+        WebSocketMessage::AcpSendPrompt { session_id, message } => {
+            info!("ACP send prompt to {}: {}", session_id, message);
+            let response = ServerMessage::AcpError {
+                message: "ACP not yet implemented".to_string(),
+            };
+            send_message(&state.message_tx, response).await?;
+        }
+        WebSocketMessage::AcpCancelPrompt { session_id } => {
+            info!("ACP cancel prompt: {}", session_id);
+        }
+        WebSocketMessage::AcpSetModel { session_id, model_id } => {
+            info!("ACP set model: {} -> {}", session_id, model_id);
+        }
+        WebSocketMessage::AcpSetMode { session_id, mode_id } => {
+            info!("ACP set mode: {} -> {}", session_id, mode_id);
+        }
+        WebSocketMessage::AcpRespondPermission { request_id, option_id } => {
+            info!("ACP permission response: {} -> {}", request_id, option_id);
+        }
     }
 
     Ok(())

@@ -289,6 +289,52 @@ pub enum WebSocketMessage {
         #[serde(default)]
         notify: Option<bool>,
     },
+    // ACP backend selection
+    SelectBackend {
+        backend: String,
+    },
+    // ACP session management
+    AcpCreateSession {
+        cwd: String,
+    },
+    AcpResumeSession {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        cwd: String,
+    },
+    AcpForkSession {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        cwd: String,
+    },
+    AcpListSessions,
+    AcpSendPrompt {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        message: String,
+    },
+    AcpCancelPrompt {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    AcpSetModel {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "modelId")]
+        model_id: String,
+    },
+    AcpSetMode {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "modeId")]
+        mode_id: String,
+    },
+    AcpRespondPermission {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "optionId")]
+        option_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -508,5 +554,86 @@ pub enum ServerMessage {
         total_lines: i64,
         #[serde(rename = "totalChunks")]
         total_chunks: usize,
+    },
+    // ACP responses
+    BackendSelected {
+        backend: String,
+    },
+    AcpInitialized {
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    AcpSessionCreated {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "currentModelId")]
+        current_model_id: String,
+        #[serde(rename = "availableModels")]
+        available_models: Vec<crate::acp::ModelInfo>,
+        #[serde(rename = "currentModeId")]
+        current_mode_id: String,
+    },
+    AcpSessionResumed {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "currentModelId")]
+        current_model_id: String,
+        #[serde(rename = "availableModels")]
+        available_models: Vec<crate::acp::ModelInfo>,
+        #[serde(rename = "currentModeId")]
+        current_mode_id: String,
+    },
+    AcpSessionForked {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "currentModelId")]
+        current_model_id: String,
+    },
+    AcpSessionsListed {
+        sessions: Vec<crate::acp::SessionInfo>,
+    },
+    AcpMessageChunk {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        content: String,
+        #[serde(rename = "isThinking")]
+        is_thinking: bool,
+    },
+    AcpToolCall {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        title: String,
+        kind: String,
+        status: String,
+    },
+    AcpToolResult {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        status: String,
+        output: String,
+    },
+    AcpPromptDone {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "stopReason")]
+        stop_reason: String,
+        #[serde(rename = "totalTokens")]
+        total_tokens: usize,
+    },
+    AcpPermissionRequest {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        tool: String,
+        command: String,
+    },
+    AcpError {
+        message: String,
     },
 }

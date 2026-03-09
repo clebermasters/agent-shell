@@ -614,6 +614,8 @@ pub enum ServerMessage {
         title: String,
         kind: String,
         status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<String>,
     },
     AcpToolResult {
         #[serde(rename = "sessionId")]

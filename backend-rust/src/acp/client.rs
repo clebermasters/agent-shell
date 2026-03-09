@@ -74,7 +74,11 @@ pub enum SessionUpdate {
     #[serde(rename = "plan")]
     Plan { entries: Vec<sj::Value> },
     #[serde(rename = "usage_update")]
-    UsageUpdate { usage: sj::Value },
+    UsageUpdate {
+        used: Option<u64>,
+        size: Option<u64>,
+        cost: Option<sj::Value>,
+    },
     #[serde(rename = "available_commands_update")]
     AvailableCommandsUpdate { commands: Vec<sj::Value> },
     #[serde(other)]

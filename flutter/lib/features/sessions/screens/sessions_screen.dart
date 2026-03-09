@@ -7,6 +7,8 @@ import '../../chat/screens/chat_screen.dart';
 import '../../hosts/screens/host_selection_screen.dart';
 import '../../hosts/providers/hosts_provider.dart';
 
+final selectedBackendProvider = StateProvider<String>((ref) => 'tmux');
+
 class SessionsScreen extends ConsumerStatefulWidget {
   const SessionsScreen({super.key});
 
@@ -155,42 +157,94 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
 
   void _showCreateSessionDialog(BuildContext context, WidgetRef ref) {
     final controller = TextEditingController();
+    final selectedBackend = ref.read(selectedBackendProvider);
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('New Session'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Session Name',
-            hintText: 'Enter session name',
-          ),
-          onSubmitted: (value) {
-            if (value.isNotEmpty) {
-              ref.read(sessionsProvider.notifier).createSession(value);
-              Navigator.pop(context);
-            }
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (controller.text.isNotEmpty) {
-                ref
-                    .read(sessionsProvider.notifier)
-                    .createSession(controller.text);
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Create'),
-          ),
-        ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text('New Session'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Session Name',
+                    hintText: 'Enter session name',
+                  ),
+                  onSubmitted: (value) {
+                    if (value.isNotEmpty) {
+                      ref.read(sessionsProvider.notifier).createSession(value);
+                      Navigator.pop(context);
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Backend',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(
+                      value: 'tmux',
+                      label: Text('Terminal'),
+                      icon: Icon(Icons.terminal),
+                    ),
+                    ButtonSegment(
+                      value: 'acp',
+                      label: Text('Direct'),
+                      icon: Icon(Icons.smart_toy),
+                    ),
+                  ],
+                  selected: {selectedBackend},
+                  onSelectionChanged: (Set<String> selection) {
+                    setDialogState(() {
+                      ref.read(selectedBackendProvider.notifier).state =
+                          selection.first;
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  selectedBackend == 'tmux'
+                      ? 'Terminal mode: Full terminal with tmux'
+                      : 'Direct mode: Chat-focused (ACP)',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  if (controller.text.isNotEmpty) {
+                    final backend = ref.read(selectedBackendProvider);
+                    if (backend == 'acp') {
+                      ref
+                          .read(sharedWebSocketServiceProvider)
+                          .acpCreateSession(controller.text);
+                    } else {
+                      ref
+                          .read(sessionsProvider.notifier)
+                          .createSession(controller.text);
+                    }
+                    Navigator.pop(context);
+                  }
+                },
+                child: const Text('Create'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

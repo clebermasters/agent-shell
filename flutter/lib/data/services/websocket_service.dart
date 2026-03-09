@@ -312,6 +312,54 @@ class WebSocketService {
     });
   }
 
+  void selectBackend(String backend) {
+    send({'type': 'select-backend', 'backend': backend});
+  }
+
+  void acpCreateSession(String cwd) {
+    send({'type': 'acp-create-session', 'cwd': cwd});
+  }
+
+  void acpResumeSession(String sessionId, String cwd) {
+    send({'type': 'acp-resume-session', 'sessionId': sessionId, 'cwd': cwd});
+  }
+
+  void acpForkSession(String sessionId, String cwd) {
+    send({'type': 'acp-fork-session', 'sessionId': sessionId, 'cwd': cwd});
+  }
+
+  void acpListSessions() {
+    send({'type': 'acp-list-sessions'});
+  }
+
+  void acpSendPrompt(String sessionId, String message) {
+    send({
+      'type': 'acp-send-prompt',
+      'sessionId': sessionId,
+      'message': message,
+    });
+  }
+
+  void acpCancelPrompt(String sessionId) {
+    send({'type': 'acp-cancel-prompt', 'sessionId': sessionId});
+  }
+
+  void acpSetModel(String sessionId, String modelId) {
+    send({'type': 'acp-set-model', 'sessionId': sessionId, 'modelId': modelId});
+  }
+
+  void acpSetMode(String sessionId, String modeId) {
+    send({'type': 'acp-set-mode', 'sessionId': sessionId, 'modeId': modeId});
+  }
+
+  void acpRespondPermission(String requestId, String optionId) {
+    send({
+      'type': 'acp-respond-permission',
+      'requestId': requestId,
+      'optionId': optionId,
+    });
+  }
+
   void disconnect() {
     _log('Disconnecting...');
     _pingTimer?.cancel();

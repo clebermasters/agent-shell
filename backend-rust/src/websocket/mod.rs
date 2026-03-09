@@ -1356,15 +1356,34 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                             
                             // Spawn event handler
                             let broadcast_tx = app_state.broadcast_tx.clone();
+                            let app_state_clone = app_state.clone();
                             tokio::spawn(async move {
                                 while let Some(event) = event_rx.recv().await {
                                     match event {
                                         crate::acp::AcpEvent::SessionUpdate { session_id, update } => {
                                             let msg = match update {
                                                 crate::acp::SessionUpdate::AgentMessageChunk { content } => {
+                                                    let text = content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                    
+                                                    // Persist the assistant message
+                                                    let session_key = format!("acp_{}", session_id);
+                                                    let chat_message = crate::chat_log::ChatMessage {
+                                                        role: "assistant".to_string(),
+                                                        timestamp: Some(chrono::Utc::now()),
+                                                        blocks: vec![crate::chat_log::ContentBlock::Text { text: text.clone() }],
+                                                    };
+                                                    if let Err(e) = app_state_clone.chat_event_store.append_message(
+                                                        &session_key,
+                                                        0,
+                                                        "acp",
+                                                        &chat_message,
+                                                    ) {
+                                                        tracing::warn!("Failed to persist ACP message: {}", e);
+                                                    }
+                                                    
                                                     ServerMessage::AcpMessageChunk {
                                                         session_id: session_id.clone(),
-                                                        content: content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                                        content: text,
                                                         is_thinking: false,
                                                     }
                                                 }
@@ -1572,6 +1591,22 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::AcpSendPrompt { session_id, message } => {
             info!("ACP send prompt to {}: {}", session_id, message);
             
+            // Persist user message first
+            let session_key = format!("acp_{}", session_id);
+            let chat_message = crate::chat_log::ChatMessage {
+                role: "user".to_string(),
+                timestamp: Some(chrono::Utc::now()),
+                blocks: vec![crate::chat_log::ContentBlock::Text { text: message.clone() }],
+            };
+            if let Err(e) = app_state.chat_event_store.append_message(
+                &session_key,
+                0,
+                "acp",
+                &chat_message,
+            ) {
+                tracing::warn!("Failed to persist user message: {}", e);
+            }
+            
             let acp_guard = app_state.acp_client.read().await;
             if let Some(client) = acp_guard.as_ref() {
                 match client.send_prompt(&session_id, &message).await {
@@ -1745,6 +1780,42 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         }
         WebSocketMessage::AcpLoadHistory { session_id, offset, limit } => {
             info!("ACP load history: {} offset={:?} limit={:?}", session_id, offset, limit);
+            
+            let acp_guard = app_state.acp_client.read().await;
+            if acp_guard.is_some() {
+                let offset = offset.unwrap_or(0);
+                let limit = limit.unwrap_or(50);
+                
+                let session_key = format!("acp_{}", session_id);
+                
+                let messages = match app_state.chat_event_store.list_messages(&session_key, 0) {
+                    Ok(msgs) => msgs,
+                    Err(e) => {
+                        error!("Failed to load ACP history: {}", e);
+                        let response = ServerMessage::AcpError {
+                            message: format!("Failed to load history: {}", e),
+                        };
+                        send_message(&state.message_tx, response).await?;
+                        return Ok(());
+                    }
+                };
+                
+                let total = messages.len();
+                let has_more = offset + limit < total;
+                let paginated: Vec<_> = messages.into_iter().skip(offset).take(limit).collect();
+                
+                let response = ServerMessage::AcpHistoryLoaded {
+                    session_id,
+                    messages: paginated,
+                    has_more,
+                };
+                send_message(&state.message_tx, response).await?;
+            } else {
+                let response = ServerMessage::AcpError {
+                    message: "ACP client not initialized".to_string(),
+                };
+                send_message(&state.message_tx, response).await?;
+            }
         }
     }
 

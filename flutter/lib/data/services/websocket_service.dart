@@ -357,6 +357,15 @@ class WebSocketService {
     send({'type': 'acp-set-mode', 'sessionId': sessionId, 'modeId': modeId});
   }
 
+  void acpLoadHistory(String sessionId, {int offset = 0, int limit = 50}) {
+    send({
+      'type': 'acp-load-history',
+      'sessionId': sessionId,
+      'offset': offset,
+      'limit': limit,
+    });
+  }
+
   void acpRespondPermission(String requestId, String optionId) {
     send({
       'type': 'acp-respond-permission',

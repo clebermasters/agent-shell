@@ -80,7 +80,10 @@ pub enum SessionUpdate {
         cost: Option<sj::Value>,
     },
     #[serde(rename = "available_commands_update")]
-    AvailableCommandsUpdate { commands: Vec<sj::Value> },
+    AvailableCommandsUpdate {
+        #[serde(rename = "availableCommands")]
+        available_commands: Option<Vec<sj::Value>>,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -100,8 +103,11 @@ impl AcpClient {
     pub async fn start(&mut self) -> Result<InitializeResult, String> {
         tracing::info!("Starting ACP client - spawning opencode acp");
 
+        let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+
         let mut child = Command::new("opencode")
             .arg("acp")
+            .current_dir(home_dir)
             .stdout(Stdio::piped())
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
@@ -277,12 +283,13 @@ impl AcpClient {
             id
         };
 
+        let normalized_cwd = cwd.trim_end_matches('/');
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: serde_json::json!(id),
             method: "session/new".to_string(),
             params: Some(serde_json::json!({
-                "cwd": cwd,
+                "cwd": normalized_cwd,
                 "mcpServers": []
             })),
         };
@@ -301,13 +308,14 @@ impl AcpClient {
             id
         };
 
+        let normalized_cwd = cwd.trim_end_matches('/');
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: serde_json::json!(id),
             method: "session/resume".to_string(),
             params: Some(serde_json::json!({
                 "sessionId": session_id,
-                "cwd": cwd
+                "cwd": normalized_cwd
             })),
         };
 
@@ -325,13 +333,14 @@ impl AcpClient {
             id
         };
 
+        let normalized_cwd = cwd.trim_end_matches('/');
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: serde_json::json!(id),
             method: "session/fork".to_string(),
             params: Some(serde_json::json!({
                 "sessionId": session_id,
-                "cwd": cwd
+                "cwd": normalized_cwd
             })),
         };
 

@@ -1460,7 +1460,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                         let response = ServerMessage::AcpSessionCreated {
                             session_id: result.session_id,
                             current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
-                            available_models: result.models.as_ref().map(|m| m.available_models.clone()),
+                            available_models: None,
                             current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
                         };
                         send_message(&state.message_tx, response).await?;
@@ -1491,7 +1491,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                         let response = ServerMessage::AcpSessionCreated {
                             session_id: result.session_id,
                             current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
-                            available_models: result.models.as_ref().map(|m| m.available_models.clone()),
+                            available_models: None,
                             current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
                         };
                         send_message(&state.message_tx, response).await?;
@@ -1521,7 +1521,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                         let response = ServerMessage::AcpSessionCreated {
                             session_id: result.session_id,
                             current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
-                            available_models: result.models.as_ref().map(|m| m.available_models.clone()),
+                            available_models: None,
                             current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
                         };
                         send_message(&state.message_tx, response).await?;

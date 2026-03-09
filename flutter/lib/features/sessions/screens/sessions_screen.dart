@@ -179,6 +179,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                               sessionName: session.sessionId,
                               windowIndex: 0,
                               isAcp: true,
+                              cwd: session.cwd,
                             ),
                           ),
                         );

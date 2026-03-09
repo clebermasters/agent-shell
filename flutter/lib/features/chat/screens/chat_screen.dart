@@ -17,12 +17,14 @@ class ChatScreen extends ConsumerStatefulWidget {
   final String sessionName;
   final int windowIndex;
   final bool isAcp;
+  final String cwd;
 
   const ChatScreen({
     super.key,
     required this.sessionName,
     this.windowIndex = 0,
     this.isAcp = false,
+    this.cwd = '',
   });
 
   @override
@@ -65,7 +67,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         final ws = ref.read(sharedWebSocketServiceProvider);
         ws.selectBackend('acp');
         // Resume the session to attach to it
-        ws.acpResumeSession(widget.sessionName, '');
+        ws.acpResumeSession(widget.sessionName, widget.cwd);
         ref.read(chatProvider.notifier).startAcpChat(widget.sessionName);
       } else {
         ref

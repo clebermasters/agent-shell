@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -637,6 +638,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final toolCallId = message['toolCallId'] as String? ?? '';
     final title = message['title'] as String? ?? 'Unknown Tool';
     final kind = message['kind'] as String? ?? '';
+    final inputStr = message['input'] as String? ?? '';
+
+    Map<String, dynamic>? inputMap;
+    if (inputStr.isNotEmpty) {
+      try {
+        inputMap = Map<String, dynamic>.from(json.decode(inputStr) as Map);
+      } catch (_) {
+        inputMap = {'raw': inputStr};
+      }
+    }
 
     state = state.copyWith(
       messages: [
@@ -645,6 +656,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
           id: toolCallId,
           type: ChatMessageType.toolCall,
           content: 'Tool: $title ($kind)',
+          blocks: [
+            ChatBlock.toolCall(toolName: title, input: inputMap, summary: kind),
+          ],
           timestamp: DateTime.now(),
         ),
       ],

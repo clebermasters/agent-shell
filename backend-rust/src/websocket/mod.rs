@@ -1394,13 +1394,15 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                         is_thinking: true,
                                                     }
                                                 }
-                                                crate::acp::SessionUpdate::ToolCall { tool_call_id, title, kind, status, .. } => {
+                                                crate::acp::SessionUpdate::ToolCall { tool_call_id, title, kind, status, raw_input, .. } => {
+                                                    let input = raw_input.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default());
                                                     ServerMessage::AcpToolCall {
                                                         session_id: session_id.clone(),
                                                         tool_call_id,
                                                         title,
                                                         kind,
                                                         status,
+                                                        input,
                                                     }
                                                 }
                                                 crate::acp::SessionUpdate::ToolCallUpdate { tool_call_id, status, content, .. } => {
@@ -1614,13 +1616,15 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                         is_thinking: true,
                                                     }
                                                 }
-                                                crate::acp::SessionUpdate::ToolCall { tool_call_id, title, kind, status, .. } => {
+                                                crate::acp::SessionUpdate::ToolCall { tool_call_id, title, kind, status, raw_input, .. } => {
+                                                    let input = raw_input.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default());
                                                     ServerMessage::AcpToolCall {
                                                         session_id: session_id.clone(),
                                                         tool_call_id,
                                                         title,
                                                         kind,
                                                         status,
+                                                        input,
                                                     }
                                                 }
                                                 crate::acp::SessionUpdate::ToolCallUpdate { tool_call_id, status, content, .. } => {

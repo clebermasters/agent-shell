@@ -21,6 +21,7 @@ INSTALL_SCRIPT="$PROJECT_ROOT/scripts/install-android.sh"
 BUILD_TYPE="release"
 AUTO_INSTALL=false
 WIRELESS_INSTALL=false
+FORCE_INSTALL=false
 
 # Parse arguments
 for arg in "$@"; do
@@ -35,6 +36,9 @@ for arg in "$@"; do
             AUTO_INSTALL=true
             WIRELESS_INSTALL=true
             ;;
+        --force|-f)
+            FORCE_INSTALL=true
+            ;;
         --help|-h)
             echo "Usage: $0 [debug|release] [options]"
             echo ""
@@ -42,6 +46,7 @@ for arg in "$@"; do
             echo "  debug,release     Build type (default: release)"
             echo "  --install, -i    Auto-install to connected Android device (USB)"
             echo "  --wireless, -w   Auto-install via WiFi"
+            echo "  --force, -f      Force install on Work Profile devices"
             echo "  --help, -h       Show this help message"
             exit 0
             ;;
@@ -139,11 +144,10 @@ if [ $? -eq 0 ]; then
                 echo "=========================================="
                 echo "Auto-installing to device..."
                 echo "=========================================="
-                if [ "$WIRELESS_INSTALL" = true ]; then
-                    "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME" --wireless
-                else
-                    "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME"
-                fi
+                INSTALL_ARGS=""
+                [ "$WIRELESS_INSTALL" = true ] && INSTALL_ARGS="--wireless"
+                [ "$FORCE_INSTALL" = true ] && INSTALL_ARGS="$INSTALL_ARGS --force"
+                "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME" $INSTALL_ARGS
             else
                 echo "Warning: Install script not found at $INSTALL_SCRIPT"
             fi

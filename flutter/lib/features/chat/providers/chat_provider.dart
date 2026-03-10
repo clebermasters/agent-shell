@@ -613,15 +613,28 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final messages = List<ChatMessage>.from(state.messages);
 
     if (isThinking) {
-      messages.add(
-        ChatMessage(
-          id: _uuid.v4(),
-          type: ChatMessageType.assistant,
-          content: content,
-          timestamp: DateTime.now(),
-          blocks: [ChatBlock.thinking(content)],
-        ),
-      );
+      // Merge consecutive thinking chunks into the same thinking block
+      if (messages.isNotEmpty &&
+          messages.last.type == ChatMessageType.assistant &&
+          messages.last.blocks.length == 1 &&
+          messages.last.blocks.first.type == ChatBlockType.thinking) {
+        final lastMsg = messages.last;
+        final merged = (lastMsg.blocks.first.content ?? '') + content;
+        messages[messages.length - 1] = lastMsg.copyWith(
+          content: (lastMsg.content ?? '') + content,
+          blocks: [ChatBlock.thinking(merged)],
+        );
+      } else {
+        messages.add(
+          ChatMessage(
+            id: _uuid.v4(),
+            type: ChatMessageType.assistant,
+            content: content,
+            timestamp: DateTime.now(),
+            blocks: [ChatBlock.thinking(content)],
+          ),
+        );
+      }
     } else {
       // Merge consecutive text chunks into the same assistant message
       if (messages.isNotEmpty &&

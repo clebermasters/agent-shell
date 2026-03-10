@@ -35,6 +35,7 @@ echo "Frontend built successfully"
 
 echo ""
 echo "=== Step 3: Installing files ==="
+sudo systemctl stop webmux 2>/dev/null || true
 sudo mkdir -p "$INSTALL_DIR/dist"
 sudo mkdir -p "$INSTALL_DIR/backend"
 sudo mkdir -p "$INSTALL_DIR/certs"
@@ -66,6 +67,7 @@ User=$SERVICE_USER
 WorkingDirectory=$INSTALL_DIR/backend
 ExecStart=$INSTALL_DIR/backend/webmux-backend
 Environment="RUST_LOG=info"
+Environment="PATH=/home/cleber_rodrigues/.opencode/bin:/home/cleber_rodrigues/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 Restart=always
 RestartSec=5
 StandardOutput=journal

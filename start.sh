@@ -1,56 +1,53 @@
 #!/bin/bash
-set -e
 
-echo "Starting WebMux..."
+ACTION="${1:-start}"
+SERVICE_NAME="webmux"
 
-# Kill any existing processes on our ports
-echo "Cleaning up existing processes..."
-lsof -ti :5174 -ti :5175 -ti :4010 2>/dev/null | xargs -r kill -9 2>/dev/null || true
-pkill -9 -f "webmux-backend" 2>/dev/null || true
-pkill -9 -f "cargo watch" 2>/dev/null || true
-sleep 2
-
-# Start the Rust backend in background
-echo "Starting backend on port 4010..."
-cd backend-rust && cargo run &
-BACKEND_PID=$!
-
-# Wait for backend to be ready
-echo "Waiting for backend..."
-for i in {1..30}; do
-    if curl -s http://localhost:4010 >/dev/null 2>&1; then
-        echo "Backend ready!"
-        break
-    fi
-    sleep 1
-done
-
-# Start the Vue frontend in background
-echo "Starting frontend on port 5174..."
-npm run client &
-FRONTEND_PID=$!
-
-# Wait for frontend to be ready
-echo "Waiting for frontend..."
-for i in {1..30}; do
-    if curl -s http://localhost:5174 >/dev/null 2>&1; then
-        echo "Frontend ready!"
-        break
-    fi
-    sleep 1
-done
-
-echo ""
-echo "=========================================="
-echo "WebMux is running!"
-echo "  Frontend: http://localhost:5174"
-echo "  Backend:  http://localhost:4010"
-echo ""
-echo "Network access:"
-echo "  http://<YOUR-IP>:5174"
-echo ""
-echo "Press Ctrl+C to stop all services"
-echo "=========================================="
-
-# Wait for any process to exit
-wait
+case "$ACTION" in
+    start)
+        echo "Starting WebMux service..."
+        sudo systemctl start "$SERVICE_NAME"
+        echo "Service started."
+        ;;
+    stop)
+        echo "Stopping WebMux service..."
+        sudo systemctl stop "$SERVICE_NAME"
+        echo "Service stopped."
+        ;;
+    restart)
+        echo "Restarting WebMux service..."
+        sudo systemctl restart "$SERVICE_NAME"
+        echo "Service restarted."
+        ;;
+    logs)
+        sudo journalctl -u "$SERVICE_NAME" -f --no-pager "${@:2}"
+        ;;
+    logs-full)
+        sudo journalctl -u "$SERVICE_NAME" --no-pager "${@:2}"
+        ;;
+    status)
+        sudo systemctl status "$SERVICE_NAME"
+        ;;
+    enable)
+        sudo systemctl enable "$SERVICE_NAME"
+        echo "Service enabled to start on boot."
+        ;;
+    disable)
+        sudo systemctl disable "$SERVICE_NAME"
+        echo "Service disabled."
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|logs|logs-full|status|enable|disable}"
+        echo ""
+        echo "Commands:"
+        echo "  start      - Start the service"
+        echo "  stop       - Stop the service"
+        echo "  restart    - Restart the service"
+        echo "  logs       - Follow logs (Ctrl+C to exit)"
+        echo "  logs-full  - View full logs from start"
+        echo "  status     - Show service status"
+        echo "  enable     - Enable service to start on boot"
+        echo "  disable    - Disable service from starting on boot"
+        exit 1
+        ;;
+esac

@@ -1395,18 +1395,14 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                 crate::acp::SessionUpdate::AgentMessageChunk { content } => {
                                                     let text = content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                                     
-                                                    // Persist the assistant message
+                                                    // Merge into last assistant text row instead of inserting a new row per chunk
                                                     let session_key = format!("acp_{}", session_id);
-                                                    let chat_message = crate::chat_log::ChatMessage {
-                                                        role: "assistant".to_string(),
-                                                        timestamp: Some(chrono::Utc::now()),
-                                                        blocks: vec![crate::chat_log::ContentBlock::Text { text: text.clone() }],
-                                                    };
-                                                    if let Err(e) = app_state_clone.chat_event_store.append_message(
+                                                    if let Err(e) = app_state_clone.chat_event_store.append_or_merge_text(
                                                         &session_key,
                                                         0,
                                                         "acp",
-                                                        &chat_message,
+                                                        "assistant",
+                                                        &text,
                                                     ) {
                                                         tracing::warn!("Failed to persist ACP message: {}", e);
                                                     }
@@ -1645,18 +1641,14 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                 crate::acp::SessionUpdate::AgentMessageChunk { content } => {
                                                     let text = content.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                                     
-                                                    // Persist the assistant message
+                                                    // Merge into last assistant text row instead of inserting a new row per chunk
                                                     let session_key = format!("acp_{}", session_id);
-                                                    let chat_message = crate::chat_log::ChatMessage {
-                                                        role: "assistant".to_string(),
-                                                        timestamp: Some(chrono::Utc::now()),
-                                                        blocks: vec![crate::chat_log::ContentBlock::Text { text: text.clone() }],
-                                                    };
-                                                    if let Err(e) = app_state_clone.chat_event_store.append_message(
+                                                    if let Err(e) = app_state_clone.chat_event_store.append_or_merge_text(
                                                         &session_key,
                                                         0,
                                                         "acp",
-                                                        &chat_message,
+                                                        "assistant",
+                                                        &text,
                                                     ) {
                                                         tracing::warn!("Failed to persist ACP message: {}", e);
                                                     }

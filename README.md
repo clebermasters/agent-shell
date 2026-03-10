@@ -1,6 +1,10 @@
 # AgentShell
 
 <p align="center">
+  <img src="logo.png" alt="AgentShell Logo" width="200">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Rust-DEA584?style=flat&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Vue.js-4FC08D?style=flat&logo=vuedotjs&logoColor=white" alt="Vue.js">
   <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript">

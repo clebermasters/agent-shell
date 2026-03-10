@@ -2136,35 +2136,16 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::AcpDeleteSession { session_id } => {
             info!("ACP delete session: {}", session_id);
 
-            let delete_result = {
-                let acp_guard = app_state.acp_client.read().await;
-                if let Some(client) = acp_guard.as_ref() {
-                    if client.is_initialized().await {
-                        client.delete_session(&session_id).await.err()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            };
-
+            // The opencode ACP protocol has no session/delete method — sessions
+            // persist in the daemon. We only clear our local SQLite history.
             let session_key = format!("acp_{}", session_id);
             if let Err(e) = app_state.chat_event_store.clear_messages(&session_key, 0) {
                 warn!("Failed to clear history for deleted ACP session {}: {}", session_id, e);
             }
 
-            let (success, error) = match delete_result {
-                None => (true, None),
-                Some(e) => {
-                    warn!("ACP delete_session RPC failed for {}: {}", session_id, e);
-                    (true, None)
-                }
-            };
-
             send_message(
                 &state.message_tx,
-                ServerMessage::AcpSessionDeleted { session_id, success, error },
+                ServerMessage::AcpSessionDeleted { session_id, success: true, error: None },
             )
             .await?;
         }

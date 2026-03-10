@@ -81,7 +81,16 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
         print('FLUTTER: Received acp-session-created, calling refresh()');
         refresh(); // Refresh list after session creation
       } else if (type == 'acp-session-deleted') {
-        refresh();
+        final sessionId = message['sessionId'] as String?;
+        if (sessionId != null) {
+          // Optimistically remove from list — the daemon still has the session,
+          // so a refresh() would bring it back.
+          state = state.copyWith(
+            acpSessions: state.acpSessions
+                .where((s) => s.sessionId != sessionId)
+                .toList(),
+          );
+        }
       }
     });
 

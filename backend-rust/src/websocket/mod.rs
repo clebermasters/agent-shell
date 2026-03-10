@@ -43,7 +43,6 @@ fn write_acp_session_file(session_id: &str, cwd: &str) {
     }
     
     let ws_url = std::env::var("AGENTSHELL_WS_URL")
-        .or_else(|_| std::env::var("WEBMUX_WS_URL"))
         .unwrap_or_else(|_| "ws://localhost:5173/ws".to_string());
     
     let session_json = serde_json::json!({
@@ -2312,7 +2311,7 @@ async fn attach_to_session(
     cmd.env_remove("SSH_AUTH_SOCK");
 
     // Set up proper environment for local terminal
-    cmd.env("WEBMUX", "1");
+    cmd.env("AGENTSHELL", "1");
 
     // Get reader before we move master
     let reader = pair.master.try_clone_reader()?;

@@ -6,8 +6,6 @@
  * - AGENTSHELL_ACP_CWD: Current ACP session working directory
  * - AGENTSHELL_WS_URL: WebSocket URL for AgentShell
  *
- * Also supports legacy WEBMUX_* environment variables for backward compatibility.
- *
  * Reads session info from ~/.agentshell/acp_session
  */
 
@@ -56,10 +54,6 @@ export const AgentShellPlugin = async ({ client, directory }) => {
           AGENTSHELL_ACP_SESSION_ID: session.sessionId || '',
           AGENTSHELL_ACP_CWD: session.cwd || '',
           AGENTSHELL_WS_URL: session.wsUrl || DEFAULT_WS_URL,
-          // Backward compatibility
-          WEBMUX_ACP_SESSION_ID: session.sessionId || '',
-          WEBMUX_ACP_CWD: session.cwd || '',
-          WEBMUX_WS_URL: session.wsUrl || DEFAULT_WS_URL,
         };
         
         console.log('[agentshell-plugin] Set AgentShell environment variables:', {

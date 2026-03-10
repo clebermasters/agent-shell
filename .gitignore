@@ -1,4 +1,5 @@
 backend-rust/chat_files/
+.worktrees/
 
 # Dependencies
 node_modules/

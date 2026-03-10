@@ -36,15 +36,19 @@ class _FloatingVoiceButtonState extends State<FloatingVoiceButton> {
     _loadPosition();
   }
 
-  void _loadPosition() {
-    _posX = widget.prefs.getDouble(_posXKey) ?? -1;
-    _posY = widget.prefs.getDouble(_posYKey) ?? -1;
-
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     if (_posX < 0 || _posY < 0) {
       final size = MediaQuery.of(context).size;
       _posX = size.width - 64;
       _posY = size.height - 150;
     }
+  }
+
+  void _loadPosition() {
+    _posX = widget.prefs.getDouble(_posXKey) ?? -1;
+    _posY = widget.prefs.getDouble(_posYKey) ?? -1;
   }
 
   void _savePosition() {

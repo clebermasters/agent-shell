@@ -1,3 +1,5 @@
+import 'build_config.dart';
+
 class AppConfig {
   AppConfig._();
 
@@ -5,9 +7,22 @@ class AppConfig {
   static const String appName = 'WebMux';
   static const String appVersion = '1.0.0';
 
-  // API
-  static const String apiBaseUrl = 'http://192.168.0.76:4010';
-  static const String wsBaseUrl = 'ws://192.168.0.76:4010/ws';
+  // API - uses build config defaults if available
+  static String get apiBaseUrl {
+    final servers = _parseServerList(BuildConfig.defaultServerList);
+    if (servers.isNotEmpty) {
+      return 'http://${servers.first['address']}:${servers.first['port']}';
+    }
+    return 'http://192.168.0.76:4010';
+  }
+
+  static String get wsBaseUrl {
+    final servers = _parseServerList(BuildConfig.defaultServerList);
+    if (servers.isNotEmpty) {
+      return 'ws://${servers.first['address']}:${servers.first['port']}/ws';
+    }
+    return 'ws://192.168.0.76:4010/ws';
+  }
 
   // Terminal
   static const int terminalCols = 80;
@@ -24,4 +39,40 @@ class AppConfig {
   static const String keyThemeMode = 'theme_mode';
   static const String keyTerminalFontSize = 'terminal_font_size';
   static const String keyOpenAiApiKey = 'openai_api_key';
+  static const String keyVoiceAutoEnter = 'voice_auto_enter';
+
+  // Build-time defaults
+  static String get defaultServerList => BuildConfig.defaultServerList;
+  static String get defaultApiKey => BuildConfig.defaultApiKey;
+
+  // Helper to parse SERVER_LIST from env
+  // Format: "address:port,name|address:port,name"
+  static List<Map<String, dynamic>> _parseServerList(String serverList) {
+    if (serverList.isEmpty) return [];
+
+    final servers = <Map<String, dynamic>>[];
+    final entries = serverList.split('|');
+
+    for (final entry in entries) {
+      final trimmed = entry.trim();
+      if (trimmed.isEmpty) continue;
+
+      final parts = trimmed.split(',');
+      if (parts.length >= 2) {
+        final addressPort = parts[0].split(':');
+        if (addressPort.length >= 2) {
+          servers.add({
+            'address': addressPort[0],
+            'port': int.tryParse(addressPort[1]) ?? 4010,
+            'name': parts[1],
+          });
+        }
+      }
+    }
+
+    return servers;
+  }
+
+  static List<Map<String, dynamic>> get parsedServerList =>
+      _parseServerList(BuildConfig.defaultServerList);
 }

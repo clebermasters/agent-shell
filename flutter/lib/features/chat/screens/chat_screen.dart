@@ -1,17 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:file_picker/file_picker.dart';
+import 'dart:convert';
+import 'dart:io';
+import '../../../core/config/app_config.dart';
+import '../../../core/providers.dart';
+import '../../../data/services/websocket_service.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/professional_message_bubble.dart';
+import '../../hosts/providers/hosts_provider.dart';
+import '../../sessions/providers/sessions_provider.dart';
+import '../../terminal/screens/terminal_screen.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String sessionName;
   final int windowIndex;
+  final bool isAcp;
+  final String cwd;
 
   const ChatScreen({
     super.key,
     required this.sessionName,
     this.windowIndex = 0,
+    this.isAcp = false,
+    this.cwd = '',
   });
 
   @override
@@ -23,8 +36,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _showScrollButton = false;
   bool _autoScroll = true;
-  int _previousMessageCount = 0;
+  bool _isProgrammaticScroll = false;
   String? _lastTranscribedText;
+  static const double _bottomThreshold = 80.0;
+  PlatformFile? _selectedFile;
+  bool _isUploading = false;
 
   bool get isDarkMode {
     return Theme.of(context).brightness == Brightness.dark;
@@ -45,49 +61,100 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref
-          .read(chatProvider.notifier)
-          .watchChatLog(widget.sessionName, widget.windowIndex);
+      if (widget.isAcp) {
+        final ws = ref.read(sharedWebSocketServiceProvider);
+        ws.selectBackend('acp');
+        ws.acpResumeSession(widget.sessionName, widget.cwd);
+        ref.read(chatProvider.notifier).startAcpChat(widget.sessionName);
+
+        ws.messages.listen((message) {
+          if (message['type'] == 'acp-session-deleted' &&
+              message['sessionId'] == widget.sessionName &&
+              widget.isAcp) {
+            if (mounted) Navigator.of(context).pop();
+          }
+        });
+      } else {
+        ref
+            .read(chatProvider.notifier)
+            .watchChatLog(widget.sessionName, widget.windowIndex);
+      }
     });
 
     _scrollController.addListener(_onScroll);
   }
 
   void _onScroll() {
+    if (_isProgrammaticScroll) return;
     if (!_scrollController.hasClients) return;
 
-    final position = _scrollController.position;
-    final isNearBottom = position.maxScrollExtent - position.pixels < 150;
+    final pos = _scrollController.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - _bottomThreshold;
 
-    if (_showScrollButton != !isNearBottom && _autoScroll) {
-      setState(() {
-        _showScrollButton = !isNearBottom;
-      });
+    if (_showScrollButton == atBottom) {
+      setState(() => _showScrollButton = !atBottom);
+    }
+
+    if (!atBottom && _autoScroll) {
+      setState(() => _autoScroll = false);
+    } else if (atBottom && !_autoScroll) {
+      setState(() => _autoScroll = true);
+    }
+
+    // Load more messages when scrolled near the top
+    if (pos.pixels < 100) {
+      final chatState = ref.read(chatProvider);
+      if (chatState.hasMoreMessages &&
+          !chatState.isLoadingMore &&
+          !chatState.isLoading) {
+        ref.read(chatProvider.notifier).loadMoreMessages();
+      }
     }
   }
 
-  void _checkAndScrollToBottom(int newCount) {
-    if (_autoScroll && newCount > _previousMessageCount) {
-      _smoothScrollToBottom();
-    }
-    _previousMessageCount = newCount;
-  }
+  /// Scrolls to the bottom of the list. Safe to call at any time.
+  /// Uses addPostFrameCallback so maxScrollExtent is always up-to-date.
+  /// After animation, verifies we reached the bottom (content may have grown).
+  void _scrollToBottom({bool animate = true}) {
+    if (!mounted) return;
 
-  void _smoothScrollToBottom() {
-    if (!_scrollController.hasClients) return;
+    _isProgrammaticScroll = true;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
+      if (!mounted || !_scrollController.hasClients) {
+        _isProgrammaticScroll = false;
+        return;
+      }
 
-      final maxScroll = _scrollController.position.maxScrollExtent;
-      final currentScroll = _scrollController.position.pixels;
+      final max = _scrollController.position.maxScrollExtent;
+      final current = _scrollController.position.pixels;
 
-      if (maxScroll - currentScroll > 50) {
-        _scrollController.animateTo(
-          maxScroll,
-          duration: const Duration(milliseconds: 400),
-          curve: Curves.easeOutCubic,
-        );
+      if (animate && max - current > 10) {
+        _scrollController
+            .animateTo(
+              max,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut,
+            )
+            .then((_) {
+              if (!mounted) {
+                _isProgrammaticScroll = false;
+                return;
+              }
+              // Content may have grown during animation — jump to actual bottom
+              if (_scrollController.hasClients) {
+                final newMax = _scrollController.position.maxScrollExtent;
+                if (_scrollController.position.pixels < newMax - 10) {
+                  _scrollController.jumpTo(newMax);
+                }
+              }
+              _isProgrammaticScroll = false;
+              if (mounted) setState(() => _showScrollButton = false);
+            });
+      } else {
+        _scrollController.jumpTo(max);
+        _isProgrammaticScroll = false;
+        if (mounted) setState(() => _showScrollButton = false);
       }
     });
   }
@@ -103,39 +170,250 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _sendMessage() {
     final content = _controller.text.trim();
-    if (content.isNotEmpty) {
-      ref.read(chatProvider.notifier).addUserMessage(content);
-      ref.read(chatProvider.notifier).sendInput(content);
-      _controller.clear();
-      _scrollToBottom();
-      setState(() {
-        _autoScroll = true;
-        _showScrollButton = false;
-      });
+
+    if (_selectedFile != null) {
+      _sendFileWithPrompt();
+    } else if (content.isNotEmpty) {
+      _submitMessage(content);
     }
   }
 
-  void _scrollToBottom() {
-    _smoothScrollToBottom();
+  void _submitMessage(String content) {
+    if (content.isEmpty) return;
+
+    ref.read(chatProvider.notifier).addUserMessage(content);
+
+    if (widget.isAcp) {
+      ref
+          .read(sharedWebSocketServiceProvider)
+          .acpSendPrompt(widget.sessionName, content);
+    } else {
+      ref.read(chatProvider.notifier).sendInput(content);
+    }
+
+    _controller.clear();
+    _scrollToBottomAndEnable();
+    setState(() {
+      _autoScroll = true;
+      _showScrollButton = false;
+    });
+  }
+
+  void _scrollToBottomAndEnable() {
+    setState(() {
+      _autoScroll = true;
+      _showScrollButton = false;
+    });
+    _scrollToBottom();
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+      );
+
+      if (result != null && result.files.isNotEmpty) {
+        setState(() {
+          _selectedFile = result.files.first;
+        });
+      }
+    } catch (e) {
+      print('Error picking file: $e');
+    }
+  }
+
+  void _removeSelectedFile() {
+    setState(() {
+      _selectedFile = null;
+    });
+  }
+
+  Widget _buildSelectedFilePreview() {
+    if (_selectedFile == null) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDarkMode ? const Color(0xFF2D3748) : const Color(0xFFE2E8F0),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            _getFileIcon(_selectedFile!.extension ?? ''),
+            size: 20,
+            color: textSecondary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _selectedFile!.name,
+              style: TextStyle(fontSize: 14, color: textPrimary),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (_isUploading)
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            GestureDetector(
+              onTap: _removeSelectedFile,
+              child: Icon(Icons.close, size: 18, color: textSecondary),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAttachButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _isUploading ? null : _pickFile,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: isDarkMode
+                ? const Color(0xFF4A5568)
+                : const Color(0xFFE2E8F0),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            Icons.attach_file,
+            size: 20,
+            color: isDarkMode ? Colors.white : Colors.grey.shade700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _getFileIcon(String extension) {
+    switch (extension.toLowerCase()) {
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'gif':
+      case 'webp':
+      case 'bmp':
+        return Icons.image;
+      case 'mp3':
+      case 'wav':
+      case 'ogg':
+      case 'm4a':
+        return Icons.audio_file;
+      case 'pdf':
+        return Icons.picture_as_pdf;
+      case 'doc':
+      case 'docx':
+        return Icons.description;
+      case 'xls':
+      case 'xlsx':
+        return Icons.table_chart;
+      case 'zip':
+      case 'rar':
+      case '7z':
+      case 'tar':
+      case 'gz':
+        return Icons.folder_zip;
+      default:
+        return Icons.insert_drive_file;
+    }
+  }
+
+  Future<void> _sendFileWithPrompt() async {
+    if (_selectedFile == null) return;
+
+    final ws = ref.read(sharedWebSocketServiceProvider);
+
+    setState(() {
+      _isUploading = true;
+    });
+
+    try {
+      final filePath = _selectedFile!.path;
+      if (filePath == null) return;
+
+      final file = File(filePath);
+      final bytes = await file.readAsBytes();
+      final base64Data = base64Encode(bytes);
+
+      final prompt = _controller.text.trim();
+
+      if (widget.isAcp) {
+        ws.sendFileToAcpChat(
+          sessionId: widget.sessionName,
+          filename: _selectedFile!.name,
+          mimeType: _selectedFile!.extension ?? 'application/octet-stream',
+          base64Data: base64Data,
+          prompt: prompt.isNotEmpty ? prompt : null,
+          cwd: widget.cwd.isNotEmpty ? widget.cwd : null,
+        );
+      } else {
+        ws.sendFileToChat(
+          sessionName: widget.sessionName,
+          windowIndex: widget.windowIndex,
+          filename: _selectedFile!.name,
+          mimeType: _selectedFile!.extension ?? 'application/octet-stream',
+          base64Data: base64Data,
+          prompt: prompt.isNotEmpty ? prompt : null,
+        );
+      }
+
+      _controller.clear();
+      setState(() {
+        _selectedFile = null;
+        _autoScroll = true;
+      });
+      _scrollToBottomAndEnable();
+    } catch (e) {
+      print('Error sending file: $e');
+    } finally {
+      setState(() {
+        _isUploading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatProvider);
+    final prefs = ref.read(sharedPreferencesProvider);
+    final shouldAutoEnterVoiceText =
+        prefs.getBool(AppConfig.keyVoiceAutoEnter) ?? false;
 
     if (chatState.transcribedText != null &&
         chatState.transcribedText!.isNotEmpty &&
         chatState.transcribedText != _lastTranscribedText) {
-      _controller.text = chatState.transcribedText!;
-      _controller.selection = TextSelection.fromPosition(
-        TextPosition(offset: _controller.text.length),
-      );
+      final transcribedText = chatState.transcribedText!.trim();
       _lastTranscribedText = chatState.transcribedText;
       ref.read(chatProvider.notifier).clearTranscribedText();
+
+      if (shouldAutoEnterVoiceText && transcribedText.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _submitMessage(transcribedText);
+        });
+      } else {
+        _controller.text = transcribedText;
+        _controller.selection = TextSelection.fromPosition(
+          TextPosition(offset: _controller.text.length),
+        );
+      }
     }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkAndScrollToBottom(chatState.messages.length);
+    // Auto-scroll when new messages arrive (only if user hasn't scrolled up)
+    ref.listen(chatProvider.select((s) => s.messages.length), (prev, next) {
+      if ((next ?? 0) > (prev ?? 0) && _autoScroll) {
+        _scrollToBottom();
+      }
     });
 
     return Scaffold(
@@ -176,6 +454,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: Icon(Icons.terminal, color: textSecondary),
+            onPressed: () {
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) =>
+                      TerminalScreen(sessionName: widget.sessionName),
+                ),
+              );
+            },
+            tooltip: 'Switch to Terminal',
+          ),
           if (chatState.isLoading)
             const Padding(
               padding: EdgeInsets.all(12.0),
@@ -243,10 +533,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         itemCount: chatState.messages.length,
                         itemBuilder: (context, index) {
                           final message = chatState.messages[index];
+                          final hostsState = ref.watch(hostsProvider);
                           return ProfessionalMessageBubble(
                             message: message,
                             showTimestamp: true,
                             isDarkMode: isDarkMode,
+                            baseUrl: hostsState.selectedHost?.httpUrl,
                           );
                         },
                       ),
@@ -258,12 +550,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             opacity: _showScrollButton ? 1.0 : 0.0,
                             duration: const Duration(milliseconds: 200),
                             child: FloatingActionButton.small(
-                              onPressed: () {
-                                setState(() {
-                                  _autoScroll = true;
-                                });
-                                _scrollToBottom();
-                              },
+                              onPressed: _scrollToBottomAndEnable,
                               backgroundColor: const Color(0xFF6366F1),
                               child: const Icon(
                                 Icons.keyboard_arrow_down,
@@ -328,73 +615,86 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final chatState = ref.watch(chatProvider);
     final isRecording = chatState.isRecording;
     final isTranscribing = chatState.isTranscribing;
-    final transcribedText = chatState.transcribedText;
+    final hasText = _controller.text.trim().isNotEmpty;
+    final hasFile = _selectedFile != null;
 
     return Container(
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: surfaceColor,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 10,
-            offset: const Offset(0, -2),
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: const Offset(0, -1),
           ),
         ],
       ),
       child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (isRecording || isTranscribing)
-              _buildRecordingIndicator(chatState, isRecording, isTranscribing),
-            Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: isDarkMode
-                          ? const Color(0xFF334155)
-                          : const Color(0xFFF1F5F9),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isRecording || isTranscribing)
+                _buildRecordingIndicator(
+                  chatState,
+                  isRecording,
+                  isTranscribing,
+                ),
+              if (hasFile) _buildSelectedFilePreview(),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  _buildAttachButton(),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
                         color: isDarkMode
-                            ? const Color(0xFF475569)
-                            : const Color(0xFFE2E8F0),
+                            ? const Color(0xFF2D3748)
+                            : const Color(0xFFEDF2F7),
+                        borderRadius: BorderRadius.circular(20),
                       ),
-                    ),
-                    child: TextField(
-                      controller: _controller,
-                      maxLines: 4,
-                      minLines: 1,
-                      decoration: InputDecoration(
-                        hintText: isRecording
-                            ? 'Recording...'
-                            : 'Type a message...',
-                        hintStyle: TextStyle(
-                          color: isDarkMode
-                              ? Colors.grey.shade500
-                              : const Color(0xFF94A3B8),
+                      child: TextField(
+                        controller: _controller,
+                        maxLines: 4,
+                        minLines: 1,
+                        textInputAction: TextInputAction.newline,
+                        keyboardType: TextInputType.multiline,
+                        decoration: InputDecoration(
+                          hintText: isRecording ? 'Recording...' : 'Message',
+                          hintStyle: TextStyle(
+                            color: isDarkMode
+                                ? Colors.grey.shade500
+                                : const Color(0xFFA0AEC0),
+                            fontSize: 16,
+                          ),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
                         ),
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 12,
-                        ),
+                        style: TextStyle(fontSize: 16, color: textPrimary),
+                        onChanged: (_) => setState(() {}),
+                        onSubmitted: (_) => _sendMessage(),
                       ),
-                      style: TextStyle(fontSize: 15, color: textPrimary),
-                      onChanged: (_) => setState(() {}),
-                      onSubmitted: (_) => _sendMessage(),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                _buildMicButton(isRecording, isTranscribing),
-                const SizedBox(width: 8),
-                _buildSendButton(),
-              ],
-            ),
-          ],
+                  const SizedBox(width: 8),
+                  _buildMicButton(isRecording, isTranscribing),
+                  if ((hasText || hasFile) &&
+                      !isRecording &&
+                      !isTranscribing &&
+                      !_isUploading) ...[
+                    const SizedBox(width: 8),
+                    _buildSendButton(),
+                  ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -462,35 +762,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildMicButton(bool isRecording, bool isTranscribing) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: isTranscribing ? null : _handleMicPress,
-          borderRadius: BorderRadius.circular(24),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: isRecording
-                  ? Colors.red
-                  : (isTranscribing ? Colors.grey : const Color(0xFF6366F1)),
-              shape: BoxShape.circle,
-              boxShadow: !isRecording && !isTranscribing
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF6366F1).withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Icon(
-              isRecording ? Icons.stop : Icons.mic,
-              size: 20,
-              color: Colors.white,
-            ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: isTranscribing ? null : _handleMicPress,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: isRecording
+                ? Colors.red
+                : (isTranscribing
+                      ? Colors.grey.shade400
+                      : (isDarkMode
+                            ? const Color(0xFF4A5568)
+                            : const Color(0xFFE2E8F0))),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            isRecording ? Icons.stop_rounded : Icons.mic,
+            size: 22,
+            color: isRecording
+                ? Colors.white
+                : (isTranscribing
+                      ? Colors.white
+                      : (isDarkMode ? Colors.white : Colors.grey.shade700)),
           ),
         ),
       ),
@@ -498,38 +794,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildSendButton() {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: _controller.text.trim().isNotEmpty ? _sendMessage : null,
-          borderRadius: BorderRadius.circular(24),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: _controller.text.trim().isNotEmpty
-                  ? const Color(0xFF0369A1)
-                  : const Color(0xFFE2E8F0),
-              shape: BoxShape.circle,
-              boxShadow: _controller.text.trim().isNotEmpty
-                  ? [
-                      BoxShadow(
-                        color: const Color(0xFF0369A1).withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : null,
-            ),
-            child: Icon(
-              Icons.send_rounded,
-              size: 20,
-              color: _controller.text.trim().isNotEmpty
-                  ? Colors.white
-                  : const Color(0xFF94A3B8),
-            ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _sendMessage,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: const BoxDecoration(
+            color: Color(0xFF3182CE),
+            shape: BoxShape.circle,
           ),
+          child: const Icon(Icons.send_rounded, size: 22, color: Colors.white),
         ),
       ),
     );

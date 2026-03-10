@@ -433,6 +433,15 @@ export interface WatchChatLogMessage extends WsMessage {
   type: 'watch-chat-log';
   sessionName: string;
   windowIndex: number;
+  limit?: number;
+}
+
+export interface LoadMoreChatHistoryMessage extends WsMessage {
+  type: 'load-more-chat-history';
+  sessionName: string;
+  windowIndex: number;
+  offset: number;
+  limit: number;
 }
 
 export interface UnwatchChatLogMessage extends WsMessage {
@@ -443,6 +452,15 @@ export interface ChatHistoryMessage extends WsMessage {
   type: 'chat-history';
   messages: ChatMessage[];
   tool: AiTool | null;
+  totalCount?: number;
+  hasMore?: boolean;
+}
+
+export interface ChatHistoryChunkMessage extends WsMessage {
+  type: 'chat-history-chunk';
+  messages: ChatMessage[];
+  offset: number;
+  hasMore: boolean;
 }
 
 export interface ChatEventMessage extends WsMessage {

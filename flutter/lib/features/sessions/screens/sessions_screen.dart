@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/tmux_session.dart';
+import '../../../data/models/acp_session.dart';
 import '../providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
 import '../../chat/screens/chat_screen.dart';
 import '../../hosts/screens/host_selection_screen.dart';
 import '../../hosts/providers/hosts_provider.dart';
+
+final selectedBackendProvider = StateProvider<String>((ref) => 'tmux');
 
 class SessionsScreen extends ConsumerStatefulWidget {
   const SessionsScreen({super.key});
@@ -15,6 +18,59 @@ class SessionsScreen extends ConsumerStatefulWidget {
 }
 
 class _SessionsScreenState extends ConsumerState<SessionsScreen> {
+  final Set<String> _selectedIds = {};
+  bool _isSelecting = false;
+
+  void _enterSelectionMode(String sessionId) {
+    setState(() {
+      _isSelecting = true;
+      _selectedIds.add(sessionId);
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _isSelecting = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelection(String sessionId) {
+    setState(() {
+      if (_selectedIds.contains(sessionId)) {
+        _selectedIds.remove(sessionId);
+        if (_selectedIds.isEmpty) _isSelecting = false;
+      } else {
+        _selectedIds.add(sessionId);
+      }
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    final ids = List<String>.from(_selectedIds);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Sessions'),
+        content: Text('Delete ${ids.length} session${ids.length == 1 ? '' : 's'}? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      for (final id in ids) {
+        ref.read(sessionsProvider.notifier).deleteAcpSession(id);
+      }
+      _exitSelectionMode();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -29,7 +85,22 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
     final hostsState = ref.watch(hostsProvider);
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: _isSelecting
+          ? AppBar(
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _exitSelectionMode,
+              ),
+              title: Text('${_selectedIds.length} selected'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.delete, color: Colors.red),
+                  onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
+                  tooltip: 'Delete selected',
+                ),
+              ],
+            )
+          : AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -57,11 +128,16 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
               ref.read(sessionsProvider.notifier).refresh();
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            onPressed: () => _showCreateSessionDialog(context, ref),
+            tooltip: 'New Session',
+          ),
         ],
       ),
       body: sessionsState.isLoading
           ? const Center(child: CircularProgressIndicator())
-          : sessionsState.sessions.isEmpty
+          : sessionsState.sessions.isEmpty && sessionsState.acpSessions.isEmpty
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -84,62 +160,132 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                 ],
               ),
             )
-          : ListView.builder(
-              itemCount: sessionsState.sessions.length,
-              itemBuilder: (context, index) {
-                final session = sessionsState.sessions[index];
-                return _SessionTile(
-                  session: session,
-                  onAttach: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            TerminalScreen(sessionName: session.name),
-                      ),
-                    );
-                  },
-                  onChat: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          sessionName: session.name,
-                          windowIndex: 0,
-                        ),
-                      ),
-                    );
-                  },
-                  onKill: () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Kill Session'),
-                        content: Text(
-                          'Are you sure you want to kill "${session.name}"?',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: const Text('Cancel'),
+          : ListView(
+              children: [
+                if (sessionsState.sessions.isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text(
+                      'Terminal Sessions',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  ...sessionsState.sessions.map(
+                    (session) => _SessionTile(
+                      session: session,
+                      onAttach: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                TerminalScreen(sessionName: session.name),
                           ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            style: TextButton.styleFrom(
-                              foregroundColor: Colors.red,
+                        );
+                      },
+                      onChat: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ChatScreen(
+                              sessionName: session.name,
+                              windowIndex: 0,
                             ),
-                            child: const Text('Kill'),
                           ),
-                        ],
-                      ),
-                    );
-
-                    if (confirmed == true) {
-                      ref
-                          .read(sessionsProvider.notifier)
-                          .killSession(session.name);
-                    }
-                  },
-                );
-              },
+                        );
+                      },
+                      onKill: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Kill Session'),
+                            content: Text(
+                              'Are you sure you want to kill "${session.name}"?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                ),
+                                child: const Text('Kill'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true) {
+                          ref
+                              .read(sessionsProvider.notifier)
+                              .killSession(session.name);
+                        }
+                      },
+                    ),
+                  ),
+                ],
+                if (sessionsState.acpSessions.isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text(
+                      'Direct Sessions (ACP)',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  ...sessionsState.acpSessions.map(
+                    (session) => _AcpSessionTile(
+                      session: session,
+                      isSelecting: _isSelecting,
+                      isSelected: _selectedIds.contains(session.sessionId),
+                      onTap: () {
+                        if (_isSelecting) {
+                          _toggleSelection(session.sessionId);
+                        } else {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                sessionName: session.sessionId,
+                                windowIndex: 0,
+                                isAcp: true,
+                                cwd: session.cwd,
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                      onLongPress: () => _enterSelectionMode(session.sessionId),
+                      onDelete: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Delete ACP Session'),
+                            content: Text(
+                              'Delete session in "${session.cwd.split('/').last}"? This cannot be undone.',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                ),
+                                child: const Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true) {
+                          ref
+                              .read(sessionsProvider.notifier)
+                              .deleteAcpSession(session.sessionId);
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ],
             ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showCreateSessionDialog(context, ref),
@@ -153,39 +299,96 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('New Session'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Session Name',
-            hintText: 'Enter session name',
-          ),
-          onSubmitted: (value) {
-            if (value.isNotEmpty) {
-              ref.read(sessionsProvider.notifier).createSession(value);
-              Navigator.pop(context);
-            }
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (controller.text.isNotEmpty) {
-                ref
-                    .read(sessionsProvider.notifier)
-                    .createSession(controller.text);
-                Navigator.pop(context);
-              }
-            },
-            child: const Text('Create'),
-          ),
-        ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          // Read current backend from provider each time the widget rebuilds
+          final currentBackend = ref.watch(selectedBackendProvider);
+
+          return AlertDialog(
+            title: const Text('New Session'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: currentBackend == 'tmux'
+                        ? 'Session Name'
+                        : 'Working Directory',
+                    hintText: currentBackend == 'tmux'
+                        ? 'e.g., my-session'
+                        : 'e.g., /home/user/project',
+                  ),
+                  onSubmitted: (value) {
+                    if (value.isNotEmpty) {
+                      ref.read(sessionsProvider.notifier).createSession(value);
+                      Navigator.pop(context);
+                    }
+                  },
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Backend',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(
+                      value: 'tmux',
+                      label: Text('Terminal'),
+                      icon: Icon(Icons.terminal),
+                    ),
+                    ButtonSegment(
+                      value: 'acp',
+                      label: Text('Direct'),
+                      icon: Icon(Icons.smart_toy),
+                    ),
+                  ],
+                  selected: {currentBackend},
+                  onSelectionChanged: (Set<String> selection) {
+                    ref.read(selectedBackendProvider.notifier).state =
+                        selection.first;
+                    setDialogState(() {});
+                  },
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  currentBackend == 'tmux'
+                      ? 'Terminal mode: Full terminal with tmux'
+                      : 'Direct mode: Chat-focused (ACP)',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  if (controller.text.isNotEmpty) {
+                    final ws = ref.read(sharedWebSocketServiceProvider);
+                    final backend = ref.read(selectedBackendProvider);
+                    if (backend == 'acp') {
+                      ws.selectBackend('acp');
+                      ws.acpCreateSession(controller.text);
+                    } else {
+                      ref
+                          .read(sessionsProvider.notifier)
+                          .createSession(controller.text);
+                    }
+                    Navigator.pop(context);
+                  }
+                },
+                child: const Text('Create'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -257,6 +460,62 @@ class _SessionTile extends StatelessWidget {
         ),
         onTap: onAttach,
       ),
+    );
+  }
+}
+
+class _AcpSessionTile extends StatelessWidget {
+  final AcpSession session;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final VoidCallback onDelete;
+  final bool isSelecting;
+  final bool isSelected;
+
+  const _AcpSessionTile({
+    required this.session,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onDelete,
+    required this.isSelecting,
+    required this.isSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: isSelecting
+          ? Checkbox(
+              value: isSelected,
+              onChanged: (_) => onTap(),
+            )
+          : const Icon(Icons.smart_toy),
+      title: Text(
+        session.title.isEmpty ? session.cwd.split('/').last : session.title,
+      ),
+      subtitle: Text(session.cwd),
+      trailing: isSelecting
+          ? null
+          : PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              onSelected: (value) {
+                if (value == 'delete') onDelete();
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                Icon(Icons.delete, color: Colors.red),
+                SizedBox(width: 8),
+                Text('Delete', style: TextStyle(color: Colors.red)),
+              ],
+            ),
+          ),
+        ],
+      ),
+      onTap: onTap,
+      onLongPress: onLongPress,
     );
   }
 }

@@ -5,8 +5,6 @@ class Host extends Equatable {
   final String name;
   final String address;
   final int port;
-  final String? username;
-  final bool useTls;
   final DateTime? lastConnected;
 
   const Host({
@@ -14,21 +12,17 @@ class Host extends Equatable {
     required this.name,
     required this.address,
     required this.port,
-    this.username,
-    this.useTls = false,
     this.lastConnected,
   });
 
-  String get wsUrl => useTls ? 'wss://$address:$port' : 'ws://$address:$port';
-  String get httpUrl => useTls ? 'https://$address:$port' : 'http://$address:$port';
+  String get wsUrl => 'ws://$address:$port';
+  String get httpUrl => 'http://$address:$port';
 
   Host copyWith({
     String? id,
     String? name,
     String? address,
     int? port,
-    String? username,
-    bool? useTls,
     DateTime? lastConnected,
   }) {
     return Host(
@@ -36,34 +30,28 @@ class Host extends Equatable {
       name: name ?? this.name,
       address: address ?? this.address,
       port: port ?? this.port,
-      username: username ?? this.username,
-      useTls: useTls ?? this.useTls,
       lastConnected: lastConnected ?? this.lastConnected,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'address': address,
-        'port': port,
-        'username': username,
-        'useTls': useTls,
-        'lastConnected': lastConnected?.toIso8601String(),
-      };
+    'id': id,
+    'name': name,
+    'address': address,
+    'port': port,
+    'lastConnected': lastConnected?.toIso8601String(),
+  };
 
   factory Host.fromJson(Map<String, dynamic> json) => Host(
-        id: json['id'] as String,
-        name: json['name'] as String,
-        address: json['address'] as String,
-        port: json['port'] as int,
-        username: json['username'] as String?,
-        useTls: json['useTls'] as bool? ?? false,
-        lastConnected: json['lastConnected'] != null
-            ? DateTime.parse(json['lastConnected'] as String)
-            : null,
-      );
+    id: json['id'] as String,
+    name: json['name'] as String,
+    address: json['address'] as String,
+    port: json['port'] as int,
+    lastConnected: json['lastConnected'] != null
+        ? DateTime.parse(json['lastConnected'] as String)
+        : null,
+  );
 
   @override
-  List<Object?> get props => [id, name, address, port, username, useTls, lastConnected];
+  List<Object?> get props => [id, name, address, port, lastConnected];
 }

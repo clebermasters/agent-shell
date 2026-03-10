@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
+import '../../../core/config/build_config.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -15,20 +15,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final TextEditingController _apiKeyController = TextEditingController();
   bool _obscureApiKey = true;
   bool _isSaving = false;
+  bool _isSavingVoiceSettings = false;
+  bool _voiceAutoEnter = false;
   String? _savedMessage;
 
   @override
   void initState() {
     super.initState();
-    _loadApiKey();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadApiKey();
+    });
   }
 
   Future<void> _loadApiKey() async {
     final prefs = ref.read(sharedPreferencesProvider);
-    final apiKey = prefs.getString(AppConfig.keyOpenAiApiKey);
-    if (apiKey != null) {
+    var apiKey = prefs.getString(AppConfig.keyOpenAiApiKey);
+    if (apiKey != null && apiKey.isNotEmpty) {
       _apiKeyController.text = apiKey;
+    } else if (BuildConfig.defaultApiKey.isNotEmpty) {
+      // Use build-time default if no saved key, and save it to SharedPreferences
+      _apiKeyController.text = BuildConfig.defaultApiKey;
+      await prefs.setString(
+        AppConfig.keyOpenAiApiKey,
+        BuildConfig.defaultApiKey,
+      );
     }
+    _voiceAutoEnter = prefs.getBool(AppConfig.keyVoiceAutoEnter) ?? false;
+    if (mounted) setState(() {});
   }
 
   Future<void> _saveApiKey() async {
@@ -54,6 +67,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _savedMessage = null;
         });
       }
+    });
+  }
+
+  Future<void> _saveVoiceAutoEnter(bool enabled) async {
+    setState(() {
+      _isSavingVoiceSettings = true;
+      _voiceAutoEnter = enabled;
+    });
+
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setBool(AppConfig.keyVoiceAutoEnter, enabled);
+
+    if (!mounted) return;
+    setState(() {
+      _isSavingVoiceSettings = false;
     });
   }
 
@@ -129,6 +157,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Auto-enter transcriptions'),
+                    subtitle: const Text(
+                      'When enabled, voice transcription is sent immediately in chat and terminal.',
+                    ),
+                    value: _voiceAutoEnter,
+                    onChanged: _isSavingVoiceSettings
+                        ? null
+                        : (value) => _saveVoiceAutoEnter(value),
+                  ),
+                  const SizedBox(height: 8),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(

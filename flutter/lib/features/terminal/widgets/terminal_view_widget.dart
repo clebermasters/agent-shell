@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'dart:ui';
 import 'package:xterm/xterm.dart';
 import 'package:volume_key_board/volume_key_board.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/config/app_config.dart';
 
 class TerminalViewWidget extends StatefulWidget {
   final Terminal terminal;
@@ -16,6 +18,7 @@ class TerminalViewWidget extends StatefulWidget {
   final bool isSelectionMode;
   final VoidCallback onModifiersReset;
   final VoidCallback? onTap;
+  final SharedPreferences prefs;
 
   const TerminalViewWidget({
     super.key,
@@ -30,6 +33,7 @@ class TerminalViewWidget extends StatefulWidget {
     this.isSelectionMode = false,
     required this.onModifiersReset,
     this.onTap,
+    required this.prefs,
   });
 
   @override
@@ -38,7 +42,7 @@ class TerminalViewWidget extends StatefulWidget {
 
 class _TerminalViewWidgetState extends State<TerminalViewWidget>
     with WidgetsBindingObserver {
-  double _fontSize = 14.0;
+  late double _fontSize;
   bool _initialized = false;
   int _lastCols = 0;
   int _lastRows = 0;
@@ -83,6 +87,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     _inputController = TextEditingController();
     VolumeKeyBoard.instance.addListener(_handleVolumeKey);
     widget.terminal.addListener(_onTerminalChange);
+    _fontSize =
+        widget.prefs.getDouble(AppConfig.keyTerminalFontSize) ??
+        AppConfig.terminalFontSize;
   }
 
   @override
@@ -403,6 +410,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     setState(() {
       _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0);
     });
+    widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
     _sendResize();
   }
 
@@ -410,6 +418,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     setState(() {
       _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0);
     });
+    widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
     _sendResize();
   }
 

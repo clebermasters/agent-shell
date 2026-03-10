@@ -81,14 +81,30 @@ pub struct CronJob {
     pub schedule: String,
     pub command: String,
     pub enabled: bool,
-    #[serde(alias = "lastRun", default, deserialize_with = "deserialize_optional_datetime")]
+    #[serde(
+        alias = "lastRun",
+        default,
+        deserialize_with = "deserialize_optional_datetime"
+    )]
     pub last_run: Option<DateTime<Utc>>,
-    #[serde(alias = "nextRun", default, deserialize_with = "deserialize_optional_datetime")]
+    #[serde(
+        alias = "nextRun",
+        default,
+        deserialize_with = "deserialize_optional_datetime"
+    )]
     pub next_run: Option<DateTime<Utc>>,
     pub output: Option<String>,
-    #[serde(alias = "createdAt", default, deserialize_with = "deserialize_optional_datetime")]
+    #[serde(
+        alias = "createdAt",
+        default,
+        deserialize_with = "deserialize_optional_datetime"
+    )]
     pub created_at: Option<DateTime<Utc>>,
-    #[serde(alias = "updatedAt", default, deserialize_with = "deserialize_optional_datetime")]
+    #[serde(
+        alias = "updatedAt",
+        default,
+        deserialize_with = "deserialize_optional_datetime"
+    )]
     pub updated_at: Option<DateTime<Utc>>,
     pub environment: Option<HashMap<String, String>>,
     #[serde(alias = "logOutput")]
@@ -99,9 +115,7 @@ pub struct CronJob {
     pub tmux_session: Option<String>,
 }
 
-fn deserialize_optional_datetime<'de, D>(
-    deserializer: D,
-) -> Result<Option<DateTime<Utc>>, D::Error>
+fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -249,6 +263,100 @@ pub enum WebSocketMessage {
         window_index: u32,
     },
     UnwatchChatLog,
+    // Clear chat history for a session
+    ClearChatLog {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+    },
+    // Chat file sending
+    SendFileToChat {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        file: FileAttachment,
+        prompt: Option<String>,
+    },
+    // Chat message sending (webhook)
+    SendChatMessage {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        message: String,
+        #[serde(default)]
+        notify: Option<bool>,
+    },
+    // ACP backend selection
+    SelectBackend {
+        backend: String,
+    },
+    // ACP session management
+    AcpCreateSession {
+        cwd: String,
+    },
+    AcpResumeSession {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        cwd: String,
+    },
+    AcpForkSession {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        cwd: String,
+    },
+    AcpListSessions,
+    AcpSendPrompt {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        message: String,
+    },
+    AcpCancelPrompt {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    AcpSetModel {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "modelId")]
+        model_id: String,
+    },
+    AcpSetMode {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "modeId")]
+        mode_id: String,
+    },
+    AcpRespondPermission {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "optionId")]
+        option_id: String,
+    },
+    AcpLoadHistory {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    },
+    AcpClearHistory {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    AcpDeleteSession {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    // ACP file sending
+    SendFileToAcpChat {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        file: FileAttachment,
+        prompt: Option<String>,
+        cwd: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +364,14 @@ pub enum WebSocketMessage {
 pub enum AudioAction {
     Start,
     Stop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileAttachment {
+    pub filename: String,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    pub data: String, // base64 encoded
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -397,9 +513,34 @@ pub enum ServerMessage {
         #[serde(rename = "windowIndex")]
         window_index: u32,
         message: crate::chat_log::ChatMessage,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     ChatLogError {
         error: String,
+    },
+    ChatLogCleared {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    ChatFileMessage {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        message: crate::chat_log::ChatMessage,
+    },
+    ChatNotification {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        preview: String,
     },
     // Terminal history bootstrap
     TerminalHistoryStart {
@@ -435,5 +576,124 @@ pub enum ServerMessage {
         total_lines: i64,
         #[serde(rename = "totalChunks")]
         total_chunks: usize,
+    },
+    // ACP responses
+    BackendSelected {
+        backend: String,
+    },
+    AcpInitialized {
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    AcpSessionCreated {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "currentModelId")]
+        current_model_id: Option<String>,
+        #[serde(rename = "availableModels")]
+        available_models: Option<Vec<crate::acp::ModelInfo>>,
+        #[serde(rename = "currentModeId")]
+        current_mode_id: Option<String>,
+    },
+    AcpSessionResumed {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "currentModelId")]
+        current_model_id: String,
+        #[serde(rename = "availableModels")]
+        available_models: Vec<crate::acp::ModelInfo>,
+        #[serde(rename = "currentModeId")]
+        current_mode_id: String,
+    },
+    AcpSessionForked {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "currentModelId")]
+        current_model_id: String,
+    },
+    AcpSessionsListed {
+        sessions: Vec<crate::acp::SessionInfo>,
+    },
+    AcpMessageChunk {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        content: String,
+        #[serde(rename = "isThinking")]
+        is_thinking: bool,
+    },
+    AcpToolCall {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        title: String,
+        kind: String,
+        status: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<String>,
+    },
+    AcpToolResult {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        status: String,
+        output: String,
+    },
+    AcpPromptDone {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "stopReason")]
+        stop_reason: String,
+        #[serde(rename = "totalTokens")]
+        total_tokens: usize,
+    },
+    AcpPermissionRequest {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        tool: String,
+        command: String,
+    },
+    AcpError {
+        message: String,
+    },
+    AcpPromptSent {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    AcpPromptCancelled {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    AcpModelSet {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "modelId")]
+        model_id: String,
+    },
+    AcpModeSet {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "modeId")]
+        mode_id: String,
+    },
+    AcpPermissionResponse {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
+    AcpHistoryLoaded {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        messages: Vec<crate::chat_log::ChatMessage>,
+        has_more: bool,
+    },
+    AcpSessionDeleted {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        success: bool,
+        error: Option<String>,
     },
 }

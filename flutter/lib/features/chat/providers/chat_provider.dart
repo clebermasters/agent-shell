@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -13,51 +16,67 @@ import '../../sessions/providers/sessions_provider.dart';
 class ChatState {
   final List<ChatMessage> messages;
   final bool isLoading;
+  final bool isLoadingMore;
   final String? error;
   final String? detectedTool;
   final String? sessionName;
   final int? windowIndex;
+  final bool isAcp;
   final bool isRecording;
   final Duration recordingDuration;
   final bool isTranscribing;
   final String? transcribedText;
+  final int? totalMessageCount;
+  final bool hasMoreMessages;
 
   const ChatState({
     this.messages = const [],
     this.isLoading = false,
+    this.isLoadingMore = false,
     this.error,
     this.detectedTool,
     this.sessionName,
     this.windowIndex,
+    this.isAcp = false,
     this.isRecording = false,
     this.recordingDuration = Duration.zero,
     this.isTranscribing = false,
     this.transcribedText,
+    this.totalMessageCount,
+    this.hasMoreMessages = false,
   });
 
   ChatState copyWith({
     List<ChatMessage>? messages,
     bool? isLoading,
+    bool? isLoadingMore,
     String? error,
     String? detectedTool,
     String? sessionName,
     int? windowIndex,
+    bool? isAcp,
     bool? isRecording,
     Duration? recordingDuration,
     bool? isTranscribing,
     String? transcribedText,
+    int? totalMessageCount,
+    bool? hasMoreMessages,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
       isLoading: isLoading ?? this.isLoading,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       error: error,
       detectedTool: detectedTool ?? this.detectedTool,
       sessionName: sessionName ?? this.sessionName,
       windowIndex: windowIndex ?? this.windowIndex,
+      isAcp: isAcp ?? this.isAcp,
       isRecording: isRecording ?? this.isRecording,
       recordingDuration: recordingDuration ?? this.recordingDuration,
       isTranscribing: isTranscribing ?? this.isTranscribing,
       transcribedText: transcribedText,
+      totalMessageCount: totalMessageCount ?? this.totalMessageCount,
+      hasMoreMessages: hasMoreMessages ?? this.hasMoreMessages,
     );
   }
 }
@@ -89,7 +108,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _messageSubscription = _ws!.messages.listen((message) {
       final type = message['type'] as String?;
       print('DEBUG: Received message of type: $type');
-      
+
       if (type == 'chat-history' || type == 'chat-event') {
         print('DEBUG: Full chat message: $message');
       }
@@ -101,16 +120,84 @@ class ChatNotifier extends StateNotifier<ChatState> {
         case 'chat-event':
           _handleChatEvent(message);
           break;
+        case 'chat-file-message':
+          _handleChatFileMessage(message);
+          break;
+        case 'chat-notification':
+          _handleChatNotification(message);
+          break;
         case 'chat-log-error':
           _handleChatError(message);
+          break;
+        case 'chat-log-cleared':
+          _handleChatLogCleared(message);
+          break;
+        case 'acp-message-chunk':
+          _handleAcpMessageChunk(message);
+          break;
+        case 'acp-tool-call':
+          _handleAcpToolCall(message);
+          break;
+        case 'acp-tool-result':
+          _handleAcpToolResult(message);
+          break;
+        case 'acp-permission-request':
+          _handleAcpPermissionRequest(message);
+          break;
+        case 'acp-prompt-done':
+          _handleAcpPromptDone(message);
+          break;
+        case 'acp-error':
+          state = state.copyWith(error: message['message']?.toString());
+          break;
+        case 'chat-history-chunk':
+          _handleChatHistoryChunk(message);
+          break;
+        case 'acp-history-loaded':
+          _handleAcpHistoryLoaded(message);
           break;
       }
     });
   }
 
+  void _handleAcpHistoryLoaded(Map<String, dynamic> message) {
+    try {
+      final sessionId = message['sessionId'] as String?;
+      if (sessionId != state.sessionName) {
+        print(
+          'DEBUG: Ignoring history for session $sessionId (current: ${state.sessionName})',
+        );
+        return;
+      }
+
+      final messagesData = message['messages'] as List<dynamic>? ?? [];
+      final hasMore = message['hasMore'] as bool? ?? false;
+
+      final messages = messagesData
+          .map((msg) => _parseMessage(msg as Map<String, dynamic>))
+          .toList();
+
+      state = state.copyWith(
+        messages: messages,
+        isLoading: false,
+        hasMoreMessages: hasMore,
+      );
+      print(
+        'DEBUG: ACP history loaded: ${messages.length} messages, hasMore: $hasMore',
+      );
+    } catch (e, stack) {
+      print('ERROR parsing ACP history: $e\n$stack');
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Failed to parse history',
+      );
+    }
+  }
+
   void _handleChatHistory(Map<String, dynamic> message) {
     try {
-      final sessionName = (message['sessionName'] ?? message['session-name']) as String?;
+      final sessionName =
+          (message['sessionName'] ?? message['session-name']) as String?;
       final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
@@ -118,7 +205,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         'DEBUG: Chat history received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
       );
 
-      if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+      if (sessionName != state.sessionName ||
+          windowIndex != state.windowIndex) {
         print(
           'Ignoring chat history for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
         );
@@ -141,22 +229,90 @@ class ChatNotifier extends StateNotifier<ChatState> {
           .map((msg) => _parseMessage(msg as Map<String, dynamic>))
           .toList();
 
+      // Get pagination info
+      final totalCount = message['totalCount'] as int?;
+      final hasMore = message['hasMore'] as bool? ?? false;
+
       state = state.copyWith(
         messages: messages,
         detectedTool: toolStr,
         isLoading: false,
         error: null,
+        totalMessageCount: totalCount,
+        hasMoreMessages: hasMore,
       );
-      print('DEBUG: isLoading set to false, messages count: ${messages.length}');
+      print(
+        'DEBUG: isLoading set to false, messages count: ${messages.length}, total: $totalCount, hasMore: $hasMore',
+      );
     } catch (e, stack) {
       print('ERROR parsing chat history: $e\n$stack');
-      state = state.copyWith(isLoading: false, error: 'Failed to parse chat history');
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Failed to parse chat history',
+      );
     }
+  }
+
+  void _handleChatHistoryChunk(Map<String, dynamic> message) {
+    try {
+      final sessionName =
+          (message['sessionName'] ?? message['session-name']) as String?;
+      final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
+      final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
+
+      if (sessionName != state.sessionName ||
+          windowIndex != state.windowIndex) {
+        return;
+      }
+
+      final messagesData = message['messages'] as List<dynamic>? ?? [];
+      final hasMore = message['hasMore'] as bool? ?? false;
+
+      final newMessages = messagesData
+          .map((msg) => _parseMessage(msg as Map<String, dynamic>))
+          .toList();
+
+      // Append new messages to existing list
+      final allMessages = [...state.messages, ...newMessages];
+
+      state = state.copyWith(
+        messages: allMessages,
+        isLoadingMore: false,
+        hasMoreMessages: hasMore,
+      );
+      print(
+        'DEBUG: Loaded ${newMessages.length} more messages. Total: ${allMessages.length}, hasMore: $hasMore',
+      );
+    } catch (e, stack) {
+      print('ERROR parsing chat history chunk: $e\n$stack');
+      state = state.copyWith(
+        isLoadingMore: false,
+        error: 'Failed to load more messages',
+      );
+    }
+  }
+
+  void loadMoreMessages() {
+    if (state.isLoadingMore || !state.hasMoreMessages || _ws == null) {
+      return;
+    }
+
+    final offset = state.messages.length;
+    const limit = 50;
+
+    state = state.copyWith(isLoadingMore: true);
+    _ws!.loadMoreChatHistory(
+      state.sessionName!,
+      state.windowIndex!,
+      offset,
+      limit,
+    );
   }
 
   void _handleChatEvent(Map<String, dynamic> message) {
     try {
-      final sessionName = (message['sessionName'] ?? message['session-name']) as String?;
+      final sessionName =
+          (message['sessionName'] ?? message['session-name']) as String?;
       final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
@@ -164,7 +320,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         'DEBUG: Chat event received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
       );
 
-      if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+      if (sessionName != state.sessionName ||
+          windowIndex != state.windowIndex) {
         print(
           'Ignoring chat event for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
         );
@@ -174,11 +331,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final msgData = message['message'] as Map<String, dynamic>?;
       if (msgData == null) return;
 
+      final source = message['source'] as String?;
       final msg = _parseMessage(msgData);
 
       // Skip user messages from backend ONLY for live events since we already add them locally
-      if (msg.type == ChatMessageType.user) {
-        print('  -> Skipping live user message from backend (already added locally)');
+      // But NOT for webhook messages - they need to be added
+      if (msg.type == ChatMessageType.user && source != 'webhook') {
+        print(
+          '  -> Skipping live user message from backend (already added locally)',
+        );
         return;
       }
 
@@ -207,6 +368,140 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(error: error, isLoading: false);
   }
 
+  void _handleChatLogCleared(Map<String, dynamic> message) {
+    final sessionName = message['sessionName'] as String?;
+    final windowIndexRaw = message['windowIndex'];
+    final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
+    final success = message['success'] as bool? ?? false;
+
+    if (sessionName != state.sessionName || windowIndex != state.windowIndex) {
+      return;
+    }
+
+    if (success) {
+      state = const ChatState();
+      state = state.copyWith(
+        sessionName: sessionName,
+        windowIndex: windowIndex,
+      );
+    } else {
+      final error = message['error'] as String? ?? 'Failed to clear chat';
+      state = state.copyWith(error: error, isLoading: false);
+    }
+  }
+
+  void _handleChatFileMessage(Map<String, dynamic> message) {
+    try {
+      final sessionName = message['sessionName'] as String?;
+      final windowIndexRaw = message['windowIndex'];
+      final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
+
+      print(
+        'DEBUG: _handleChatFileMessage - msg sessionName: $sessionName, windowIndex: $windowIndex',
+      );
+      print(
+        'DEBUG: _handleChatFileMessage - state sessionName: ${state.sessionName}, windowIndex: ${state.windowIndex}',
+      );
+
+      if (sessionName != state.sessionName ||
+          windowIndex != state.windowIndex) {
+        print('DEBUG: Session mismatch, ignoring file message');
+        return;
+      }
+
+      final msgData = message['message'] as Map<String, dynamic>?;
+      if (msgData == null) return;
+
+      final msg = _parseMessage(msgData);
+
+      final messages = List<ChatMessage>.from(state.messages);
+      if (_isDuplicateFileMessage(messages, msg)) {
+        print('DEBUG: Skipping duplicate file message');
+        return;
+      }
+      messages.add(msg);
+
+      state = state.copyWith(messages: messages);
+      print('DEBUG: Added file message to chat');
+    } catch (e, stack) {
+      print('ERROR parsing chat file message: $e\n$stack');
+    }
+  }
+
+  static final FlutterLocalNotificationsPlugin
+  _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  void _handleChatNotification(Map<String, dynamic> message) {
+    try {
+      final sessionName = message['sessionName'] as String? ?? 'Unknown';
+      final preview = message['preview'] as String? ?? 'New message';
+
+      _showLocalNotification(
+        title: 'New message from $sessionName',
+        body: preview,
+      );
+    } catch (e) {
+      print('ERROR handling chat notification: $e');
+    }
+  }
+
+  Future<void> _showLocalNotification({
+    required String title,
+    required String body,
+  }) async {
+    const androidDetails = AndroidNotificationDetails(
+      'webmux_chat',
+      'Chat Messages',
+      channelDescription: 'Notifications for new chat messages',
+      importance: Importance.high,
+      priority: Priority.high,
+      showWhen: true,
+    );
+
+    const notificationDetails = NotificationDetails(android: androidDetails);
+
+    final plugin = FlutterLocalNotificationsPlugin();
+    await plugin.show(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      notificationDetails: notificationDetails,
+    );
+  }
+
+  bool _isDuplicateFileMessage(
+    List<ChatMessage> existingMessages,
+    ChatMessage incomingMessage,
+  ) {
+    final incomingAttachmentIds = incomingMessage.blocks
+        .where(_isAttachmentBlock)
+        .map((block) => block.id)
+        .whereType<String>()
+        .toSet();
+
+    if (incomingAttachmentIds.isEmpty) {
+      return false;
+    }
+
+    for (final message in existingMessages) {
+      for (final block in message.blocks) {
+        if (_isAttachmentBlock(block) &&
+            block.id != null &&
+            incomingAttachmentIds.contains(block.id)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  bool _isAttachmentBlock(ChatBlock block) {
+    return block.type == ChatBlockType.image ||
+        block.type == ChatBlockType.audio ||
+        block.type == ChatBlockType.file;
+  }
+
   ChatMessage _parseMessage(Map<String, dynamic> data) {
     final role = data['role'] as String? ?? 'assistant';
     final blocksData = data['blocks'] as List<dynamic>? ?? [];
@@ -227,6 +522,27 @@ class ChatNotifier extends StateNotifier<ChatState> {
             toolName: block['toolName'] as String?,
             content: block['content'] as String?,
             summary: block['summary'] as String?,
+          );
+        case 'thinking':
+          return ChatBlock.thinking(block['content'] as String? ?? '');
+        case 'image':
+          return ChatBlock.image(
+            id: block['id'] as String,
+            mimeType: block['mimeType'] as String,
+            altText: block['altText'] as String?,
+          );
+        case 'audio':
+          return ChatBlock.audio(
+            id: block['id'] as String,
+            mimeType: block['mimeType'] as String,
+            durationSeconds: (block['durationSeconds'] as num?)?.toDouble(),
+          );
+        case 'file':
+          return ChatBlock.file(
+            id: block['id'] as String,
+            filename: block['filename'] as String,
+            mimeType: block['mimeType'] as String,
+            sizeBytes: block['sizeBytes'] as int?,
           );
         default:
           return ChatBlock.text(block['text'] as String? ?? '');
@@ -252,7 +568,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       content = textBlocks.map((b) => b.text ?? '').join('\n');
 
       if (toolBlocks.isNotEmpty) {
-        type = ChatMessageType.tool;
+        type = ChatMessageType.toolCall;
         toolName = toolBlocks.first.toolName;
       } else if (toolResultBlocks.isNotEmpty) {
         type = ChatMessageType.toolResult;
@@ -289,6 +605,165 @@ class ChatNotifier extends StateNotifier<ChatState> {
     return null;
   }
 
+  void _handleAcpMessageChunk(Map<String, dynamic> message) {
+    final sessionId = message['sessionId'] as String?;
+    if (sessionId != state.sessionName) return;
+
+    final content = message['content'] as String? ?? '';
+    final isThinking = message['isThinking'] as bool? ?? false;
+
+    if (content.isEmpty) return;
+
+    final messages = List<ChatMessage>.from(state.messages);
+
+    if (isThinking) {
+      // Merge consecutive thinking chunks into the same thinking block
+      if (messages.isNotEmpty &&
+          messages.last.type == ChatMessageType.assistant &&
+          messages.last.blocks.length == 1 &&
+          messages.last.blocks.first.type == ChatBlockType.thinking) {
+        final lastMsg = messages.last;
+        final merged = (lastMsg.blocks.first.content ?? '') + content;
+        messages[messages.length - 1] = lastMsg.copyWith(
+          content: (lastMsg.content ?? '') + content,
+          blocks: [ChatBlock.thinking(merged)],
+        );
+      } else {
+        messages.add(
+          ChatMessage(
+            id: _uuid.v4(),
+            type: ChatMessageType.assistant,
+            content: content,
+            timestamp: DateTime.now(),
+            blocks: [ChatBlock.thinking(content)],
+          ),
+        );
+      }
+    } else {
+      // Merge consecutive text chunks into the same assistant message
+      if (messages.isNotEmpty &&
+          messages.last.type == ChatMessageType.assistant &&
+          messages.last.blocks.isEmpty) {
+        final lastMsg = messages.last;
+        messages[messages.length - 1] = lastMsg.copyWith(
+          content: (lastMsg.content ?? '') + content,
+        );
+      } else {
+        messages.add(
+          ChatMessage(
+            id: _uuid.v4(),
+            type: ChatMessageType.assistant,
+            content: content,
+            timestamp: DateTime.now(),
+          ),
+        );
+      }
+    }
+
+    state = state.copyWith(messages: messages);
+  }
+
+  void _handleAcpToolCall(Map<String, dynamic> message) {
+    print('DEBUG: _handleAcpToolCall received: $message');
+    final sessionId = message['sessionId'] as String?;
+    if (sessionId != state.sessionName) {
+      print(
+        'DEBUG: Session mismatch - message: $sessionId, state: ${state.sessionName}',
+      );
+      return;
+    }
+
+    final toolCallId = message['toolCallId'] as String? ?? '';
+    final title = message['title'] as String? ?? 'Unknown Tool';
+    final kind = message['kind'] as String? ?? '';
+    final inputStr = message['input'] as String? ?? '';
+
+    print('DEBUG: Processing tool call - title: $title, kind: $kind');
+
+    Map<String, dynamic>? inputMap;
+    if (inputStr.isNotEmpty) {
+      try {
+        inputMap = Map<String, dynamic>.from(json.decode(inputStr) as Map);
+      } catch (_) {
+        inputMap = {'raw': inputStr};
+      }
+    }
+
+    final chatMessage = ChatMessage(
+      id: toolCallId,
+      type: ChatMessageType.toolCall,
+      content: 'Tool: $title ($kind)',
+      blocks: [
+        ChatBlock.toolCall(toolName: title, input: inputMap, summary: kind),
+      ],
+      timestamp: DateTime.now(),
+    );
+
+    print(
+      'DEBUG: Created chat message with blocks: ${chatMessage.blocks.length}',
+    );
+
+    state = state.copyWith(messages: [...state.messages, chatMessage]);
+  }
+
+  void _handleAcpToolResult(Map<String, dynamic> message) {
+    final sessionId = message['sessionId'] as String?;
+    if (sessionId != state.sessionName) return;
+
+    final toolCallId = message['toolCallId'] as String? ?? '';
+    final status = message['status'] as String? ?? '';
+    final output = message['output'] as String? ?? '';
+
+    state = state.copyWith(
+      messages: [
+        ...state.messages,
+        ChatMessage(
+          id: toolCallId,
+          type: ChatMessageType.toolResult,
+          content: output,
+          timestamp: DateTime.now(),
+          blocks: [ChatBlock.toolResult(content: output, summary: status)],
+        ),
+      ],
+    );
+  }
+
+  void _handleAcpPermissionRequest(Map<String, dynamic> message) {
+    final requestId = message['requestId'] as String? ?? '';
+    final tool = message['tool'] as String? ?? 'Unknown';
+    final command = message['command'] as String? ?? '';
+
+    state = state.copyWith(
+      messages: [
+        ...state.messages,
+        ChatMessage(
+          id: requestId,
+          type: ChatMessageType.system,
+          content: 'Permission Request: $tool\n$command',
+          timestamp: DateTime.now(),
+        ),
+      ],
+    );
+  }
+
+  void _handleAcpPromptDone(Map<String, dynamic> message) {
+    final sessionId = message['sessionId'] as String?;
+    if (sessionId != state.sessionName) return;
+
+    final stopReason = message['stopReason'] as String? ?? '';
+    state = state.copyWith(
+      messages: [
+        ...state.messages,
+        ChatMessage(
+          id: _uuid.v4(),
+          type: ChatMessageType.system,
+          content: 'Done (reason: $stopReason)',
+          timestamp: DateTime.now(),
+        ),
+      ],
+    );
+  }
+
   String _mergeContent(String? left, String? right) {
     final a = (left ?? '').trim();
     final b = (right ?? '').trim();
@@ -297,15 +772,30 @@ class ChatNotifier extends StateNotifier<ChatState> {
     return '$a\n$b';
   }
 
-  void watchChatLog(String sessionName, int windowIndex) async {
+  void startAcpChat(String sessionName) {
+    state = state.copyWith(
+      messages: [],
+      isLoading: true,
+      error: null,
+      sessionName: sessionName,
+      windowIndex: 0,
+      isAcp: true,
+    );
+
+    _ws!.acpLoadHistory(sessionName, offset: 0, limit: 50);
+  }
+
+  void watchChatLog(String sessionName, int windowIndex, {int? limit}) async {
     state = state.copyWith(
       messages: [],
       isLoading: true,
       error: null,
       sessionName: sessionName,
       windowIndex: windowIndex,
+      hasMoreMessages: false,
+      totalMessageCount: null,
     );
-    
+
     // Give a small delay to ensure WebSocket is connected if it was just switched
     if (_ws == null || !_ws!.isConnected) {
       await Future.delayed(const Duration(milliseconds: 500));
@@ -318,8 +808,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
       rows: 24,
       windowIndex: windowIndex,
     );
-    // Then watch the chat log
-    _ws?.watchChatLog(sessionName, windowIndex);
+    // Then watch the chat log with limit for initial load
+    _ws?.watchChatLog(sessionName, windowIndex, limit: limit ?? 50);
   }
 
   void unwatchChatLog() {
@@ -352,13 +842,27 @@ class ChatNotifier extends StateNotifier<ChatState> {
     addMessage(message);
   }
 
-  void addAssistantMessage(String content, {String? toolName}) {
+  void addAssistantMessage(
+    String content, {
+    String? toolName,
+    List<ChatBlock>? blocks,
+  }) {
+    ChatMessageType messageType;
+    if (toolName != null) {
+      messageType = ChatMessageType.toolCall;
+    } else if (blocks != null && blocks.isNotEmpty) {
+      messageType = ChatMessageType.assistant;
+    } else {
+      messageType = ChatMessageType.assistant;
+    }
+
     final message = ChatMessage(
       id: _uuid.v4(),
-      type: toolName != null ? ChatMessageType.tool : ChatMessageType.assistant,
+      type: messageType,
       content: content,
       timestamp: DateTime.now(),
       toolName: toolName,
+      blocks: blocks ?? [],
     );
     addMessage(message);
   }
@@ -406,7 +910,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void clear() {
-    state = const ChatState();
+    if (state.isAcp) {
+      // ACP: clear DB via backend, then reset local state
+      if (state.sessionName != null && _ws != null) {
+        _ws!.clearAcpHistory(state.sessionName!);
+      }
+      final sessionName = state.sessionName;
+      state = const ChatState();
+      state = state.copyWith(sessionName: sessionName, windowIndex: 0, isAcp: true);
+    } else if (state.sessionName != null && state.windowIndex != null && _ws != null) {
+      _ws!.clearChatLog(state.sessionName!, state.windowIndex!);
+    } else {
+      state = const ChatState();
+    }
   }
 
   Future<bool> checkMicrophonePermission() async {
@@ -525,7 +1041,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
     switch (type) {
       case 'tool':
         final toolName = _extractToolName(content);
-        addAssistantMessage(content, toolName: toolName);
+        final blocks = toolName != null
+            ? [ChatBlock.toolCall(toolName: toolName, summary: '')]
+            : <ChatBlock>[];
+        addAssistantMessage(content, toolName: toolName, blocks: blocks);
         break;
       case 'error':
         addErrorMessage(content);
@@ -558,13 +1077,20 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   notifier.setPrefs(prefs);
 
   // Watch the shared WebSocket service
-  ref.listen(sharedWebSocketServiceProvider, (previous, next) {
-    notifier.setWebSocket(next as WebSocketService);
+  ref.listen<WebSocketService?>(sharedWebSocketServiceProvider, (
+    previous,
+    next,
+  ) {
+    if (next != null) {
+      notifier.setWebSocket(next);
+    }
   });
 
   // Set initial WebSocket if already available
   final ws = ref.read(sharedWebSocketServiceProvider);
-  notifier.setWebSocket(ws as WebSocketService);
+  if (ws != null) {
+    notifier.setWebSocket(ws);
+  }
 
   ref.onDispose(() {
     notifier.unwatchChatLog();

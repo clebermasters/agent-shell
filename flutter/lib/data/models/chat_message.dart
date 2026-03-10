@@ -10,7 +10,7 @@ enum ChatMessageType {
   error,
 }
 
-enum ChatBlockType { text, toolCall, toolResult }
+enum ChatBlockType { text, toolCall, toolResult, thinking, image, audio, file }
 
 class ChatBlock extends Equatable {
   final ChatBlockType type;
@@ -19,6 +19,12 @@ class ChatBlock extends Equatable {
   final String? summary;
   final Map<String, dynamic>? input;
   final String? content;
+  final String? id;
+  final String? mimeType;
+  final String? altText;
+  final String? filename;
+  final int? sizeBytes;
+  final double? durationSeconds;
 
   const ChatBlock({
     required this.type,
@@ -27,10 +33,19 @@ class ChatBlock extends Equatable {
     this.summary,
     this.input,
     this.content,
+    this.id,
+    this.mimeType,
+    this.altText,
+    this.filename,
+    this.sizeBytes,
+    this.durationSeconds,
   });
 
   factory ChatBlock.text(String? text) =>
       ChatBlock(type: ChatBlockType.text, text: text ?? '');
+
+  factory ChatBlock.thinking(String? content) =>
+      ChatBlock(type: ChatBlockType.thinking, content: content ?? '');
 
   factory ChatBlock.toolCall({
     String? toolName,
@@ -54,8 +69,56 @@ class ChatBlock extends Equatable {
     summary: summary,
   );
 
+  factory ChatBlock.image({
+    required String id,
+    required String mimeType,
+    String? altText,
+  }) => ChatBlock(
+    type: ChatBlockType.image,
+    id: id,
+    mimeType: mimeType,
+    altText: altText,
+  );
+
+  factory ChatBlock.audio({
+    required String id,
+    required String mimeType,
+    double? durationSeconds,
+  }) => ChatBlock(
+    type: ChatBlockType.audio,
+    id: id,
+    mimeType: mimeType,
+    durationSeconds: durationSeconds,
+  );
+
+  factory ChatBlock.file({
+    required String id,
+    required String filename,
+    required String mimeType,
+    int? sizeBytes,
+  }) => ChatBlock(
+    type: ChatBlockType.file,
+    id: id,
+    filename: filename,
+    mimeType: mimeType,
+    sizeBytes: sizeBytes,
+  );
+
   @override
-  List<Object?> get props => [type, text, toolName, summary, input, content];
+  List<Object?> get props => [
+    type,
+    text,
+    toolName,
+    summary,
+    input,
+    content,
+    id,
+    mimeType,
+    altText,
+    filename,
+    sizeBytes,
+    durationSeconds,
+  ];
 }
 
 class ChatMessage extends Equatable {
@@ -117,6 +180,12 @@ class ChatMessage extends Equatable {
             'summary': b.summary,
             'input': b.input,
             'content': b.content,
+            'id': b.id,
+            'mimeType': b.mimeType,
+            'altText': b.altText,
+            'filename': b.filename,
+            'sizeBytes': b.sizeBytes,
+            'durationSeconds': b.durationSeconds,
           },
         )
         .toList(),
@@ -146,6 +215,12 @@ class ChatMessage extends Equatable {
                 summary: b['summary'] as String?,
                 input: b['input'] as Map<String, dynamic>?,
                 content: b['content'] as String?,
+                id: b['id'] as String?,
+                mimeType: b['mimeType'] as String?,
+                altText: b['altText'] as String?,
+                filename: b['filename'] as String?,
+                sizeBytes: b['sizeBytes'] as int?,
+                durationSeconds: (b['durationSeconds'] as num?)?.toDouble(),
               ),
             )
             .toList() ??

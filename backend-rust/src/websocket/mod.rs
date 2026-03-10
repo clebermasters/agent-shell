@@ -1770,9 +1770,14 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             match list_result {
                 Ok(result) => {
                     info!("ACP sessions: {:?}", result.sessions);
-                    let response = ServerMessage::AcpSessionsListed {
-                        sessions: result.sessions,
-                    };
+                    // Filter out sessions the user has deleted
+                    let deleted_ids = app_state.chat_event_store
+                        .get_deleted_acp_session_ids()
+                        .unwrap_or_default();
+                    let sessions = result.sessions.into_iter()
+                        .filter(|s| !deleted_ids.contains(&s.session_id))
+                        .collect();
+                    let response = ServerMessage::AcpSessionsListed { sessions };
                     send_message(&state.message_tx, response).await?;
                 }
                 Err(e) => {
@@ -2137,10 +2142,14 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             info!("ACP delete session: {}", session_id);
 
             // The opencode ACP protocol has no session/delete method — sessions
-            // persist in the daemon. We only clear our local SQLite history.
+            // persist in the daemon. We clear our local history and blocklist
+            // the session ID so it's filtered out of future list responses.
             let session_key = format!("acp_{}", session_id);
             if let Err(e) = app_state.chat_event_store.clear_messages(&session_key, 0) {
                 warn!("Failed to clear history for deleted ACP session {}: {}", session_id, e);
+            }
+            if let Err(e) = app_state.chat_event_store.mark_acp_session_deleted(&session_id) {
+                warn!("Failed to mark ACP session {} as deleted: {}", session_id, e);
             }
 
             send_message(

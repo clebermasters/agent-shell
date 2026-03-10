@@ -47,6 +47,10 @@ impl ChatEventStore {
 
             CREATE INDEX IF NOT EXISTS idx_chat_events_session_window_time
             ON chat_events(session_name, window_index, timestamp_millis);
+
+            CREATE TABLE IF NOT EXISTS acp_deleted_sessions (
+                session_id TEXT PRIMARY KEY
+            );
             "#,
         )?;
         Ok(())
@@ -237,5 +241,25 @@ impl ChatEventStore {
         )?;
 
         Ok(())
+    }
+
+    pub fn mark_acp_session_deleted(&self, session_id: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO acp_deleted_sessions (session_id) VALUES (?1)",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_deleted_acp_session_ids(&self) -> Result<Vec<String>> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        let mut stmt = conn.prepare("SELECT session_id FROM acp_deleted_sessions")?;
+        let ids = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(ids)
     }
 }

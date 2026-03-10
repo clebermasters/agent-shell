@@ -341,6 +341,10 @@ pub enum WebSocketMessage {
         offset: Option<usize>,
         limit: Option<usize>,
     },
+    AcpClearHistory {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
     // ACP file sending
     SendFileToAcpChat {
         #[serde(rename = "sessionId")]

@@ -341,6 +341,13 @@ pub enum WebSocketMessage {
         offset: Option<usize>,
         limit: Option<usize>,
     },
+    // ACP file sending
+    SendFileToAcpChat {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        file: FileAttachment,
+        prompt: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

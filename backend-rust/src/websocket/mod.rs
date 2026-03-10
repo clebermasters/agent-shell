@@ -1751,6 +1751,107 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 send_message(&state.message_tx, response).await?;
             }
         }
+        WebSocketMessage::SendFileToAcpChat {
+            session_id,
+            file,
+            prompt,
+        } => {
+            info!(
+                "Received file to send to ACP chat: {} ({})",
+                file.filename, file.mime_type
+            );
+
+            // Save file to storage
+            let file_id = match state
+                .chat_file_storage
+                .save_file(&file.data, &file.filename, &file.mime_type)
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    error!("Failed to save file for ACP chat: {}", e);
+                    return Ok(());
+                }
+            };
+
+            // Create content block based on mime type
+            let block = if file.mime_type.starts_with("image/") {
+                crate::chat_log::ContentBlock::Image {
+                    id: file_id,
+                    mime_type: file.mime_type.clone(),
+                    alt_text: Some(file.filename.clone()),
+                }
+            } else if file.mime_type.starts_with("audio/") {
+                crate::chat_log::ContentBlock::Audio {
+                    id: file_id,
+                    mime_type: file.mime_type.clone(),
+                    duration_seconds: None,
+                }
+            } else {
+                crate::chat_log::ContentBlock::File {
+                    id: file_id,
+                    filename: file.filename.clone(),
+                    mime_type: file.mime_type.clone(),
+                    size_bytes: Some((file.data.len() as f64 * 0.75) as u64),
+                }
+            };
+
+            // Build message blocks
+            let mut blocks = Vec::new();
+            let mut prompt_text = String::new();
+            
+            // Add prompt if provided
+            if let Some(ref p) = prompt {
+                if !p.trim().is_empty() {
+                    prompt_text = p.trim().to_string();
+                    blocks.push(crate::chat_log::ContentBlock::Text {
+                        text: p.trim().to_string(),
+                    });
+                }
+            }
+            blocks.push(block);
+
+            let chat_message = crate::chat_log::ChatMessage {
+                role: "user".to_string(),
+                timestamp: Some(chrono::Utc::now()),
+                blocks,
+            };
+
+            // Persist to chat_event_store
+            let session_key = format!("acp_{}", session_id);
+            if let Err(e) = app_state.chat_event_store.append_message(
+                &session_key,
+                0,
+                "webhook-file",
+                &chat_message,
+            ) {
+                warn!("Failed to persist ACP file message: {}", e);
+            }
+
+            // Broadcast to all connected clients
+            let msg = ServerMessage::ChatFileMessage {
+                session_name: session_id.clone(),
+                window_index: 0,
+                message: chat_message,
+            };
+            state.client_manager.broadcast(msg).await;
+
+            // Send prompt to ACP session so AI can see the file
+            if !prompt_text.is_empty() || file.mime_type.starts_with("image/") {
+                let file_ref = format!("[File: {}]", file.filename);
+                let combined = if prompt_text.is_empty() {
+                    file_ref
+                } else {
+                    format!("{}\n\n{}", prompt_text, file_ref)
+                };
+                
+                let acp_guard = app_state.acp_client.read().await;
+                if let Some(client) = acp_guard.as_ref() {
+                    if let Err(e) = client.send_prompt(&session_id, &combined).await {
+                        error!("Failed to send file prompt to ACP: {}", e);
+                    }
+                }
+            }
+        }
         WebSocketMessage::AcpCancelPrompt { session_id } => {
             info!("ACP cancel prompt: {}", session_id);
             

@@ -2,7 +2,7 @@ use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::{TimeZone, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
 use crate::chat_log::ChatMessage;
@@ -88,6 +88,68 @@ impl ChatEventStore {
         )?;
 
         Ok(event_id)
+    }
+
+    /// For streaming text chunks: if the last stored message for this session has the same role
+    /// and is a single Text block, append the new text to it instead of inserting a new row.
+    /// This keeps one DB row per logical message regardless of how many chunks the AI streams.
+    pub fn append_or_merge_text(
+        &self,
+        session_name: &str,
+        window_index: u32,
+        source: &str,
+        role: &str,
+        text: &str,
+    ) -> Result<()> {
+        use crate::chat_log::ContentBlock;
+
+        let conn = Connection::open(&self.db_path)
+            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+
+        // Fetch the last row for this session
+        let last: Option<(String, String)> = conn
+            .query_row(
+                r#"
+                SELECT event_id, message_json FROM chat_events
+                WHERE session_name = ?1 AND window_index = ?2
+                ORDER BY timestamp_millis DESC, rowid DESC
+                LIMIT 1
+                "#,
+                params![session_name, i64::from(window_index)],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        if let Some((event_id, json)) = last {
+            if let Ok(mut msg) = serde_json::from_str::<crate::chat_log::ChatMessage>(&json) {
+                if msg.role == role
+                    && msg.blocks.len() == 1
+                    && matches!(&msg.blocks[0], ContentBlock::Text { .. })
+                {
+                    // Merge: append text to the existing block
+                    if let ContentBlock::Text { text: ref existing } = msg.blocks[0].clone() {
+                        let merged = format!("{}{}", existing, text);
+                        msg.blocks[0] = ContentBlock::Text { text: merged };
+                        let updated_json = serde_json::to_string(&msg)?;
+                        conn.execute(
+                            "UPDATE chat_events SET message_json = ?1 WHERE event_id = ?2",
+                            params![updated_json, event_id],
+                        )?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // No mergeable row found — insert new
+        let message = crate::chat_log::ChatMessage {
+            role: role.to_string(),
+            timestamp: Some(chrono::Utc::now()),
+            blocks: vec![ContentBlock::Text { text: text.to_string() }],
+        };
+        self.append_message(session_name, window_index, source, &message)?;
+        Ok(())
     }
 
     pub fn list_events(

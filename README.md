@@ -1,6 +1,15 @@
 # WebMux
 
-A high-performance web-based TMUX session viewer built with Rust and Vue.js. Access and control your TMUX sessions through a modern browser interface with full PWA support, WebSocket-based real-time communication, and mobile optimization.
+<p align="center">
+  <img src="https://img.shields.io/badge/Rust-DEA584?style=flat&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/Vue.js-4FC08D?style=flat&logo=vuedotjs&logoColor=white" alt="Vue.js">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/OpenCode-FF6B6B?style=flat" alt="OpenCode ACP">
+</p>
+
+A high-performance **web-based TMUX session viewer** built with Rust and Vue.js. Access and control your TMUX sessions through a modern browser interface with full PWA support, WebSocket-based real-time communication, and mobile optimization.
+
+> 🚀 **Now with ACP (Agent Control Protocol) support for OpenCode!** - Control AI-powered development sessions directly from your browser.
 
 ## Features
 
@@ -17,6 +26,60 @@ A high-performance web-based TMUX session viewer built with Rust and Vue.js. Acc
 - **Mobile Optimized**: Touch-friendly interface with iOS safe area support
 - **Network Accessible**: Access via local network or Tailscale IPs
 - **Session Isolation**: Alternative session manager to avoid attachment conflicts
+- **ACP Support**: Full integration with OpenCode for AI-powered development sessions
+
+## ACP with OpenCode
+
+WebMux now supports **ACP (Agent Control Protocol)** - enabling seamless integration with [OpenCode](https://opencode.ai), a powerful AI coding assistant. This feature brings AI-driven development directly to your terminal sessions.
+
+### What is ACP?
+
+ACP is a protocol that allows AI agents to interact with your development environment through WebMux. When you connect OpenCode to WebMux, you get:
+
+- **AI-Powered Sessions**: Create and control development sessions powered by AI agents
+- **Real-time Interaction**: Watch as the AI agent executes commands, makes edits, and interacts with your codebase
+- **Tool Execution**: AI agents can run terminal commands, read/write files, and perform complex development tasks
+- **Permission Control**: Approve or deny tool execution requests from AI agents
+- **Session Persistence**: Resume AI-powered sessions anytime
+
+### Getting Started with OpenCode
+
+1. **Start WebMux backend**:
+   ```bash
+   npm run dev
+   ```
+
+2. **Connect OpenCode**: In your OpenCode configuration, set the WebMux WebSocket URL:
+   ```
+   ws://localhost:4000/ws
+   ```
+   Or with HTTPS in production:
+   ```
+   wss://your-server:3443/ws
+   ```
+
+3. **Start a new ACP session**: Select "ACP" as the backend in the WebMux UI, then create a new session with your desired working directory.
+
+4. **Watch the AI in action**: OpenCode will connect and begin interacting with your development environment in real-time!
+
+### ACP Features
+
+- **Session Management**: Create, resume, fork, and list ACP sessions
+- **Message Streaming**: Real-time streaming of AI thoughts and responses
+- **Tool Calls**: AI agents can execute shell commands, read files, write files, and more
+- **Permission System**: Review and approve/deny tool execution requests
+- **Event History**: All session events are persisted for later review
+
+### Architecture
+
+```
+┌─────────────┐    WebSocket    ┌─────────────┐    ACP    ┌─────────────┐
+│   OpenCode  │◄───────────────►│   WebMux    │◄────────►│  AI Agent   │
+│   (Client)  │                 │  (Backend)  │           │  (Remote)   │
+└─────────────┘                 └─────────────┘           └─────────────┘
+```
+
+The ACP client in WebMux acts as a bridge between OpenCode's WebSocket connection and the remote AI agent service.
 
 ## Android App (Flutter)
 

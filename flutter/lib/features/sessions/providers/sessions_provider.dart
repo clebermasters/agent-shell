@@ -80,6 +80,8 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
       } else if (type == 'acp-session-created') {
         print('FLUTTER: Received acp-session-created, calling refresh()');
         refresh(); // Refresh list after session creation
+      } else if (type == 'acp-session-deleted') {
+        refresh();
       }
     });
 
@@ -106,6 +108,12 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
 
   Future<void> killSession(String name) async {
     _wsService.killSession(name);
+    await Future.delayed(const Duration(milliseconds: 500));
+    refresh();
+  }
+
+  Future<void> deleteAcpSession(String sessionId) async {
+    _wsService.deleteAcpSession(sessionId);
     await Future.delayed(const Duration(milliseconds: 500));
     refresh();
   }

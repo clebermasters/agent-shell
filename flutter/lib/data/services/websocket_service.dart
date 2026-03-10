@@ -307,6 +307,10 @@ class WebSocketService {
     send({'type': 'acp-clear-history', 'sessionId': sessionId});
   }
 
+  void deleteAcpSession(String sessionId) {
+    send({'type': 'acp-delete-session', 'sessionId': sessionId});
+  }
+
   void sendFileToChat({
     required String sessionName,
     required int windowIndex,

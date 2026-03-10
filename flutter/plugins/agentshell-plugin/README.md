@@ -12,8 +12,6 @@ The plugin injects environment variables for every shell command:
 | `AGENTSHELL_ACP_CWD` | Working directory of the ACP session |
 | `AGENTSHELL_WS_URL` | WebSocket URL for AgentShell (default: `ws://localhost:5173/ws`) |
 
-Also supports legacy `WEBMUX_*` variables for backward compatibility.
-
 ## Installation
 
 ```bash
@@ -93,9 +91,9 @@ import os
 
 async def send_file_to_acp(file_path: str):
     # Read from environment variables
-    session_id = os.environ.get('WEBMUX_ACP_SESSION_ID')
-    cwd = os.environ.get('WEBMUX_ACP_CWD')
-    ws_url = os.environ.get('WEBMUX_WS_URL', 'ws://localhost:5173/ws')
+    session_id = os.environ.get('AGENTSHELL_ACP_SESSION_ID')
+    cwd = os.environ.get('AGENTSHELL_ACP_CWD')
+    ws_url = os.environ.get('AGENTSHELL_WS_URL', 'ws://localhost:5173/ws')
     
     if not session_id:
         raise ValueError("No ACP session available")
@@ -119,7 +117,7 @@ To use AgentShell environment in your skill:
 Example:
 
 ```python
-session_id = os.environ.get('WEBMUX_ACP_SESSION_ID')
+session_id = os.environ.get('AGENTSHELL_ACP_SESSION_ID')
 if not session_id:
     # Fallback: list sessions and use most recent
     sessions = await list_acp_sessions()

@@ -356,6 +356,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           mimeType: _selectedFile!.extension ?? 'application/octet-stream',
           base64Data: base64Data,
           prompt: prompt.isNotEmpty ? prompt : null,
+          cwd: widget.cwd.isNotEmpty ? widget.cwd : null,
         );
       } else {
         ws.sendFileToChat(

@@ -392,8 +392,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final windowIndexRaw = message['windowIndex'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
+      print(
+        'DEBUG: _handleChatFileMessage - msg sessionName: $sessionName, windowIndex: $windowIndex',
+      );
+      print(
+        'DEBUG: _handleChatFileMessage - state sessionName: ${state.sessionName}, windowIndex: ${state.windowIndex}',
+      );
+
       if (sessionName != state.sessionName ||
           windowIndex != state.windowIndex) {
+        print('DEBUG: Session mismatch, ignoring file message');
         return;
       }
 
@@ -556,7 +564,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       content = textBlocks.map((b) => b.text ?? '').join('\n');
 
       if (toolBlocks.isNotEmpty) {
-        type = ChatMessageType.tool;
+        type = ChatMessageType.toolCall;
         toolName = toolBlocks.first.toolName;
       } else if (toolResultBlocks.isNotEmpty) {
         type = ChatMessageType.toolResult;
@@ -602,43 +610,58 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     if (content.isEmpty) return;
 
-    final msgType = isThinking
-        ? ChatMessageType.tool
-        : ChatMessageType.assistant;
-
-    // Merge consecutive chunks into the same message
     final messages = List<ChatMessage>.from(state.messages);
-    if (messages.isNotEmpty &&
-        messages.last.type == msgType &&
-        msgType == ChatMessageType.assistant) {
-      // Append to existing assistant message
-      final lastMsg = messages.last;
-      messages[messages.length - 1] = lastMsg.copyWith(
-        content: (lastMsg.content ?? '') + content,
-      );
-    } else {
-      // Create new message
+
+    if (isThinking) {
       messages.add(
         ChatMessage(
           id: _uuid.v4(),
-          type: msgType,
+          type: ChatMessageType.assistant,
           content: content,
           timestamp: DateTime.now(),
+          blocks: [ChatBlock.thinking(content)],
         ),
       );
+    } else {
+      // Merge consecutive text chunks into the same assistant message
+      if (messages.isNotEmpty &&
+          messages.last.type == ChatMessageType.assistant &&
+          messages.last.blocks.isEmpty) {
+        final lastMsg = messages.last;
+        messages[messages.length - 1] = lastMsg.copyWith(
+          content: (lastMsg.content ?? '') + content,
+        );
+      } else {
+        messages.add(
+          ChatMessage(
+            id: _uuid.v4(),
+            type: ChatMessageType.assistant,
+            content: content,
+            timestamp: DateTime.now(),
+          ),
+        );
+      }
     }
 
     state = state.copyWith(messages: messages);
   }
 
   void _handleAcpToolCall(Map<String, dynamic> message) {
+    print('DEBUG: _handleAcpToolCall received: $message');
     final sessionId = message['sessionId'] as String?;
-    if (sessionId != state.sessionName) return;
+    if (sessionId != state.sessionName) {
+      print(
+        'DEBUG: Session mismatch - message: $sessionId, state: ${state.sessionName}',
+      );
+      return;
+    }
 
     final toolCallId = message['toolCallId'] as String? ?? '';
     final title = message['title'] as String? ?? 'Unknown Tool';
     final kind = message['kind'] as String? ?? '';
     final inputStr = message['input'] as String? ?? '';
+
+    print('DEBUG: Processing tool call - title: $title, kind: $kind');
 
     Map<String, dynamic>? inputMap;
     if (inputStr.isNotEmpty) {
@@ -649,20 +672,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
     }
 
-    state = state.copyWith(
-      messages: [
-        ...state.messages,
-        ChatMessage(
-          id: toolCallId,
-          type: ChatMessageType.toolCall,
-          content: 'Tool: $title ($kind)',
-          blocks: [
-            ChatBlock.toolCall(toolName: title, input: inputMap, summary: kind),
-          ],
-          timestamp: DateTime.now(),
-        ),
+    final chatMessage = ChatMessage(
+      id: toolCallId,
+      type: ChatMessageType.toolCall,
+      content: 'Tool: $title ($kind)',
+      blocks: [
+        ChatBlock.toolCall(toolName: title, input: inputMap, summary: kind),
       ],
+      timestamp: DateTime.now(),
     );
+
+    print(
+      'DEBUG: Created chat message with blocks: ${chatMessage.blocks.length}',
+    );
+
+    state = state.copyWith(messages: [...state.messages, chatMessage]);
   }
 
   void _handleAcpToolResult(Map<String, dynamic> message) {
@@ -670,6 +694,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (sessionId != state.sessionName) return;
 
     final toolCallId = message['toolCallId'] as String? ?? '';
+    final status = message['status'] as String? ?? '';
     final output = message['output'] as String? ?? '';
 
     state = state.copyWith(
@@ -680,6 +705,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
           type: ChatMessageType.toolResult,
           content: output,
           timestamp: DateTime.now(),
+          blocks: [ChatBlock.toolResult(content: output, summary: status)],
         ),
       ],
     );
@@ -798,13 +824,27 @@ class ChatNotifier extends StateNotifier<ChatState> {
     addMessage(message);
   }
 
-  void addAssistantMessage(String content, {String? toolName}) {
+  void addAssistantMessage(
+    String content, {
+    String? toolName,
+    List<ChatBlock>? blocks,
+  }) {
+    ChatMessageType messageType;
+    if (toolName != null) {
+      messageType = ChatMessageType.toolCall;
+    } else if (blocks != null && blocks.isNotEmpty) {
+      messageType = ChatMessageType.assistant;
+    } else {
+      messageType = ChatMessageType.assistant;
+    }
+
     final message = ChatMessage(
       id: _uuid.v4(),
-      type: toolName != null ? ChatMessageType.tool : ChatMessageType.assistant,
+      type: messageType,
       content: content,
       timestamp: DateTime.now(),
       toolName: toolName,
+      blocks: blocks ?? [],
     );
     addMessage(message);
   }
@@ -975,7 +1015,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
     switch (type) {
       case 'tool':
         final toolName = _extractToolName(content);
-        addAssistantMessage(content, toolName: toolName);
+        final blocks = toolName != null
+            ? [ChatBlock.toolCall(toolName: toolName, summary: '')]
+            : <ChatBlock>[];
+        addAssistantMessage(content, toolName: toolName, blocks: blocks);
         break;
       case 'error':
         addErrorMessage(content);
@@ -1008,13 +1051,20 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   notifier.setPrefs(prefs);
 
   // Watch the shared WebSocket service
-  ref.listen(sharedWebSocketServiceProvider, (previous, next) {
-    notifier.setWebSocket(next as WebSocketService);
+  ref.listen<WebSocketService?>(sharedWebSocketServiceProvider, (
+    previous,
+    next,
+  ) {
+    if (next != null) {
+      notifier.setWebSocket(next);
+    }
   });
 
   // Set initial WebSocket if already available
   final ws = ref.read(sharedWebSocketServiceProvider);
-  notifier.setWebSocket(ws as WebSocketService);
+  if (ws != null) {
+    notifier.setWebSocket(ws);
+  }
 
   ref.onDispose(() {
     notifier.unwatchChatLog();

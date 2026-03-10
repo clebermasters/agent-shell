@@ -69,7 +69,10 @@ class WebSocketService {
     try {
       final message = jsonDecode(data as String) as Map<String, dynamic>;
       final type = message['type'];
-      if (type != 'output' && type != 'system-stats' && type != 'pong') {
+      if (type != 'output' &&
+          type != 'system-stats' &&
+          type != 'pong' &&
+          type != 'stats') {
         print('WS RECV TYPE: $type');
       }
       _messageController.add(message);

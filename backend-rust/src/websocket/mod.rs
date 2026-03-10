@@ -12,6 +12,7 @@ use std::{
     cmp::Ordering,
     collections::HashMap,
     io::{Read, Write},
+    path::Path,
     sync::Arc,
 };
 use tokio::{
@@ -1755,13 +1756,14 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             session_id,
             file,
             prompt,
+            cwd,
         } => {
             info!(
-                "Received file to send to ACP chat: {} ({})",
-                file.filename, file.mime_type
+                "Received file to send to ACP chat: {} ({}) in cwd: {:?}",
+                file.filename, file.mime_type, cwd
             );
 
-            // Save file to storage
+            // Save file to storage (for display in chat)
             let file_id = match state
                 .chat_file_storage
                 .save_file(&file.data, &file.filename, &file.mime_type)
@@ -1772,6 +1774,23 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                     return Ok(());
                 }
             };
+
+            // Also save to session's working directory (for AI to access)
+            let mut file_path_str: Option<String> = None;
+            if let Some(ref session_cwd) = cwd {
+                match state
+                    .chat_file_storage
+                    .save_file_to_directory(&file.data, &file.filename, &file.mime_type, Path::new(session_cwd))
+                {
+                    Ok(path) => {
+                        info!("File saved to session directory: {:?}", path);
+                        file_path_str = Some(path.to_string_lossy().to_string());
+                    }
+                    Err(e) => {
+                        error!("Failed to save file to session directory: {}", e);
+                    }
+                }
+            }
 
             // Create content block based on mime type
             let block = if file.mime_type.starts_with("image/") {
@@ -1836,12 +1855,12 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             state.client_manager.broadcast(msg).await;
 
             // Send prompt to ACP session so AI can see the file
+            let file_ref = file_path_str.clone().unwrap_or_else(|| format!("[File: {}]", file.filename));
             if !prompt_text.is_empty() || file.mime_type.starts_with("image/") {
-                let file_ref = format!("[File: {}]", file.filename);
                 let combined = if prompt_text.is_empty() {
                     file_ref
                 } else {
-                    format!("{}\n\n{}", prompt_text, file_ref)
+                    format!("{}\n\nHere is the file: {}", prompt_text, file_ref)
                 };
                 
                 let acp_guard = app_state.acp_client.read().await;

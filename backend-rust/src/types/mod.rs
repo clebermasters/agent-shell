@@ -347,6 +347,7 @@ pub enum WebSocketMessage {
         session_id: String,
         file: FileAttachment,
         prompt: Option<String>,
+        cwd: Option<String>,
     },
 }
 

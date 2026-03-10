@@ -323,12 +323,14 @@ class WebSocketService {
     required String mimeType,
     required String base64Data,
     String? prompt,
+    String? cwd,
   }) {
     send({
       'type': 'send-file-to-acp-chat',
       'sessionId': sessionId,
       'file': {'filename': filename, 'mimeType': mimeType, 'data': base64Data},
       'prompt': prompt,
+      'cwd': cwd,
     });
   }
 

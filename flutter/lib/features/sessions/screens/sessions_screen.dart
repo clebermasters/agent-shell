@@ -163,15 +163,8 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                     ),
                   ),
                   ...sessionsState.acpSessions.map(
-                    (session) => ListTile(
-                      leading: const Icon(Icons.smart_toy),
-                      title: Text(
-                        session.title.isEmpty
-                            ? session.cwd.split('/').last
-                            : session.title,
-                      ),
-                      subtitle: Text(session.cwd),
-                      trailing: const Icon(Icons.chevron_right),
+                    (session) => _AcpSessionTile(
+                      session: session,
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute(
@@ -183,6 +176,35 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                             ),
                           ),
                         );
+                      },
+                      onDelete: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Delete ACP Session'),
+                            content: Text(
+                              'Delete session in "${session.cwd.split('/').last}"? This cannot be undone.',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                ),
+                                child: const Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true) {
+                          ref
+                              .read(sessionsProvider.notifier)
+                              .deleteAcpSession(session.sessionId);
+                        }
                       },
                     ),
                   ),
@@ -362,6 +384,48 @@ class _SessionTile extends StatelessWidget {
         ),
         onTap: onAttach,
       ),
+    );
+  }
+}
+
+class _AcpSessionTile extends StatelessWidget {
+  final AcpSession session;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _AcpSessionTile({
+    required this.session,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.smart_toy),
+      title: Text(
+        session.title.isEmpty ? session.cwd.split('/').last : session.title,
+      ),
+      subtitle: Text(session.cwd),
+      trailing: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_vert),
+        onSelected: (value) {
+          if (value == 'delete') onDelete();
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(
+            value: 'delete',
+            child: Row(
+              children: [
+                Icon(Icons.delete, color: Colors.red),
+                SizedBox(width: 8),
+                Text('Delete', style: TextStyle(color: Colors.red)),
+              ],
+            ),
+          ),
+        ],
+      ),
+      onTap: onTap,
     );
   }
 }

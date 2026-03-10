@@ -21,6 +21,7 @@ class ChatState {
   final String? detectedTool;
   final String? sessionName;
   final int? windowIndex;
+  final bool isAcp;
   final bool isRecording;
   final Duration recordingDuration;
   final bool isTranscribing;
@@ -36,6 +37,7 @@ class ChatState {
     this.detectedTool,
     this.sessionName,
     this.windowIndex,
+    this.isAcp = false,
     this.isRecording = false,
     this.recordingDuration = Duration.zero,
     this.isTranscribing = false,
@@ -52,6 +54,7 @@ class ChatState {
     String? detectedTool,
     String? sessionName,
     int? windowIndex,
+    bool? isAcp,
     bool? isRecording,
     Duration? recordingDuration,
     bool? isTranscribing,
@@ -67,6 +70,7 @@ class ChatState {
       detectedTool: detectedTool ?? this.detectedTool,
       sessionName: sessionName ?? this.sessionName,
       windowIndex: windowIndex ?? this.windowIndex,
+      isAcp: isAcp ?? this.isAcp,
       isRecording: isRecording ?? this.isRecording,
       recordingDuration: recordingDuration ?? this.recordingDuration,
       isTranscribing: isTranscribing ?? this.isTranscribing,
@@ -775,6 +779,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       error: null,
       sessionName: sessionName,
       windowIndex: 0,
+      isAcp: true,
     );
 
     _ws!.acpLoadHistory(sessionName, offset: 0, limit: 50);
@@ -905,7 +910,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void clear() {
-    if (state.sessionName != null && state.windowIndex != null && _ws != null) {
+    if (state.isAcp) {
+      // ACP: clear DB via backend, then reset local state
+      if (state.sessionName != null && _ws != null) {
+        _ws!.clearAcpHistory(state.sessionName!);
+      }
+      final sessionName = state.sessionName;
+      state = const ChatState();
+      state = state.copyWith(sessionName: sessionName, windowIndex: 0, isAcp: true);
+    } else if (state.sessionName != null && state.windowIndex != null && _ws != null) {
       _ws!.clearChatLog(state.sessionName!, state.windowIndex!);
     } else {
       state = const ChatState();

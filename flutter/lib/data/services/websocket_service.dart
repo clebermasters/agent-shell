@@ -303,6 +303,10 @@ class WebSocketService {
     });
   }
 
+  void clearAcpHistory(String sessionId) {
+    send({'type': 'acp-clear-history', 'sessionId': sessionId});
+  }
+
   void sendFileToChat({
     required String sessionName,
     required int windowIndex,

@@ -1030,11 +1030,6 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             )
             .await;
 
-            // ACP sessions have no tmux pane — no watcher to restart
-            if session_name.starts_with("acp_") {
-                return Ok(());
-            }
-
             // Restart the watcher with the clear timestamp
             state
                 .current_session
@@ -2130,6 +2125,13 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 has_more,
             };
             send_message(&state.message_tx, response).await?;
+        }
+        WebSocketMessage::AcpClearHistory { session_id } => {
+            info!("ACP clear history: {}", session_id);
+            let session_key = format!("acp_{}", session_id);
+            if let Err(e) = app_state.chat_event_store.clear_messages(&session_key, 0) {
+                warn!("Failed to clear ACP history for {}: {}", session_id, e);
+            }
         }
     }
 

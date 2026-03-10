@@ -66,6 +66,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ws.selectBackend('acp');
         ws.acpResumeSession(widget.sessionName, widget.cwd);
         ref.read(chatProvider.notifier).startAcpChat(widget.sessionName);
+
+        ws.messages.listen((message) {
+          if (message['type'] == 'acp-session-deleted' &&
+              message['sessionId'] == widget.sessionName &&
+              widget.isAcp) {
+            if (mounted) Navigator.of(context).pop();
+          }
+        });
       } else {
         ref
             .read(chatProvider.notifier)
@@ -123,24 +131,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
       if (animate && max - current > 10) {
         _scrollController
-            .animateTo(max,
-                duration: const Duration(milliseconds: 250),
-                curve: Curves.easeOut)
+            .animateTo(
+              max,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut,
+            )
             .then((_) {
-          if (!mounted) {
-            _isProgrammaticScroll = false;
-            return;
-          }
-          // Content may have grown during animation — jump to actual bottom
-          if (_scrollController.hasClients) {
-            final newMax = _scrollController.position.maxScrollExtent;
-            if (_scrollController.position.pixels < newMax - 10) {
-              _scrollController.jumpTo(newMax);
-            }
-          }
-          _isProgrammaticScroll = false;
-          if (mounted) setState(() => _showScrollButton = false);
-        });
+              if (!mounted) {
+                _isProgrammaticScroll = false;
+                return;
+              }
+              // Content may have grown during animation — jump to actual bottom
+              if (_scrollController.hasClients) {
+                final newMax = _scrollController.position.maxScrollExtent;
+                if (_scrollController.position.pixels < newMax - 10) {
+                  _scrollController.jumpTo(newMax);
+                }
+              }
+              _isProgrammaticScroll = false;
+              if (mounted) setState(() => _showScrollButton = false);
+            });
       } else {
         _scrollController.jumpTo(max);
         _isProgrammaticScroll = false;

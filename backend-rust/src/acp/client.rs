@@ -459,6 +459,24 @@ impl AcpClient {
         self.send_request_raw(id, request).await
     }
 
+    pub async fn delete_session(&self, session_id: &str) -> Result<sj::Value, String> {
+        let id = {
+            let mut guard = self.request_id.lock().await;
+            let id = *guard;
+            *guard += 1;
+            id
+        };
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: serde_json::json!(id),
+            method: "session/delete".to_string(),
+            params: Some(serde_json::json!({ "sessionId": session_id })),
+        };
+
+        self.send_request_raw(id, request).await
+    }
+
     pub async fn respond_to_permission(&self, request_id: &str, option_id: &str) -> Result<sj::Value, String> {
         let id = {
             let mut guard = self.request_id.lock().await;

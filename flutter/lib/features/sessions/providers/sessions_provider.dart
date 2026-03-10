@@ -113,6 +113,7 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
   }
 
   Future<void> deleteAcpSession(String sessionId) async {
+    _wsService.selectBackend('acp');
     _wsService.deleteAcpSession(sessionId);
     await Future.delayed(const Duration(milliseconds: 500));
     refresh();

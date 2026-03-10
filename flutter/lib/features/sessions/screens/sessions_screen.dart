@@ -18,6 +18,59 @@ class SessionsScreen extends ConsumerStatefulWidget {
 }
 
 class _SessionsScreenState extends ConsumerState<SessionsScreen> {
+  final Set<String> _selectedIds = {};
+  bool _isSelecting = false;
+
+  void _enterSelectionMode(String sessionId) {
+    setState(() {
+      _isSelecting = true;
+      _selectedIds.add(sessionId);
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _isSelecting = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelection(String sessionId) {
+    setState(() {
+      if (_selectedIds.contains(sessionId)) {
+        _selectedIds.remove(sessionId);
+        if (_selectedIds.isEmpty) _isSelecting = false;
+      } else {
+        _selectedIds.add(sessionId);
+      }
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    final ids = List<String>.from(_selectedIds);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Sessions'),
+        content: Text('Delete ${ids.length} session${ids.length == 1 ? '' : 's'}? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      for (final id in ids) {
+        ref.read(sessionsProvider.notifier).deleteAcpSession(id);
+      }
+      _exitSelectionMode();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -32,7 +85,22 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
     final hostsState = ref.watch(hostsProvider);
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: _isSelecting
+          ? AppBar(
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _exitSelectionMode,
+              ),
+              title: Text('${_selectedIds.length} selected'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.delete, color: Colors.red),
+                  onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
+                  tooltip: 'Delete selected',
+                ),
+              ],
+            )
+          : AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -166,18 +234,25 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                   ...sessionsState.acpSessions.map(
                     (session) => _AcpSessionTile(
                       session: session,
+                      isSelecting: _isSelecting,
+                      isSelected: _selectedIds.contains(session.sessionId),
                       onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => ChatScreen(
-                              sessionName: session.sessionId,
-                              windowIndex: 0,
-                              isAcp: true,
-                              cwd: session.cwd,
+                        if (_isSelecting) {
+                          _toggleSelection(session.sessionId);
+                        } else {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ChatScreen(
+                                sessionName: session.sessionId,
+                                windowIndex: 0,
+                                isAcp: true,
+                                cwd: session.cwd,
+                              ),
                             ),
-                          ),
-                        );
+                          );
+                        }
                       },
+                      onLongPress: () => _enterSelectionMode(session.sessionId),
                       onDelete: () async {
                         final confirmed = await showDialog<bool>(
                           context: context,
@@ -392,32 +467,45 @@ class _SessionTile extends StatelessWidget {
 class _AcpSessionTile extends StatelessWidget {
   final AcpSession session;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
   final VoidCallback onDelete;
+  final bool isSelecting;
+  final bool isSelected;
 
   const _AcpSessionTile({
     required this.session,
     required this.onTap,
+    required this.onLongPress,
     required this.onDelete,
+    required this.isSelecting,
+    required this.isSelected,
   });
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      leading: const Icon(Icons.smart_toy),
+      leading: isSelecting
+          ? Checkbox(
+              value: isSelected,
+              onChanged: (_) => onTap(),
+            )
+          : const Icon(Icons.smart_toy),
       title: Text(
         session.title.isEmpty ? session.cwd.split('/').last : session.title,
       ),
       subtitle: Text(session.cwd),
-      trailing: PopupMenuButton<String>(
-        icon: const Icon(Icons.more_vert),
-        onSelected: (value) {
-          if (value == 'delete') onDelete();
-        },
-        itemBuilder: (_) => [
-          const PopupMenuItem(
-            value: 'delete',
-            child: Row(
-              children: [
+      trailing: isSelecting
+          ? null
+          : PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              onSelected: (value) {
+                if (value == 'delete') onDelete();
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
                 Icon(Icons.delete, color: Colors.red),
                 SizedBox(width: 8),
                 Text('Delete', style: TextStyle(color: Colors.red)),
@@ -427,6 +515,7 @@ class _AcpSessionTile extends StatelessWidget {
         ],
       ),
       onTap: onTap,
+      onLongPress: onLongPress,
     );
   }
 }

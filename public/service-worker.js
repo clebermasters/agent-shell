@@ -1,5 +1,5 @@
 // Basic service worker for offline support
-const CACHE_NAME = 'webmux-v1';
+const CACHE_NAME = 'agentshell-v1';
 const urlsToCache = [
   '/',
   '/manifest.json',

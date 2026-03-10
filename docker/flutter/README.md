@@ -1,4 +1,4 @@
-# WebMux Flutter Build Setup
+# AgentShell Flutter Build Setup
 
 This directory contains Dockerfiles for building a native Flutter Android app.
 
@@ -29,7 +29,7 @@ docker/flutter-base/
 
 ```bash
 cd docker/flutter-base
-docker build -t webmux-flutter-base:latest .
+docker build -t agentshell-flutter-base:latest .
 ```
 
 ### Option 2: Build APK
@@ -40,7 +40,7 @@ cd docker/flutter
 docker-compose build flutter-builder
 
 # Or directly
-docker build -t webmux-flutter-builder -f Dockerfile ../..
+docker build -t agentshell-flutter-builder -f Dockerfile ../..
 ```
 
 ### Option 3: Development Mode
@@ -53,7 +53,7 @@ docker run -it --rm \
   -v /path/to/project/flutter:/app \
   -p 5900:5900 \
   -p 5037:5037 \
-  webmux-flutter-base:latest \
+  agentshell-flutter-base:latest \
   bash
 ```
 
@@ -68,11 +68,11 @@ The base image sets:
 
 The built APK will be in:
 - `flutter-output/` (docker volume)
-- Or `/output/webmux-flutter-debug.apk` inside the container
+- Or `/output/agentshell-flutter-debug.apk` inside the container
 
 ## Next Steps
 
-1. Create Flutter project: `flutter create --org com.webmux --project-name webmux webmux`
+1. Create Flutter project: `flutter create --org com.agentshell --project-name agentshell agentshell`
 2. Add required dependencies to `pubspec.yaml`
 3. Implement features (see assessment plan for complexity)
 4. Build with Docker or locally

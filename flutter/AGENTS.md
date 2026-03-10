@@ -1,8 +1,8 @@
-# AGENTS.md - WebMux Flutter Development Guide
+# AGENTS.md - AgentShell Flutter Development Guide
 
 ## Project Overview
 
-WebMux is a Flutter application providing terminal management and related features. It uses **Riverpod** for state management, follows a **feature-based** directory structure, and targets Android (APK builds).
+AgentShell is a Flutter application providing terminal management and related features. It uses **Riverpod** for state management, follows a **feature-based** directory structure, and targets Android (APK builds).
 
 ## Build Commands
 
@@ -23,8 +23,8 @@ All Flutter builds use Docker via the [`flutter/build.sh`](flutter/build.sh) scr
 ```
 
 The script will output the APK to the project root:
-- `webmux-flutter-debug.apk`
-- `webmux-flutter-release.apk`
+- `agentshell-flutter-debug.apk`
+- `agentshell-flutter-release.apk`
 
 The build script also reads from a `.env` file in the project root for:
 - `SERVER_LIST` - Default server list

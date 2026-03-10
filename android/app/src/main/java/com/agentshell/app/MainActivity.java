@@ -1,4 +1,4 @@
-package com.webmux.app;
+package com.agentshell.app;
 
 import com.getcapacitor.BridgeActivity;
 

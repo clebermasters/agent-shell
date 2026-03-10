@@ -1,21 +1,21 @@
 #!/bin/bash
 
 ACTION="${1:-start}"
-SERVICE_NAME="webmux"
+SERVICE_NAME="agentshell"
 
 case "$ACTION" in
     start)
-        echo "Starting WebMux service..."
+        echo "Starting AgentShell service..."
         sudo systemctl start "$SERVICE_NAME"
         echo "Service started."
         ;;
     stop)
-        echo "Stopping WebMux service..."
+        echo "Stopping AgentShell service..."
         sudo systemctl stop "$SERVICE_NAME"
         echo "Service stopped."
         ;;
     restart)
-        echo "Restarting WebMux service..."
+        echo "Restarting AgentShell service..."
         sudo systemctl restart "$SERVICE_NAME"
         echo "Service restarted."
         ;;

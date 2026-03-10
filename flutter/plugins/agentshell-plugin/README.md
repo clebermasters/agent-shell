@@ -1,6 +1,6 @@
-# WebMux Plugin for OpenCode
+# AgentShell Plugin for OpenCode
 
-This plugin provides WebMux environment variables to OpenCode skills, enabling skills to automatically send files to the current ACP chat session.
+This plugin provides AgentShell environment variables to OpenCode skills, enabling skills to automatically send files to the current ACP chat session.
 
 ## What It Does
 
@@ -8,20 +8,22 @@ The plugin injects environment variables for every shell command:
 
 | Variable | Description |
 |----------|-------------|
-| `WEBMUX_ACP_SESSION_ID` | Current ACP session ID (e.g., `ses_xxx`) |
-| `WEBMUX_ACP_CWD` | Working directory of the ACP session |
-| `WEBMUX_WS_URL` | WebSocket URL for WebMux (default: `ws://localhost:5173/ws`) |
+| `AGENTSHELL_ACP_SESSION_ID` | Current ACP session ID (e.g., `ses_xxx`) |
+| `AGENTSHELL_ACP_CWD` | Working directory of the ACP session |
+| `AGENTSHELL_WS_URL` | WebSocket URL for AgentShell (default: `ws://localhost:5173/ws`) |
+
+Also supports legacy `WEBMUX_*` variables for backward compatibility.
 
 ## Installation
 
 ```bash
-cd /path/to/webmux/flutter/plugins/webmux-plugin
+cd /path/to/agentshell/flutter/plugins/agentshell-plugin
 ./install.sh
 ```
 
 This will:
-1. Create a symlink in `~/.config/opencode/plugins/webmux.js`
-2. Create the session directory `~/.webmux/`
+1. Create a symlink in `~/.config/opencode/plugins/agentshell.js`
+2. Create the session directory `~/.agentshell/`
 3. Create a placeholder session file
 
 ## Uninstallation
@@ -34,7 +36,7 @@ This will:
 
 ### Session File
 
-The plugin reads session information from `~/.webmux/acp_session`:
+The plugin reads session information from `~/.agentshell/acp_session`:
 
 ```json
 {
@@ -46,11 +48,11 @@ The plugin reads session information from `~/.webmux/acp_session`:
 
 ### Updating the Session
 
-When you open an ACP session in the WebMux Flutter app, the session file should be updated. There are several ways to do this:
+When you open an ACP session in the AgentShell Flutter app, the session file should be updated. There are several ways to do this:
 
 #### Option 1: Backend Update (Recommended)
 
-The WebMux backend can write to the session file when a client connects. Add this to your backend:
+The AgentShell backend can write to the session file when a client connects. Add this to your backend:
 
 ```rust
 // When ACP session is resumed/created
@@ -79,7 +81,7 @@ Process.run('adb', ['shell', 'echo', sessionJson, '>', '/data/local/tmp/acp_sess
 For testing, you can manually update:
 
 ```bash
-echo '{"sessionId": "ses_xxx", "cwd": "/path", "wsUrl": "ws://localhost:5173/ws"}' > ~/.webmux/acp_session
+echo '{"sessionId": "ses_xxx", "cwd": "/path", "wsUrl": "ws://localhost:5173/ws"}' > ~/.agentshell/acp_session
 ```
 
 ## Using in Skills
@@ -108,7 +110,7 @@ async def send_file_to_acp(file_path: str):
 
 ## For Skill Developers
 
-To use WebMux environment in your skill:
+To use AgentShell environment in your skill:
 
 1. The skill will automatically have access to the env vars when running in OpenCode
 2. Check for the vars and use sensible defaults if not set
@@ -128,13 +130,13 @@ if not session_id:
 
 - OpenCode with plugin support
 - Access to `~/.config/opencode/plugins/` directory
-- Write access to `~/.webmux/` directory
+- Write access to `~/.agentshell/` directory
 
 ## Files
 
 ```
-webmux-plugin/
-├── webmux.js      # Main plugin file
+agentshell-plugin/
+├── agentshell.js      # Main plugin file
 ├── install.sh     # Installation script
 ├── uninstall.sh   # Uninstallation script
 └── README.md      # This file
@@ -142,4 +144,4 @@ webmux-plugin/
 
 ## License
 
-Same as WebMux project.
+Same as AgentShell project.

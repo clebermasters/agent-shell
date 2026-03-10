@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
-# WebMux Plugin Uninstaller for OpenCode
+# AgentShell Plugin Uninstaller for OpenCode
 #
-# This script removes the WebMux plugin from OpenCode.
+# This script removes the AgentShell plugin from OpenCode.
 #
 
 set -euo pipefail
 
 OPENCODE_PLUGINS_DIR="${HOME}/.config/opencode/plugins"
-PLUGIN_TARGET="${OPENCODE_PLUGINS_DIR}/webmux.js"
-SESSION_FILE="${HOME}/.webmux/acp_session"
+PLUGIN_TARGET="${OPENCODE_PLUGINS_DIR}/agentshell.js"
+SESSION_FILE="${HOME}/.agentshell/acp_session"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -21,10 +21,10 @@ log_info() {
 
 # Remove plugin symlink
 if [ -e "$PLUGIN_TARGET" ]; then
-    log_info "Removing WebMux plugin: $PLUGIN_TARGET"
+    log_info "Removing AgentShell plugin: $PLUGIN_TARGET"
     rm -f "$PLUGIN_TARGET"
 else
-    log_info "WebMux plugin not found, nothing to remove"
+    log_info "AgentShell plugin not found, nothing to remove"
 fi
 
 # Optionally remove session file (ask user)
@@ -37,4 +37,4 @@ if [ -f "$SESSION_FILE" ]; then
     fi
 fi
 
-log_info "WebMux plugin uninstalled successfully!"
+log_info "AgentShell plugin uninstalled successfully!"

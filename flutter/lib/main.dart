@@ -27,13 +27,13 @@ void main() async {
   runApp(
     ProviderScope(
       overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
-      child: const WebMuxApp(),
+      child: const AgentShellApp(),
     ),
   );
 }
 
-class WebMuxApp extends ConsumerWidget {
-  const WebMuxApp({super.key});
+class AgentShellApp extends ConsumerWidget {
+  const AgentShellApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

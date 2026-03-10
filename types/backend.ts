@@ -1,5 +1,5 @@
 /**
- * WebMux Backend-Specific TypeScript Type Definitions
+ * AgentShell Backend-Specific TypeScript Type Definitions
  * Types specific to the Node.js backend implementation
  */
 
@@ -242,16 +242,16 @@ export enum ErrorCode {
 }
 
 /**
- * WebMux error class
+ * AgentShell error class
  */
-export class WebMuxError extends Error {
+export class AgentShellError extends Error {
   constructor(
     public code: ErrorCode,
     message: string,
     public details?: any
   ) {
     super(message);
-    this.name = 'WebMuxError';
+    this.name = 'AgentShellError';
   }
 }
 
@@ -275,7 +275,7 @@ export interface SessionEventMap {
   'session:detached': (sessionName: string, clientId: string) => void;
   'client:connected': (clientId: string) => void;
   'client:disconnected': (clientId: string) => void;
-  'error': (error: WebMuxError) => void;
+  'error': (error: AgentShellError) => void;
 }
 
 /**

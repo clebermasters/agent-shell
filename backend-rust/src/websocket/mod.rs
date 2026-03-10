@@ -34,15 +34,16 @@ fn write_acp_session_file(session_id: &str, cwd: &str) {
         Err(_) => return,
     };
     
-    let session_dir = home.join(".webmux");
+    let session_dir = home.join(".agentshell");
     let session_file = session_dir.join("acp_session");
     
     if let Err(e) = std::fs::create_dir_all(&session_dir) {
-        warn!("Failed to create .webmux directory: {}", e);
+        warn!("Failed to create .agentshell directory: {}", e);
         return;
     }
     
-    let ws_url = std::env::var("WEBMUX_WS_URL")
+    let ws_url = std::env::var("AGENTSHELL_WS_URL")
+        .or_else(|_| std::env::var("WEBMUX_WS_URL"))
         .unwrap_or_else(|_| "ws://localhost:5173/ws".to_string());
     
     let session_json = serde_json::json!({

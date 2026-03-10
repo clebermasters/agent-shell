@@ -450,7 +450,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     required String body,
   }) async {
     const androidDetails = AndroidNotificationDetails(
-      'webmux_chat',
+      'agentshell_chat',
       'Chat Messages',
       channelDescription: 'Notifications for new chat messages',
       importance: Importance.high,
@@ -917,8 +917,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
       final sessionName = state.sessionName;
       state = const ChatState();
-      state = state.copyWith(sessionName: sessionName, windowIndex: 0, isAcp: true);
-    } else if (state.sessionName != null && state.windowIndex != null && _ws != null) {
+      state = state.copyWith(
+        sessionName: sessionName,
+        windowIndex: 0,
+        isAcp: true,
+      );
+    } else if (state.sessionName != null &&
+        state.windowIndex != null &&
+        _ws != null) {
       _ws!.clearChatLog(state.sessionName!, state.windowIndex!);
     } else {
       state = const ChatState();

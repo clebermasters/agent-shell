@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.webmux"
+    namespace = "com.agentshell.app"
     compileSdk = flutter.compileSdkVersion
     
     // NDK version required by flutter_pty and other plugins
@@ -23,7 +23,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.webmux"
+        applicationId = "com.agentshell.app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

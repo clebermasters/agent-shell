@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-IMAGE_NAME="webmux-android-builder"
-BASE_IMAGE_NAME="webmux-android-base"
-CONTAINER_NAME="webmux-build-$$"
+IMAGE_NAME="agentshell-android-builder"
+BASE_IMAGE_NAME="agentshell-android-base"
+CONTAINER_NAME="agentshell-build-$$"
 OUTPUT_DIR="output"
 
 echo "=========================================="
-echo "WebMux Android APK Builder"
+echo "AgentShell Android APK Builder"
 echo "=========================================="
 
 # Create output directory

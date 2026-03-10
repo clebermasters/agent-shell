@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# WebMux Flutter Build Script
+# AgentShell Flutter Build Script
 # Features:
 # - Supports both debug and release builds
 # - Uses all available CPU cores for parallel compilation
@@ -82,8 +82,8 @@ fi
 
 # S3 configuration
 S3_BUCKET="s3://images.bitslovers.com/temp"
-S3_KEY="webmux-flutter-${BUILD_TYPE}.apk"
-APK_FILENAME="webmux-flutter-${BUILD_TYPE}.apk"
+S3_KEY="agentshell-flutter-${BUILD_TYPE}.apk"
+APK_FILENAME="agentshell-flutter-${BUILD_TYPE}.apk"
 
 echo "Building Flutter ${BUILD_TYPE} APK..."
 echo "  Build type: $BUILD_TYPE"
@@ -107,7 +107,7 @@ set -o pipefail
 
 # Build the image with BUILD_TYPE argument and optional env vars
 DOCKER_BUILDKIT=1 docker build \
-    -t webmux-flutter-builder:latest \
+    -t agentshell-flutter-builder:latest \
     -f "$DOCKER_DIR/Dockerfile" \
     "$PROJECT_ROOT" \
     --progress=plain \
@@ -120,11 +120,11 @@ DOCKER_BUILDKIT=1 docker build \
 # Check if build was successful
 if [ $? -eq 0 ]; then
     # Remove old APK to be sure we get the new one
-    rm -f "$PROJECT_ROOT/webmux-flutter-debug.apk" "$PROJECT_ROOT/webmux-flutter-release.apk"
+    rm -f "$PROJECT_ROOT/agentshell-flutter-debug.apk" "$PROJECT_ROOT/agentshell-flutter-release.apk"
 
     # Copy APK to project root
     echo "Copying APK to project root..."
-    CONTAINER_ID=$(docker create webmux-flutter-builder:latest)
+    CONTAINER_ID=$(docker create agentshell-flutter-builder:latest)
     docker cp "$CONTAINER_ID:/$APK_FILENAME" "$PROJECT_ROOT/$APK_FILENAME"
     docker rm "$CONTAINER_ID"
 

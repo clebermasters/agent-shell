@@ -1,0 +1,14 @@
+#!/bin/bash
+# Wrapper to run Codex CLI with JSON output logging for AgentShell chat view.
+# Usage: agentshell-codex [codex args...]
+#
+# Logs NDJSON to /tmp/agentshell-codex-<PID>.jsonl so AgentShell can parse it.
+
+LOG_FILE="/tmp/agentshell-codex-$$.jsonl"
+
+cleanup() {
+    rm -f "$LOG_FILE"
+}
+trap cleanup EXIT
+
+codex --json "$@" 2>&1 | tee "$LOG_FILE"

@@ -9,9 +9,10 @@ Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
 
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'webmux_background', // id
-    'WebMux Background Service', // name
-    description: 'This channel is used for maintaining the terminal connection.', // description
+    'agentshell_background', // id
+    'AgentShell Background Service', // name
+    description:
+        'This channel is used for maintaining the terminal connection.', // description
     importance: Importance.low, // low importance so it doesn't ring/vibrate
   );
 
@@ -26,7 +27,8 @@ Future<void> initializeBackgroundService() async {
 
   await flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
+        AndroidFlutterLocalNotificationsPlugin
+      >()
       ?.createNotificationChannel(channel);
 
   await service.configure(
@@ -36,8 +38,8 @@ Future<void> initializeBackgroundService() async {
       // auto start service
       autoStart: false,
       isForegroundMode: true,
-      notificationChannelId: 'webmux_background',
-      initialNotificationTitle: 'WebMux',
+      notificationChannelId: 'agentshell_background',
+      initialNotificationTitle: 'AgentShell',
       initialNotificationContent: 'Connected to terminal',
       foregroundServiceNotificationId: 888,
     ),
@@ -82,13 +84,13 @@ void onStart(ServiceInstance service) async {
   // we just keep this isolate running. The main isolate contains the websocket.
   // Note: For flutter_background_service, this actually runs in a separate isolate.
   // But setting it to foreground mode forces Android to keep the *entire app process* alive!
-  
+
   Timer.periodic(const Duration(seconds: 1), (timer) async {
     if (service is AndroidServiceInstance) {
       if (await service.isForegroundService()) {
         // We can update notification content here if needed
         // service.setForegroundNotificationInfo(
-        //   title: "WebMux",
+        //   title: "AgentShell",
         //   content: "Terminal active",
         // );
       }

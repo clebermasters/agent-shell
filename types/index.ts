@@ -1,5 +1,5 @@
 /**
- * WebMux TypeScript Type Definitions
+ * AgentShell TypeScript Type Definitions
  * Shared types for both backend and frontend
  */
 

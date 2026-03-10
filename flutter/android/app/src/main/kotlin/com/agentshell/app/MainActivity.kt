@@ -1,4 +1,4 @@
-package com.example.webmux
+package com.agentshell.app
 
 import io.flutter.embedding.android.FlutterActivity
 

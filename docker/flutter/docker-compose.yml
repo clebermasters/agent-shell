@@ -1,4 +1,4 @@
-# Docker Compose for WebMux Flutter Builds
+# Docker Compose for AgentShell Flutter Builds
 
 version: '3.8'
 
@@ -8,7 +8,7 @@ services:
     build:
       context: ../..
       dockerfile: docker/flutter/Dockerfile
-    image: webmux-flutter-builder:latest
+    image: agentshell-flutter-builder:latest
     volumes:
       - flutter-output:/app/build/app/outputs/flutter-apk
       - pub-cache:/root/.pub-cache

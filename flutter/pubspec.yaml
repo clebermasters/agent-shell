@@ -1,5 +1,5 @@
-name: webmux
-description: "WebMux - Terminal management and more"
+name: agentshell
+description: "AgentShell - Terminal management and more"
 publish_to: 'none'
 version: 1.0.0+1
 

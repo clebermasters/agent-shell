@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 #
-# WebMux Plugin Installer for OpenCode
+# AgentShell Plugin Installer for OpenCode
 #
-# This script installs the WebMux plugin to OpenCode's plugins directory.
-# The plugin provides WebMux environment variables to skills.
+# This script installs the AgentShell plugin to OpenCode's plugins directory.
+# The plugin provides AgentShell environment variables to skills.
 #
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-PLUGIN_SOURCE="${SCRIPT_DIR}/webmux.js"
+PLUGIN_SOURCE="${SCRIPT_DIR}/agentshell.js"
 OPENCODE_PLUGINS_DIR="${HOME}/.config/opencode/plugins"
-PLUGIN_TARGET="${OPENCODE_PLUGINS_DIR}/webmux.js"
-SESSION_DIR="${HOME}/.webmux"
+PLUGIN_TARGET="${OPENCODE_PLUGINS_DIR}/agentshell.js"
+SESSION_DIR="${HOME}/.agentshell"
 
 # Colors for output
 RED='\033[0;31m'
@@ -51,12 +51,12 @@ if [ -e "$PLUGIN_TARGET" ]; then
 fi
 
 # Create symlink to plugin
-log_info "Installing WebMux plugin..."
+log_info "Installing AgentShell plugin..."
 ln -s "$PLUGIN_SOURCE" "$PLUGIN_TARGET"
 
 # Create session directory if it doesn't exist
 if [ ! -d "$SESSION_DIR" ]; then
-    log_info "Creating WebMux session directory: $SESSION_DIR"
+    log_info "Creating AgentShell session directory: $SESSION_DIR"
     mkdir -p "$SESSION_DIR"
 fi
 
@@ -72,12 +72,12 @@ if [ ! -f "${SESSION_DIR}/acp_session" ]; then
 EOF
 fi
 
-log_info "WebMux plugin installed successfully!"
+log_info "AgentShell plugin installed successfully!"
 echo ""
 echo "Plugin location: $PLUGIN_TARGET"
 echo "Session file: ${SESSION_DIR}/acp_session"
 echo ""
 echo "To update the current ACP session, write to the session file:"
-echo '  echo '\''{"sessionId": "ses_xxx", "cwd": "/path", "wsUrl": "ws://localhost:5173/ws"}'\'' > ~/.webmux/acp_session'
+echo '  echo '\''{"sessionId": "ses_xxx", "cwd": "/path", "wsUrl": "ws://localhost:5173/ws"}'\'' > ~/.agentshell/acp_session'
 echo ""
-echo "Or use the WebMux backend to automatically update it."
+echo "Or use the AgentShell backend to automatically update it."

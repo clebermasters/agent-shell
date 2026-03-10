@@ -1,4 +1,4 @@
-// Global type declarations for WebMux
+// Global type declarations for AgentShell
 
 // Session types
 export interface TmuxSession {

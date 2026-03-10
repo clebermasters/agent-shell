@@ -309,7 +309,7 @@ impl DotFilesManager {
         } else if let Some(parent) = path.parent() {
             // Check if parent directory is writable
             parent.exists() && {
-                let test_file = parent.join(".webmux_write_test");
+                let test_file = parent.join(".agentshell_write_test");
                 let result = fs::write(&test_file, "test").is_ok();
                 let _ = fs::remove_file(&test_file);
                 result

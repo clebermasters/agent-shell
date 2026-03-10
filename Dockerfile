@@ -1,8 +1,8 @@
-# WebMux Android Builder
+# AgentShell Android Builder
 # Uses the base image with Android SDK and Node.js
 
 # Build from the base image (build this once and cache it)
-FROM webmux-android-base:latest AS builder
+FROM agentshell-android-base:latest AS builder
 
 # Set working directory
 WORKDIR /app

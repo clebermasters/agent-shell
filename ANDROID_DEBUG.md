@@ -1,4 +1,4 @@
-# WebMux Android App - Build & Debug Notes
+# AgentShell Android App - Build & Debug Notes
 
 ## Problem
 Android WebView couldn't connect to the backend server at `192.168.0.76:4010`. The error was:
@@ -43,8 +43,8 @@ Should show: `res/xml/networksecurity.xml`
 ## Build & Upload
 ```bash
 # Build APK
-docker build --no-cache -t webmux-android-builder -f Dockerfile .
-docker cp $(docker create webmux-android-builder:latest):/app/android/app/build/outputs/apk/debug/app-debug.apk output/app-debug.apk
+docker build --no-cache -t agentshell-android-builder -f Dockerfile .
+docker cp $(docker create agentshell-android-builder:latest):/app/android/app/build/outputs/apk/debug/app-debug.apk output/app-debug.apk
 
 # Upload to S3
 aws s3 cp output/app-debug.apk s3://images.bitslovers.com/temp/app-debug.apk

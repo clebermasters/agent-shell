@@ -1,4 +1,4 @@
-# WebMux
+# AgentShell
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-DEA584?style=flat&logo=rust&logoColor=white" alt="Rust">
@@ -30,11 +30,11 @@ A high-performance **web-based TMUX session viewer** built with Rust and Vue.js.
 
 ## ACP with OpenCode
 
-WebMux now supports **ACP (Agent Control Protocol)** - enabling seamless integration with [OpenCode](https://opencode.ai), a powerful AI coding assistant. This feature brings AI-driven development directly to your terminal sessions.
+AgentShell now supports **ACP (Agent Control Protocol)** - enabling seamless integration with [OpenCode](https://opencode.ai), a powerful AI coding assistant. This feature brings AI-driven development directly to your terminal sessions.
 
 ### What is ACP?
 
-ACP is a protocol that allows AI agents to interact with your development environment through WebMux. When you connect OpenCode to WebMux, you get:
+ACP is a protocol that allows AI agents to interact with your development environment through AgentShell. When you connect OpenCode to AgentShell, you get:
 
 - **AI-Powered Sessions**: Create and control development sessions powered by AI agents
 - **Real-time Interaction**: Watch as the AI agent executes commands, makes edits, and interacts with your codebase
@@ -44,12 +44,12 @@ ACP is a protocol that allows AI agents to interact with your development enviro
 
 ### Getting Started with OpenCode
 
-1. **Start WebMux backend**:
+1. **Start AgentShell backend**:
    ```bash
    npm run dev
    ```
 
-2. **Connect OpenCode**: In your OpenCode configuration, set the WebMux WebSocket URL:
+2. **Connect OpenCode**: In your OpenCode configuration, set the AgentShell WebSocket URL:
    ```
    ws://localhost:4000/ws
    ```
@@ -58,7 +58,7 @@ ACP is a protocol that allows AI agents to interact with your development enviro
    wss://your-server:3443/ws
    ```
 
-3. **Start a new ACP session**: Select "ACP" as the backend in the WebMux UI, then create a new session with your desired working directory.
+3. **Start a new ACP session**: Select "ACP" as the backend in the AgentShell UI, then create a new session with your desired working directory.
 
 4. **Watch the AI in action**: OpenCode will connect and begin interacting with your development environment in real-time!
 
@@ -74,20 +74,20 @@ ACP is a protocol that allows AI agents to interact with your development enviro
 
 ```
 ┌─────────────┐    WebSocket    ┌─────────────┐    ACP    ┌─────────────┐
-│   OpenCode  │◄───────────────►│   WebMux    │◄────────►│  AI Agent   │
+│   OpenCode  │◄───────────────►│ AgentShell  │◄────────►│  AI Agent   │
 │   (Client)  │                 │  (Backend)  │           │  (Remote)   │
 └─────────────┘                 └─────────────┘           └─────────────┘
 ```
 
-The ACP client in WebMux acts as a bridge between OpenCode's WebSocket connection and the remote AI agent service.
+The ACP client in AgentShell acts as a bridge between OpenCode's WebSocket connection and the remote AI agent service.
 
 ## Android App (Flutter)
 
-WebMux now includes a high-performance **Android application** built with Flutter. This app allows you to control your Tmux sessions directly from your phone **without needing SSH**, providing a more secure and mobile-optimized experience than traditional terminal emulators.
+AgentShell now includes a high-performance **Android application** built with Flutter. This app allows you to control your Tmux sessions directly from your phone **without needing SSH**, providing a more secure and mobile-optimized experience than traditional terminal emulators.
 
 ### Key Features
 
-- **SSH-Free Access**: Connect directly to the WebMux backend via WebSocket.
+- **SSH-Free Access**: Connect directly to the AgentShell backend via WebSocket.
 - **Terminal Accessory Bar**: A horizontally scrollable bar featuring `CTRL`, `ALT`, `ESC`, `TAB`, arrow keys, and `F1-F12` for effortless Tmux shortcuts.
 - **Enhanced Native Keyboard**: Optimized support for the native Android keyboard, including "sticky" modifiers (e.g., tap `CTRL` then `l` to clear screen).
 - **Session Persistence**: The app remembers your active session and navigation tab, automatically restoring them even after app restarts or screen-off events.
@@ -97,7 +97,7 @@ WebMux now includes a high-performance **Android application** built with Flutte
 ### Download
 
 You can download the latest debug APK here:
-[Download WebMux Android APK](https://images.bitslovers.com/temp/webmux-flutter-debug.apk)
+[Download AgentShell Android APK](https://images.bitslovers.com/temp/agentshell-flutter-debug.apk)
 
 ### Building from Source
 
@@ -112,7 +112,7 @@ If you want to build the APK yourself:
     ```bash
     ./build.sh
     ```
-4.  The generated APK will be available in the project root as `webmux-flutter-debug.apk`.
+4.  The generated APK will be available in the project root as `agentshell-flutter-debug.apk`.
 
 ## Prerequisites
 
@@ -128,8 +128,8 @@ If you want to build the APK yourself:
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/colerafiz/webmux.git
-cd webmux
+git clone https://github.com/colerafiz/agentshell.git
+cd agentshell
 ```
 
 2. Install dependencies:
@@ -348,7 +348,7 @@ cd backend-rust && cargo run -- --audio
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+3. Commit your changes (`git commit -m 'Add some amazing-feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 

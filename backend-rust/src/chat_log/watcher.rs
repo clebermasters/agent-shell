@@ -229,8 +229,12 @@ async fn watch_opencode_db(
                 if let Ok(new_pid) = find_opencode_pid_for_cwd(&cwd_owned) {
                     // Use the cleared_at from the current state when re-detecting
                     let cleared_at = state.cleared_at;
-                    match opencode_parser::init_opencode_state(&db_path_owned, &cwd_owned, new_pid, cleared_at)
-                    {
+                    match opencode_parser::init_opencode_state(
+                        &db_path_owned,
+                        &cwd_owned,
+                        new_pid,
+                        cleared_at,
+                    ) {
                         Ok(new_state) => {
                             debug!("Re-detected OpenCode session with PID {}", new_pid);
                             state = new_state;
@@ -526,7 +530,7 @@ fn find_claude_log(cwd: &Path) -> Result<PathBuf> {
         .with_context(|| format!("no .jsonl files in {}", projects_dir.display()))
 }
 
-/// Find the newest `/tmp/webmux-codex-*.jsonl` file.
+/// Find the newest `/tmp/agentshell-codex-*.jsonl` file.
 fn find_codex_log() -> Result<PathBuf> {
     let tmp = Path::new("/tmp");
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
@@ -536,7 +540,7 @@ fn find_codex_log() -> Result<PathBuf> {
         let Some(name_str) = name.to_str() else {
             continue;
         };
-        if !name_str.starts_with("webmux-codex-") || !name_str.ends_with(".jsonl") {
+        if !name_str.starts_with("agentshell-codex-") || !name_str.ends_with(".jsonl") {
             continue;
         }
         let Ok(meta) = entry.metadata() else {
@@ -551,7 +555,7 @@ fn find_codex_log() -> Result<PathBuf> {
     }
 
     best.map(|(_, p)| p)
-        .context("no webmux-codex-*.jsonl files found in /tmp")
+        .context("no agentshell-codex-*.jsonl files found in /tmp")
 }
 
 /// Return the path of the newest `.jsonl` file inside `dir`.

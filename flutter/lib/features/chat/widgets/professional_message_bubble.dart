@@ -1,19 +1,35 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
+import 'package:flutter_highlight/flutter_highlight.dart';
+import 'package:flutter_highlight/themes/atom-one-dark.dart';
+import 'package:flutter_highlight/themes/atom-one-light.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dio/dio.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:open_file/open_file.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:gal/gal.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../data/models/chat_message.dart';
+import 'chat_audio_tile.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
   final ChatMessage message;
   final bool showTimestamp;
   final bool isDarkMode;
+  final String? baseUrl;
 
   const ProfessionalMessageBubble({
     super.key,
     required this.message,
     this.showTimestamp = true,
     this.isDarkMode = false,
+    this.baseUrl,
   });
 
   @override
@@ -26,6 +42,22 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  final Map<String, String> _audioCachePaths = {};
+  StreamSubscription<PlayerState>? _playerStateSubscription;
+  StreamSubscription<Duration?>? _durationSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<Duration>? _bufferedPositionSubscription;
+
+  String? _playingBlockId;
+  String? _audioErrorBlockId;
+  Duration _audioPosition = Duration.zero;
+  Duration _audioBufferedPosition = Duration.zero;
+  Duration? _audioDuration;
+  String? _audioErrorMessage;
+  bool _isAudioPlaying = false;
+  bool _isAudioLoading = false;
+  bool _isAudioCompleted = false;
 
   bool get isDark => widget.isDarkMode;
 
@@ -47,11 +79,57 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           ),
         );
     _animationController.forward();
+
+    _playerStateSubscription = _audioPlayer.playerStateStream.listen((state) {
+      if (!mounted) return;
+      setState(() {
+        _isAudioPlaying = state.playing;
+        _isAudioLoading =
+            state.processingState == ProcessingState.loading ||
+            state.processingState == ProcessingState.buffering;
+        if (state.processingState == ProcessingState.completed) {
+          _isAudioCompleted = true;
+          if (_audioDuration != null) {
+            _audioPosition = _audioDuration!;
+          }
+        } else if (state.processingState == ProcessingState.ready) {
+          _isAudioCompleted = false;
+        }
+      });
+    });
+
+    _durationSubscription = _audioPlayer.durationStream.listen((duration) {
+      if (!mounted || duration == null) return;
+      setState(() {
+        _audioDuration = duration;
+      });
+    });
+
+    _positionSubscription = _audioPlayer.positionStream.listen((position) {
+      if (!mounted) return;
+      setState(() {
+        _audioPosition = position;
+      });
+    });
+
+    _bufferedPositionSubscription = _audioPlayer.bufferedPositionStream.listen((
+      buffered,
+    ) {
+      if (!mounted) return;
+      setState(() {
+        _audioBufferedPosition = buffered;
+      });
+    });
   }
 
   @override
   void dispose() {
     _animationController.dispose();
+    _playerStateSubscription?.cancel();
+    _durationSubscription?.cancel();
+    _positionSubscription?.cancel();
+    _bufferedPositionSubscription?.cancel();
+    _audioPlayer.dispose();
     super.dispose();
   }
 
@@ -174,7 +252,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           bottomLeft: Radius.circular(isUser ? 18 : 4),
           bottomRight: Radius.circular(isUser ? 4 : 18),
         ),
-        border: (isUser || isTool) ? null : Border.all(color: borderColor, width: 1),
+        border: (isUser || isTool)
+            ? null
+            : Border.all(color: borderColor, width: 1),
         boxShadow: isUser
             ? [
                 BoxShadow(
@@ -185,7 +265,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
               ]
             : null,
       ),
-      padding: isTool 
+      padding: isTool
           ? const EdgeInsets.symmetric(vertical: 2)
           : const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: _buildMessageContent(isUser, isError, isTool, textColor),
@@ -205,10 +285,18 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           switch (block.type) {
             case ChatBlockType.text:
               return _buildMarkdownBlock(block.text ?? '', textColor, isUser);
+            case ChatBlockType.thinking:
+              return _buildThinkingBlock(block.content ?? '', textColor);
             case ChatBlockType.toolCall:
               return _buildToolCallCard(block);
             case ChatBlockType.toolResult:
               return _buildToolResultCard(block);
+            case ChatBlockType.image:
+              return _buildImageBlock(block, textColor);
+            case ChatBlockType.audio:
+              return _buildAudioBlock(block, textColor);
+            case ChatBlockType.file:
+              return _buildFileBlock(block, textColor);
           }
         }).toList(),
       );
@@ -230,7 +318,16 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
     return MarkdownBody(
       data: text,
-      selectable: true,
+      selectable: false,
+      onTapLink: (text, href, title) async {
+        if (href != null) {
+          final uri = Uri.tryParse(href);
+          if (uri != null && await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          }
+        }
+      },
+      builders: {'pre': CodeBlockBuilder(isUser: isUser, isDark: isDark)},
       styleSheet: MarkdownStyleSheet(
         p: TextStyle(color: textColor, fontSize: 14, height: 1.6),
         h1: TextStyle(
@@ -271,11 +368,8 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
           fontFamily: 'monospace',
           fontSize: 13,
         ),
-        codeblockDecoration: BoxDecoration(
-          color: isDark ? const Color(0xFF0F172A) : Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        codeblockPadding: const EdgeInsets.all(12),
+        codeblockDecoration: const BoxDecoration(color: Colors.transparent),
+        codeblockPadding: EdgeInsets.zero,
         blockquote: TextStyle(
           color: textColor.withValues(alpha: 0.8),
           fontStyle: FontStyle.italic,
@@ -379,6 +473,456 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
                 ),
               )
             : null,
+      ),
+    );
+  }
+
+  Widget _buildImageBlock(ChatBlock block, Color textColor) {
+    final imageUrl = widget.baseUrl != null && block.id != null
+        ? '${widget.baseUrl}/api/chat/files/${block.id}'
+        : null;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: GestureDetector(
+        onTap: () => _showImageFullScreen(block.id),
+        child: Hero(
+          tag: 'image_${block.id}',
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 200, maxHeight: 200),
+              color: isDark ? Colors.grey[800] : Colors.grey[200],
+              child: imageUrl != null
+                  ? CachedNetworkImage(
+                      imageUrl: imageUrl,
+                      fit: BoxFit.cover,
+                      width: 200,
+                      height: 200,
+                      placeholder: (context, url) => Center(
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: isDark ? Colors.grey[600] : Colors.grey[400],
+                        ),
+                      ),
+                      errorWidget: (context, url, error) => Center(
+                        child: Icon(
+                          Icons.broken_image,
+                          size: 48,
+                          color: isDark ? Colors.grey[600] : Colors.grey[400],
+                        ),
+                      ),
+                    )
+                  : Center(
+                      child: Icon(
+                        Icons.image,
+                        size: 48,
+                        color: isDark ? Colors.grey[600] : Colors.grey[400],
+                      ),
+                    ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showImageFullScreen(String? imageId) {
+    if (imageId == null) return;
+
+    final imageUrl = widget.baseUrl != null
+        ? '${widget.baseUrl}/api/chat/files/$imageId'
+        : null;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) =>
+            _FullScreenImageViewer(imageUrl: imageUrl, imageId: imageId),
+      ),
+    );
+  }
+
+  Widget _buildAudioBlock(ChatBlock block, Color textColor) {
+    final blockId = block.id;
+    final audioUrl = widget.baseUrl != null && block.id != null
+        ? '${widget.baseUrl}/api/chat/files/${block.id}'
+        : null;
+    final isActiveBlock = blockId != null && _playingBlockId == blockId;
+    final fallbackDuration = _durationFromSeconds(block.durationSeconds);
+    final effectiveDuration = isActiveBlock
+        ? (_audioDuration ?? fallbackDuration)
+        : fallbackDuration;
+    final inlineErrorVisible =
+        blockId != null &&
+        blockId == _audioErrorBlockId &&
+        _audioErrorMessage != null &&
+        !_isAudioLoading;
+    final inlineMessage = isActiveBlock && _isAudioLoading
+        ? 'Loading audio...'
+        : (inlineErrorVisible ? _audioErrorMessage : null);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: ChatAudioTile(
+        title: block.filename ?? 'Audio',
+        textColor: textColor,
+        isDark: isDark,
+        isActive: isActiveBlock,
+        isPlaying: _isAudioPlaying,
+        isLoading: _isAudioLoading,
+        isCompleted: _isAudioCompleted,
+        position: isActiveBlock ? _audioPosition : Duration.zero,
+        bufferedPosition: isActiveBlock
+            ? _audioBufferedPosition
+            : Duration.zero,
+        totalDuration: effectiveDuration,
+        inlineMessage: inlineMessage,
+        inlineMessageIsError: inlineErrorVisible,
+        onPrimaryPressed: audioUrl != null && blockId != null
+            ? () => _onAudioButtonPressed(blockId, audioUrl)
+            : null,
+        onSeek: isActiveBlock ? _seekAudio : null,
+        onSkipBackward: isActiveBlock
+            ? () => _skipAudioBy(const Duration(seconds: -10))
+            : null,
+        onSkipForward: isActiveBlock
+            ? () => _skipAudioBy(const Duration(seconds: 10))
+            : null,
+      ),
+    );
+  }
+
+  Future<void> _onAudioButtonPressed(String blockId, String url) async {
+    try {
+      if (_isAudioLoading) return;
+
+      if (_playingBlockId != blockId) {
+        await _loadAudioSource(blockId, url);
+        await _audioPlayer.play();
+        return;
+      }
+
+      if (_isAudioPlaying) {
+        await _audioPlayer.pause();
+        return;
+      }
+
+      if (_isAudioCompleted) {
+        await _audioPlayer.seek(Duration.zero);
+        if (mounted) {
+          setState(() {
+            _audioPosition = Duration.zero;
+            _isAudioCompleted = false;
+          });
+        }
+      }
+
+      await _audioPlayer.play();
+    } catch (e) {
+      debugPrint('Audio error: $e');
+      if (mounted) {
+        setState(() {
+          _audioErrorMessage = '$e';
+          _audioErrorBlockId = blockId;
+        });
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to play audio: $e')));
+      }
+    }
+  }
+
+  Future<void> _loadAudioSource(String blockId, String url) async {
+    if (mounted) {
+      setState(() {
+        _isAudioLoading = true;
+        _isAudioCompleted = false;
+        _audioPosition = Duration.zero;
+        _audioBufferedPosition = Duration.zero;
+        _audioDuration = null;
+        _audioErrorMessage = null;
+        _audioErrorBlockId = null;
+      });
+    }
+
+    try {
+      Duration? duration;
+      debugPrint('Audio URL: $url');
+      try {
+        duration = await _audioPlayer.setUrl(url);
+      } catch (streamError) {
+        debugPrint(
+          'Streaming audio failed, trying local fallback: $streamError',
+        );
+        final localPath = await _downloadAudioToTemp(blockId, url);
+        duration = await _audioPlayer.setFilePath(localPath);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _playingBlockId = blockId;
+        _audioDuration = duration ?? _audioPlayer.duration;
+        _audioErrorMessage = null;
+        _audioErrorBlockId = null;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAudioLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _seekAudio(Duration position) async {
+    final totalDuration = _audioDuration;
+    final safePosition = _clampDuration(position, totalDuration);
+    await _audioPlayer.seek(safePosition);
+    if (!mounted) return;
+    setState(() {
+      _audioPosition = safePosition;
+      if (totalDuration != null && safePosition < totalDuration) {
+        _isAudioCompleted = false;
+      }
+    });
+  }
+
+  Future<void> _skipAudioBy(Duration delta) async {
+    if (_playingBlockId == null || _audioDuration == null) return;
+    await _seekAudio(_audioPosition + delta);
+  }
+
+  Future<String> _downloadAudioToTemp(String blockId, String url) async {
+    final cachedPath = _audioCachePaths[blockId];
+    if (cachedPath != null && await File(cachedPath).exists()) {
+      return cachedPath;
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    final filePath = '${tempDir.path}/chat_audio_$blockId.bin';
+    await Dio().download(url, filePath, deleteOnError: true);
+    _audioCachePaths[blockId] = filePath;
+    return filePath;
+  }
+
+  Duration? _durationFromSeconds(double? seconds) {
+    if (seconds == null || seconds <= 0) return null;
+    return Duration(milliseconds: (seconds * 1000).round());
+  }
+
+  Duration _clampDuration(Duration value, Duration? max) {
+    if (value < Duration.zero) return Duration.zero;
+    if (max == null) return value;
+    if (value > max) return max;
+    return value;
+  }
+
+  Widget _buildFileBlock(ChatBlock block, Color textColor) {
+    final fileUrl = widget.baseUrl != null && block.id != null
+        ? '${widget.baseUrl}/api/chat/files/${block.id}'
+        : null;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: InkWell(
+        onTap: () => _downloadAndOpenFile(block, fileUrl),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+            ),
+          ),
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _getFileIcon(block.mimeType),
+                size: 32,
+                color: isDark
+                    ? const Color(0xFF6EE7B7)
+                    : const Color(0xFF047857),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    block.filename ?? 'File',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: textColor,
+                    ),
+                  ),
+                  if (block.sizeBytes != null)
+                    Text(
+                      _formatFileSize(block.sizeBytes!),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: textColor.withValues(alpha: 0.6),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.download,
+                size: 18,
+                color: textColor.withValues(alpha: 0.6),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _downloadAndOpenFile(ChatBlock block, String? fileUrl) async {
+    if (fileUrl == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Cannot download file')));
+      return;
+    }
+
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    try {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Downloading ${block.filename ?? 'file'}...')),
+      );
+
+      final dio = Dio();
+      final cacheDir = await getTemporaryDirectory();
+      final downloadsDir = Directory('${cacheDir.path}/chat_downloads');
+
+      if (!await downloadsDir.exists()) {
+        await downloadsDir.create(recursive: true);
+      }
+
+      final filename = _sanitizeFilename(block.filename ?? 'file');
+      final filePath = '${downloadsDir.path}/$filename';
+      final file = File(filePath);
+
+      if (await file.exists()) {
+        await file.delete();
+      }
+
+      await dio.download(fileUrl, filePath);
+
+      if (!mounted) return;
+
+      scaffoldMessenger.hideCurrentSnackBar();
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Downloaded. Opening...'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+
+      final openResult = await OpenFile.open(filePath, type: block.mimeType);
+      if (openResult.type != ResultType.done) {
+        scaffoldMessenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Downloaded, but could not open (${openResult.message}). File: $filename',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text('Failed to download: $e')),
+      );
+    }
+  }
+
+  String _sanitizeFilename(String filename) {
+    final trimmed = filename.trim();
+    final fallback = trimmed.isEmpty ? 'file' : trimmed;
+    return fallback.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+  }
+
+  IconData _getFileIcon(String? mimeType) {
+    if (mimeType == null) return Icons.insert_drive_file;
+    if (mimeType.contains('pdf')) return Icons.picture_as_pdf;
+    if (mimeType.contains('word') || mimeType.contains('document')) {
+      return Icons.description;
+    }
+    if (mimeType.contains('excel') || mimeType.contains('spreadsheet')) {
+      return Icons.table_chart;
+    }
+    if (mimeType.contains('zip') || mimeType.contains('archive')) {
+      return Icons.folder_zip;
+    }
+    if (mimeType.contains('text')) return Icons.text_snippet;
+    return Icons.insert_drive_file;
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    }
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
+  Widget _buildThinkingBlock(String content, Color textColor) {
+    if (content.isEmpty) return const SizedBox.shrink();
+
+    final thinkingColor = isDark
+        ? const Color(0xFFFBBF24)
+        : const Color(0xFFD97706);
+    final bgColor = isDark ? const Color(0xFF422006) : const Color(0xFFFEF3C7);
+    final borderColor = isDark
+        ? const Color(0xFF78350F)
+        : const Color(0xFFFDE68A);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: borderColor, width: 1),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.psychology, size: 14, color: thinkingColor),
+                const SizedBox(width: 6),
+                Text(
+                  'Thinking',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: thinkingColor,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SelectableText(
+              content,
+              style: TextStyle(
+                fontSize: 12,
+                color: textColor.withValues(alpha: 0.9),
+                height: 1.5,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -575,33 +1119,50 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
   CodeBlockBuilder({this.isUser = false, this.isDark = false});
 
   @override
-  Widget? visitElementAfter(element, preferredStyle) {
+  Widget? visitElementAfter(md.Element element, preferredStyle) {
     final code = element.textContent;
     var language = '';
 
-    if (element.attributes['class'] != null) {
+    // In a 'pre' tag, the language class is usually on its 'code' child
+    if (element.children != null && element.children!.isNotEmpty) {
+      final child = element.children!.first;
+      if (child is md.Element && child.attributes['class'] != null) {
+        language = child.attributes['class']!.replaceFirst('language-', '');
+      }
+    }
+
+    if (language.isEmpty && element.attributes['class'] != null) {
       language = element.attributes['class']!.replaceFirst('language-', '');
     }
 
-    final bgColor = isDark ? const Color(0xFF0F172A) : Colors.grey.shade100;
     final codeColor = isDark ? Colors.grey.shade300 : Colors.grey.shade800;
+    final hasLanguage = language.isNotEmpty;
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (language.isNotEmpty)
+    final Map<String, TextStyle> customTheme = Map.from(
+      isDark ? atomOneDarkTheme : atomOneLightTheme,
+    );
+    customTheme['root'] = TextStyle(
+      color: customTheme['root']?.color,
+      backgroundColor: Colors.transparent,
+    );
+
+    if (hasLanguage) {
+      // Single container for entire code block - no separate header
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF282C34) : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header row with language and copy button
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.05)
-                    : Colors.grey.shade200,
+                color: isDark ? const Color(0xFF21252B) : Colors.grey.shade200,
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(8),
                 ),
@@ -648,21 +1209,77 @@ class CodeBlockBuilder extends MarkdownElementBuilder {
                 ],
               ),
             ),
-          Container(
-            padding: const EdgeInsets.all(12),
-            child: SelectableText(
-              code,
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 13,
-                color: codeColor,
-                height: 1.5,
+            // Code content - no additional decoration or border
+            Container(
+              padding: const EdgeInsets.all(12),
+              child: HighlightView(
+                code.trimRight(),
+                language: _mapLanguage(language),
+                theme: customTheme,
+                padding: EdgeInsets.zero,
+                textStyle: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  height: 1.5,
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.grey.shade800.withValues(alpha: 0.3)
+            : Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: SelectableText(
+        code.trimRight(),
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: codeColor,
+          height: 1.5,
+        ),
       ),
     );
+  }
+
+  String _mapLanguage(String lang) {
+    final languageMap = {
+      'js': 'javascript',
+      'ts': 'typescript',
+      'py': 'python',
+      'rb': 'ruby',
+      'yml': 'yaml',
+      'sh': 'bash',
+      'shell': 'bash',
+      'zsh': 'bash',
+      'md': 'markdown',
+      'dockerfile': 'dockerfile',
+      'html': 'xml',
+      'css': 'css',
+      'json': 'json',
+      'sql': 'sql',
+      'go': 'go',
+      'rs': 'rust',
+      'swift': 'swift',
+      'kt': 'kotlin',
+      'java': 'java',
+      'c': 'c',
+      'cpp': 'cpp',
+      'csharp': 'cs',
+      'php': 'php',
+      'r': 'r',
+      'scala': 'scala',
+      'hcl': 'hcl',
+    };
+    return languageMap[lang.toLowerCase()] ?? lang.toLowerCase();
   }
 }
 
@@ -670,5 +1287,112 @@ extension StringExtension on String {
   String take(int count) {
     if (length <= count) return this;
     return '${substring(0, count)}...';
+  }
+}
+
+class _FullScreenImageViewer extends StatefulWidget {
+  final String? imageUrl;
+  final String imageId;
+
+  const _FullScreenImageViewer({required this.imageUrl, required this.imageId});
+
+  @override
+  State<_FullScreenImageViewer> createState() => _FullScreenImageViewerState();
+}
+
+class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
+  bool _isSaving = false;
+
+  Future<void> _saveImageToGallery() async {
+    if (widget.imageUrl == null || _isSaving) return;
+
+    setState(() => _isSaving = true);
+
+    try {
+      final scaffoldMessenger = ScaffoldMessenger.of(context);
+      final dio = Dio();
+      final tempDir = await getTemporaryDirectory();
+      final filePath = '${tempDir.path}/webmux_image_${widget.imageId}.png';
+      final file = File(filePath);
+
+      if (await file.exists()) {
+        await file.delete();
+      }
+
+      await dio.download(widget.imageUrl!, filePath);
+
+      await Gal.putImage(filePath, album: 'WebMux');
+
+      await file.delete();
+
+      if (!mounted) return;
+
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(
+          content: Text('Image saved to gallery'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save image: $e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            icon: _isSaving
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.save_alt, color: Colors.white),
+            onPressed: _isSaving ? null : _saveImageToGallery,
+            tooltip: 'Save to gallery',
+          ),
+        ],
+      ),
+      body: Center(
+        child: Hero(
+          tag: 'image_${widget.imageId}',
+          child: widget.imageUrl != null
+              ? CachedNetworkImage(
+                  imageUrl: widget.imageUrl!,
+                  fit: BoxFit.contain,
+                  placeholder: (context, url) =>
+                      const CircularProgressIndicator(),
+                  errorWidget: (context, url, error) => Icon(
+                    Icons.broken_image,
+                    size: 200,
+                    color: Colors.grey[700],
+                  ),
+                )
+              : InteractiveViewer(
+                  child: Icon(Icons.image, size: 200, color: Colors.grey[700]),
+                ),
+        ),
+      ),
+    );
   }
 }

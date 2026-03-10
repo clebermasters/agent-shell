@@ -78,7 +78,8 @@ impl Utf8StreamDecoder {
                         let incomplete_start = processed + valid_up_to;
                         if incomplete_start < input.len() {
                             self.incomplete.clear();
-                            self.incomplete.extend_from_slice(&input[incomplete_start..]);
+                            self.incomplete
+                                .extend_from_slice(&input[incomplete_start..]);
                         }
                         processed = input.len();
                     }

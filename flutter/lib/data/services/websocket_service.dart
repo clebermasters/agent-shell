@@ -28,6 +28,7 @@ class WebSocketService {
 
   void _log(String message) {
     final timestamp = DateTime.now().toIso8601String();
+    print('WS LOG: [$timestamp] $message');
     _logController.add('[$timestamp] $message');
   }
 
@@ -67,6 +68,13 @@ class WebSocketService {
     _log('Received: $dataStr');
     try {
       final message = jsonDecode(data as String) as Map<String, dynamic>;
+      final type = message['type'];
+      if (type != 'output' &&
+          type != 'system-stats' &&
+          type != 'pong' &&
+          type != 'stats') {
+        print('WS RECV TYPE: $type');
+      }
       _messageController.add(message);
     } catch (e) {
       _log('Failed to parse message: $e');
@@ -259,16 +267,139 @@ class WebSocketService {
     send({'type': 'get-stats'});
   }
 
-  void watchChatLog(String sessionName, int windowIndex) {
+  void watchChatLog(String sessionName, int windowIndex, {int? limit}) {
     send({
       'type': 'watch-chat-log',
       'sessionName': sessionName,
       'windowIndex': windowIndex,
+      if (limit != null) 'limit': limit,
     });
   }
 
   void unwatchChatLog() {
     send({'type': 'unwatch-chat-log'});
+  }
+
+  void loadMoreChatHistory(
+    String sessionName,
+    int windowIndex,
+    int offset,
+    int limit,
+  ) {
+    send({
+      'type': 'load-more-chat-history',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+      'offset': offset,
+      'limit': limit,
+    });
+  }
+
+  void clearChatLog(String sessionName, int windowIndex) {
+    send({
+      'type': 'clear-chat-log',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+    });
+  }
+
+  void clearAcpHistory(String sessionId) {
+    send({'type': 'acp-clear-history', 'sessionId': sessionId});
+  }
+
+  void deleteAcpSession(String sessionId) {
+    send({'type': 'acp-delete-session', 'sessionId': sessionId});
+  }
+
+  void sendFileToChat({
+    required String sessionName,
+    required int windowIndex,
+    required String filename,
+    required String mimeType,
+    required String base64Data,
+    String? prompt,
+  }) {
+    send({
+      'type': 'send-file-to-chat',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+      'file': {'filename': filename, 'mimeType': mimeType, 'data': base64Data},
+      'prompt': prompt,
+    });
+  }
+
+  void sendFileToAcpChat({
+    required String sessionId,
+    required String filename,
+    required String mimeType,
+    required String base64Data,
+    String? prompt,
+    String? cwd,
+  }) {
+    send({
+      'type': 'send-file-to-acp-chat',
+      'sessionId': sessionId,
+      'file': {'filename': filename, 'mimeType': mimeType, 'data': base64Data},
+      'prompt': prompt,
+      'cwd': cwd,
+    });
+  }
+
+  void selectBackend(String backend) {
+    send({'type': 'select-backend', 'backend': backend});
+  }
+
+  void acpCreateSession(String cwd) {
+    send({'type': 'acp-create-session', 'cwd': cwd});
+  }
+
+  void acpResumeSession(String sessionId, String cwd) {
+    send({'type': 'acp-resume-session', 'sessionId': sessionId, 'cwd': cwd});
+  }
+
+  void acpForkSession(String sessionId, String cwd) {
+    send({'type': 'acp-fork-session', 'sessionId': sessionId, 'cwd': cwd});
+  }
+
+  void acpListSessions() {
+    send({'type': 'acp-list-sessions'});
+  }
+
+  void acpSendPrompt(String sessionId, String message) {
+    send({
+      'type': 'acp-send-prompt',
+      'sessionId': sessionId,
+      'message': message,
+    });
+  }
+
+  void acpCancelPrompt(String sessionId) {
+    send({'type': 'acp-cancel-prompt', 'sessionId': sessionId});
+  }
+
+  void acpSetModel(String sessionId, String modelId) {
+    send({'type': 'acp-set-model', 'sessionId': sessionId, 'modelId': modelId});
+  }
+
+  void acpSetMode(String sessionId, String modeId) {
+    send({'type': 'acp-set-mode', 'sessionId': sessionId, 'modeId': modeId});
+  }
+
+  void acpLoadHistory(String sessionId, {int offset = 0, int limit = 50}) {
+    send({
+      'type': 'acp-load-history',
+      'sessionId': sessionId,
+      'offset': offset,
+      'limit': limit,
+    });
+  }
+
+  void acpRespondPermission(String requestId, String optionId) {
+    send({
+      'type': 'acp-respond-permission',
+      'requestId': requestId,
+      'optionId': optionId,
+    });
   }
 
   void disconnect() {

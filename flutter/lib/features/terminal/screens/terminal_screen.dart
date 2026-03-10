@@ -9,11 +9,17 @@ import '../widgets/mobile_keyboard.dart';
 import '../widgets/terminal_accessory_bar.dart';
 import '../widgets/floating_voice_button.dart';
 import '../../../core/providers.dart';
+import '../../chat/screens/chat_screen.dart';
 
 class TerminalScreen extends ConsumerStatefulWidget {
   final String sessionName;
+  final int windowIndex;
 
-  const TerminalScreen({super.key, required this.sessionName});
+  const TerminalScreen({
+    super.key,
+    required this.sessionName,
+    this.windowIndex = 0,
+  });
 
   @override
   ConsumerState<TerminalScreen> createState() => _TerminalScreenState();
@@ -70,7 +76,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     // Connect to the terminal session
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final terminalNotifier = ref.read(terminalProvider.notifier);
-      terminalNotifier.connect(widget.sessionName);
+      terminalNotifier.connect(
+        widget.sessionName,
+        windowIndex: widget.windowIndex,
+      );
 
       // CRITICAL: Register custom input processor to handle sticky modifiers
       terminalNotifier.terminalService.setInputProcessor(_processInput);
@@ -334,6 +343,20 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
           : AppBar(
               title: Text(widget.sessionName),
               actions: [
+                IconButton(
+                  icon: const Icon(Icons.chat_bubble_outline, size: 20),
+                  onPressed: () {
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (context) => ChatScreen(
+                          sessionName: widget.sessionName,
+                          windowIndex: widget.windowIndex,
+                        ),
+                      ),
+                    );
+                  },
+                  tooltip: 'Switch to Chat',
+                ),
                 if (_isSelectionMode)
                   IconButton(
                     icon: const Icon(Icons.close, size: 20),
@@ -438,6 +461,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                           ctrlActive: _ctrlActive,
                           altActive: _altActive,
                           shiftActive: _shiftActive,
+                          prefs: ref.watch(sharedPreferencesProvider),
                           onTap: () {
                             if (!_showCustomKeyboard && !_isSelectionMode) {
                               final isKeyboardVisible =

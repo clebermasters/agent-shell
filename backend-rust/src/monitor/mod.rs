@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     sync::{mpsc, RwLock},
     time::interval,
@@ -39,13 +35,13 @@ impl TmuxMonitor {
 
     pub async fn start(&self) {
         info!("Starting tmux monitor");
-        
+
         // Initial state fetch
         self.check_for_changes().await;
-        
+
         // Start monitoring loop
         let mut interval = interval(Duration::from_millis(250)); // Check every 250ms for better responsiveness
-        
+
         loop {
             interval.tick().await;
             self.check_for_changes().await;
@@ -69,7 +65,8 @@ impl TmuxMonitor {
                 Ok(windows) => {
                     let window_count = windows.len();
                     let pane_count: usize = windows.iter().map(|w| w.panes as usize).sum();
-                    current_window_pane_counts.insert(session.name.clone(), (window_count, pane_count));
+                    current_window_pane_counts
+                        .insert(session.name.clone(), (window_count, pane_count));
                 }
                 Err(e) => {
                     error!("Failed to list windows for session {}: {}", session.name, e);
@@ -83,8 +80,10 @@ impl TmuxMonitor {
         let window_pane_changed = state.window_pane_counts != current_window_pane_counts;
 
         if sessions_changed || window_pane_changed {
-            debug!("Tmux state changed - sessions: {}, windows/panes: {}", 
-                   sessions_changed, window_pane_changed);
+            debug!(
+                "Tmux state changed - sessions: {}, windows/panes: {}",
+                sessions_changed, window_pane_changed
+            );
 
             // Update state
             state.sessions = current_sessions.clone();
@@ -94,7 +93,7 @@ impl TmuxMonitor {
             let message = ServerMessage::SessionsList {
                 sessions: current_sessions,
             };
-            
+
             if let Err(e) = self.broadcast_tx.send(message) {
                 error!("Failed to broadcast session update: {}", e);
             }

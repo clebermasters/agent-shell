@@ -15,6 +15,7 @@ pub struct OpencodeState {
     pub pid: u32,
     pub session_id: String,
     pub last_time_updated: i64,
+    pub cleared_at: Option<i64>,
     pub seen_text_lengths: HashMap<String, usize>,
     pub seen_tool_calls: HashSet<String>,
     pub seen_tool_results: HashSet<String>,
@@ -43,13 +44,21 @@ struct ToolState {
 
 /// Start an opencode session tracking state
 /// Uses process CWD and tries to match by recent activity
-pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result<OpencodeState> {
+pub fn init_opencode_state(
+    db_path: &Path,
+    directory: &Path,
+    pid: u32,
+    cleared_at: Option<i64>,
+) -> Result<OpencodeState> {
     let conn = Connection::open(db_path)?;
     // Set a busy timeout
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let dir_str = directory.to_str().context("invalid directory path")?;
 
-    debug!("Looking for session in {} for PID {}", dir_str, pid);
+    debug!(
+        "Looking for session in {} for PID {} (cleared_at: {:?})",
+        dir_str, pid, cleared_at
+    );
 
     // Get process start time to help match the right session
     let process_start_time = get_process_start_time(pid)?;
@@ -83,10 +92,10 @@ pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result
          ORDER BY time_updated DESC LIMIT 1",
     )?;
 
-    let result: Result<(String, i64, i64), _> = stmt
-        .query_row(rusqlite::params![dir_str, process_start_epoch_ms, process_start_epoch_ms], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        });
+    let result: Result<(String, i64, i64), _> = stmt.query_row(
+        rusqlite::params![dir_str, process_start_epoch_ms, process_start_epoch_ms],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    );
 
     let (session_id, time_created, time_updated) = match result {
         Ok(data) => {
@@ -98,7 +107,9 @@ pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result
         }
         Err(_) => {
             // Fallback: get the most recently updated session
-            debug!("Could not match by start time window, falling back to most recent for directory");
+            debug!(
+                "Could not match by start time window, falling back to most recent for directory"
+            );
             let mut stmt = conn.prepare(
                 "SELECT id, time_created, time_updated FROM session 
                  WHERE directory = ? 
@@ -121,6 +132,7 @@ pub fn init_opencode_state(db_path: &Path, directory: &Path, pid: u32) -> Result
         pid,
         session_id,
         last_time_updated: 0, // Start from beginning to get full history
+        cleared_at,
         seen_text_lengths: HashMap::new(),
         seen_tool_calls: HashSet::new(),
         seen_tool_results: HashSet::new(),
@@ -187,12 +199,23 @@ fn get_process_uptime_ms(pid: u32) -> Result<i64> {
     Ok((uptime * 1000.0) as i64)
 }
 
-
 /// Fetch all new messages since the last fetch
 pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<Vec<ChatMessage>> {
     let conn = Connection::open(db_path)?;
     // Set a busy timeout to avoid hanging if the DB is locked by another process (like OpenCode)
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
+    // Calculate the minimum timestamp to fetch from
+    // Use cleared_at if it's newer than last_time_updated
+    let min_time = match state.cleared_at {
+        Some(cleared) if cleared > state.last_time_updated => cleared,
+        _ => state.last_time_updated,
+    };
+
+    debug!(
+        "Fetching messages for session {} since time {} (cleared_at: {:?})",
+        state.session_id, min_time, state.cleared_at
+    );
 
     let mut stmt = conn.prepare(
         "SELECT p.id, p.data, p.time_updated, json_extract(m.data, '$.role') 
@@ -202,10 +225,13 @@ pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<V
          ORDER BY p.time_updated ASC",
     )?;
 
-    let mut rows = match stmt.query(rusqlite::params![state.session_id, state.last_time_updated]) {
+    let mut rows = match stmt.query(rusqlite::params![state.session_id, min_time]) {
         Ok(r) => r,
         Err(e) => {
-            error!("Failed to query opencode messages for session {}: {}", state.session_id, e);
+            error!(
+                "Failed to query opencode messages for session {}: {}",
+                state.session_id, e
+            );
             return Err(e.into());
         }
     };
@@ -274,6 +300,28 @@ fn parse_part(
 
             ContentBlock::Text {
                 text: new_chunk.to_string(),
+            }
+        }
+        "reasoning" => {
+            // Extract thinking/reasoning content from AI models
+            let content = part.text.as_deref().unwrap_or_default();
+            let last_len = state
+                .seen_text_lengths
+                .get(&format!("reasoning_{}", id))
+                .copied()
+                .unwrap_or(0);
+
+            if content.len() <= last_len {
+                return None;
+            }
+
+            let new_chunk = &content[last_len..];
+            state
+                .seen_text_lengths
+                .insert(format!("reasoning_{}", id), content.len());
+
+            ContentBlock::Thinking {
+                content: new_chunk.to_string(),
             }
         }
         "tool" => {

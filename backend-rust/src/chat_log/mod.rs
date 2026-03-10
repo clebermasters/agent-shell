@@ -13,6 +13,9 @@ pub enum ContentBlock {
     Text {
         text: String,
     },
+    Thinking {
+        content: String,
+    },
     ToolCall {
         name: String,
         summary: String,
@@ -25,6 +28,28 @@ pub enum ContentBlock {
         summary: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<String>,
+    },
+    Image {
+        id: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        alt_text: Option<String>,
+    },
+    Audio {
+        id: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration_seconds: Option<f32>,
+    },
+    File {
+        id: String,
+        filename: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size_bytes: Option<u64>,
     },
 }
 

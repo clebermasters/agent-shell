@@ -1,3 +1,6 @@
+backend-rust/chat_files/
+.worktrees/
+
 # Dependencies
 node_modules/
 
@@ -9,6 +12,7 @@ build/
 backend-rust/target/
 **/*.rs.bk
 *.pdb
+backend-rust/chat_clear_state.json
 
 # Environment variables
 .env
@@ -126,4 +130,5 @@ tramp
 node_modules/
 dist/
 *.apk
-opencode.json
+opencode.jsonbackend-rust/chat_files/
+backend-rust/chat_events.db

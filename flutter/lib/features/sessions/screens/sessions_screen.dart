@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/tmux_session.dart';
+import '../../../data/models/acp_session.dart';
 import '../providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
 import '../../chat/screens/chat_screen.dart';

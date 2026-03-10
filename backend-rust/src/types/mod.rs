@@ -345,6 +345,10 @@ pub enum WebSocketMessage {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
+    AcpDeleteSession {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
     // ACP file sending
     SendFileToAcpChat {
         #[serde(rename = "sessionId")]
@@ -685,5 +689,11 @@ pub enum ServerMessage {
         session_id: String,
         messages: Vec<crate::chat_log::ChatMessage>,
         has_more: bool,
+    },
+    AcpSessionDeleted {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        success: bool,
+        error: Option<String>,
     },
 }

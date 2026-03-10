@@ -11,6 +11,7 @@ build/
 backend-rust/target/
 **/*.rs.bk
 *.pdb
+backend-rust/chat_clear_state.json
 
 # Environment variables
 .env

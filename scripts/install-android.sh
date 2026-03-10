@@ -20,6 +20,7 @@ FORCE_INSTALL=false
 LAUNCH_APP=false
 PACKAGE_NAME="com.example.webmux"
 ADB_PORT=5555
+WIRELESS_PORT=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -97,9 +98,17 @@ if [ ! -f "$APK_PATH" ]; then
     exit 1
 fi
 
-# Check for existing wireless connection
+# Check for existing wireless connection (any port)
 check_wireless_connection() {
-    adb devices 2>/dev/null | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:$ADB_PORT	device$" | head -1
+    adb devices 2>/dev/null | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+	device$" | head -1
+}
+
+# Detect connected wireless port
+detect_wireless_port() {
+    local wireless_dev=$(adb devices 2>/dev/null | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+	device$" | head -1)
+    if [ -n "$wireless_dev" ]; then
+        echo "$wireless_dev" | cut -f1 | cut -d: -f2
+    fi
 }
 
 # Get device IP address
@@ -111,8 +120,9 @@ get_device_ip() {
 # Connect to device wirelessly
 wireless_connect() {
     local ip="$1"
-    echo -e "${BLUE}Connecting to $ip:$ADB_PORT...${NC}"
-    adb connect "$ip:$ADB_PORT" 2>/dev/null
+    local port="${2:-$ADB_PORT}"
+    echo -e "${BLUE}Connecting to $ip:$port...${NC}"
+    adb connect "$ip:$port" 2>/dev/null
     sleep 2
 }
 
@@ -137,11 +147,16 @@ setup_wireless() {
         echo "  2. Run: $0 --wireless"
         echo ""
         echo -e "${YELLOW}Or enter IP manually:${NC}"
-        read -p "Device IP address: " manual_ip
+        read -p "Device IP address (or IP:port): " manual_ip
         if [ -n "$manual_ip" ]; then
-            wireless_connect "$manual_ip"
+            if echo "$manual_ip" | grep -q ":"; then
+                wireless_connect "$(echo "$manual_ip" | cut -d: -f1)" "$(echo "$manual_ip" | cut -d: -f2)"
+            else
+                wireless_connect "$manual_ip" "$ADB_PORT"
+            fi
             if check_wireless_connection | grep -q .; then
-                echo "$manual_ip" > "$WIRELESS_IP_FILE"
+                SAVED_INFO=$(check_wireless_connection | cut -f1)
+                echo "$SAVED_INFO" > "$WIRELESS_IP_FILE"
                 echo -e "${GREEN}Connected! IP saved for future use.${NC}"
                 return 0
             fi
@@ -184,19 +199,32 @@ setup_wireless() {
 try_wireless_connection() {
     echo -e "${YELLOW}Attempting wireless connection...${NC}"
     
-    # Check if already connected via wireless
+    # Check if already connected via wireless (any port)
     if check_wireless_connection | grep -q .; then
-        echo -e "${GREEN}Already connected via WiFi${NC}"
+        # Extract IP:port from the connection
+        WIRED_INFO=$(check_wireless_connection)
+        SAVED_IP=$(echo "$WIRED_INFO" | cut -f1)
+        echo -e "${GREEN}Already connected via WiFi: $SAVED_IP${NC}"
+        # Update saved IP with current port
+        echo "$SAVED_IP" > "$WIRELESS_IP_FILE"
         return 0
     fi
     
-    # Try saved IP
+    # Try saved IP (could be just IP or IP:port)
     if [ -f "$WIRELESS_IP_FILE" ]; then
         saved_ip=$(cat "$WIRELESS_IP_FILE")
         echo -e "${YELLOW}Trying saved IP: $saved_ip${NC}"
-        wireless_connect "$saved_ip"
+        
+        # Check if saved_ip contains a port
+        if echo "$saved_ip" | grep -q ":"; then
+            wireless_connect "$(echo "$saved_ip" | cut -d: -f1)" "$(echo "$saved_ip" | cut -d: -f2)"
+        else
+            wireless_connect "$saved_ip" "$ADB_PORT"
+        fi
         
         if check_wireless_connection | grep -q .; then
+            SAVED_INFO=$(check_wireless_connection | cut -f1)
+            echo "$SAVED_INFO" > "$WIRELESS_IP_FILE"
             echo -e "${GREEN}Connected to saved device${NC}"
             return 0
         fi
@@ -214,11 +242,17 @@ try_wireless_connection() {
     # No USB - try to find device on network
     echo -e "${YELLOW}Searching for device on network...${NC}"
     
-    # Try saved IP first
+    # Try saved IP first (could be IP or IP:port)
     if [ -f "$WIRELESS_IP_FILE" ]; then
         saved_ip=$(cat "$WIRELESS_IP_FILE")
-        wireless_connect "$saved_ip"
+        if echo "$saved_ip" | grep -q ":"; then
+            wireless_connect "$(echo "$saved_ip" | cut -d: -f1)" "$(echo "$saved_ip" | cut -d: -f2)"
+        else
+            wireless_connect "$saved_ip" "$ADB_PORT"
+        fi
         if check_wireless_connection | grep -q .; then
+            SAVED_INFO=$(check_wireless_connection | cut -f1)
+            echo "$SAVED_INFO" > "$WIRELESS_IP_FILE"
             echo -e "${GREEN}Connected to saved device${NC}"
             return 0
         fi
@@ -226,11 +260,16 @@ try_wireless_connection() {
     
     # Ask user for manual IP
     echo -e "${YELLOW}Could not auto-discover device. Enter IP manually:${NC}"
-    read -p "Device IP address: " manual_ip
+    read -p "Device IP address (or IP:port): " manual_ip
     if [ -n "$manual_ip" ]; then
-        wireless_connect "$manual_ip"
+        if echo "$manual_ip" | grep -q ":"; then
+            wireless_connect "$(echo "$manual_ip" | cut -d: -f1)" "$(echo "$manual_ip" | cut -d: -f2)"
+        else
+            wireless_connect "$manual_ip" "$ADB_PORT"
+        fi
         if check_wireless_connection | grep -q .; then
-            echo "$manual_ip" > "$WIRELESS_IP_FILE"
+            SAVED_INFO=$(check_wireless_connection | cut -f1)
+            echo "$SAVED_INFO" > "$WIRELESS_IP_FILE"
             echo -e "${GREEN}Connected! IP saved for future use.${NC}"
             return 0
         fi
@@ -285,10 +324,14 @@ fi
 
 # Get device info
 if [ "$WIRELESS_MODE" = true ]; then
-    # For wireless, get the wireless device serial
-    DEVICE_SERIAL=$(adb devices | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:$ADB_PORT	device$" | head -1 | cut -f1)
+    # For wireless, get the wireless device serial (any port)
+    DEVICE_SERIAL=$(adb devices | grep -E "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+	device$" | head -1 | cut -f1)
     if [ -z "$DEVICE_SERIAL" ]; then
         DEVICE_SERIAL=$(adb devices | grep -E "^[a-zA-Z0-9:.-]+	device$" | head -1 | cut -f1)
+    fi
+    # Extract port if present
+    if echo "$DEVICE_SERIAL" | grep -q ":"; then
+        WIRELESS_PORT=$(echo "$DEVICE_SERIAL" | cut -d: -f2)
     fi
 else
     DEVICE_SERIAL=$(adb devices | grep -E "^[a-zA-Z0-9:.-]+	device$" | head -1 | cut -f1)

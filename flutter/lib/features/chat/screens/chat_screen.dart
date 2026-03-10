@@ -65,9 +65,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (widget.isAcp) {
         // First select ACP backend to ensure client is initialized, then resume the session
         final ws = ref.read(sharedWebSocketServiceProvider);
+        print('DEBUG ChatScreen: Switching to ACP backend');
         ws.selectBackend('acp');
-        // Resume the session to attach to it
+        print(
+          'DEBUG ChatScreen: Resuming ACP session ${widget.sessionName} with cwd ${widget.cwd}',
+        );
         ws.acpResumeSession(widget.sessionName, widget.cwd);
+        print('DEBUG ChatScreen: Starting ACP chat for ${widget.sessionName}');
         ref.read(chatProvider.notifier).startAcpChat(widget.sessionName);
       } else {
         ref

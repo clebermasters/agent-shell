@@ -28,6 +28,35 @@ use crate::{
 };
 use sysinfo::System;
 
+fn write_acp_session_file(session_id: &str, cwd: &str) {
+    let home = match std::env::var("HOME") {
+        Ok(h) => std::path::PathBuf::from(h),
+        Err(_) => return,
+    };
+    
+    let session_dir = home.join(".webmux");
+    let session_file = session_dir.join("acp_session");
+    
+    if let Err(e) = std::fs::create_dir_all(&session_dir) {
+        warn!("Failed to create .webmux directory: {}", e);
+        return;
+    }
+    
+    let ws_url = std::env::var("WEBMUX_WS_URL")
+        .unwrap_or_else(|_| "ws://localhost:5173/ws".to_string());
+    
+    let session_json = serde_json::json!({
+        "sessionId": session_id,
+        "cwd": cwd,
+        "wsUrl": ws_url
+    });
+    
+    match std::fs::write(&session_file, session_json.to_string()) {
+        Ok(_) => info!("Updated ACP session file: {:?}", session_file),
+        Err(e) => warn!("Failed to write session file: {}", e),
+    }
+}
+
 type ClientId = String;
 
 // Pre-serialized message for zero-copy broadcasting
@@ -1396,6 +1425,19 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                     }
                                                 }
                                                 crate::acp::SessionUpdate::ToolCall { tool_call_id, title, kind, status, raw_input, .. } => {
+                                                    let session_key = format!("acp_{}", session_id);
+                                                    let chat_message = crate::chat_log::ChatMessage {
+                                                        role: "assistant".to_string(),
+                                                        timestamp: Some(chrono::Utc::now()),
+                                                        blocks: vec![crate::chat_log::ContentBlock::ToolCall {
+                                                            name: title.clone(),
+                                                            summary: kind.clone(),
+                                                            input: raw_input.clone(),
+                                                        }],
+                                                    };
+                                                    if let Err(e) = app_state_clone.chat_event_store.append_message(&session_key, 0, "acp", &chat_message) {
+                                                        tracing::warn!("Failed to persist ACP tool call: {}", e);
+                                                    }
                                                     let input = raw_input.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default());
                                                     ServerMessage::AcpToolCall {
                                                         session_id: session_id.clone(),
@@ -1413,6 +1455,19 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                         .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
                                                         .collect::<Vec<_>>()
                                                         .join("\n");
+                                                    let session_key = format!("acp_{}", session_id);
+                                                    let chat_message = crate::chat_log::ChatMessage {
+                                                        role: "tool".to_string(),
+                                                        timestamp: Some(chrono::Utc::now()),
+                                                        blocks: vec![crate::chat_log::ContentBlock::ToolResult {
+                                                            tool_name: tool_call_id.clone(),
+                                                            summary: status.clone(),
+                                                            content: if output.is_empty() { None } else { Some(output.clone()) },
+                                                        }],
+                                                    };
+                                                    if let Err(e) = app_state_clone.chat_event_store.append_message(&session_key, 0, "acp", &chat_message) {
+                                                        tracing::warn!("Failed to persist ACP tool result: {}", e);
+                                                    }
                                                     ServerMessage::AcpToolResult {
                                                         session_id: session_id.clone(),
                                                         tool_call_id,
@@ -1479,6 +1534,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 match client.create_session(&cwd).await {
                     Ok(result) => {
                         info!("ACP session created: {:?}", result.session_id);
+                        write_acp_session_file(&result.session_id, &cwd);
                         let response = ServerMessage::AcpSessionCreated {
                             session_id: result.session_id,
                             current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
@@ -1510,6 +1566,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 match client.resume_session(&session_id, &cwd).await {
                     Ok(result) => {
                         info!("ACP session resumed: {:?}", result.session_id);
+                        write_acp_session_file(&session_id, &cwd);
                         let response = ServerMessage::AcpSessionCreated {
                             session_id: result.session_id,
                             current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
@@ -1618,6 +1675,19 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                     }
                                                 }
                                                 crate::acp::SessionUpdate::ToolCall { tool_call_id, title, kind, status, raw_input, .. } => {
+                                                    let session_key = format!("acp_{}", session_id);
+                                                    let chat_message = crate::chat_log::ChatMessage {
+                                                        role: "assistant".to_string(),
+                                                        timestamp: Some(chrono::Utc::now()),
+                                                        blocks: vec![crate::chat_log::ContentBlock::ToolCall {
+                                                            name: title.clone(),
+                                                            summary: kind.clone(),
+                                                            input: raw_input.clone(),
+                                                        }],
+                                                    };
+                                                    if let Err(e) = app_state_clone.chat_event_store.append_message(&session_key, 0, "acp", &chat_message) {
+                                                        tracing::warn!("Failed to persist ACP tool call: {}", e);
+                                                    }
                                                     let input = raw_input.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default());
                                                     ServerMessage::AcpToolCall {
                                                         session_id: session_id.clone(),
@@ -1635,6 +1705,19 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                         .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
                                                         .collect::<Vec<_>>()
                                                         .join("\n");
+                                                    let session_key = format!("acp_{}", session_id);
+                                                    let chat_message = crate::chat_log::ChatMessage {
+                                                        role: "tool".to_string(),
+                                                        timestamp: Some(chrono::Utc::now()),
+                                                        blocks: vec![crate::chat_log::ContentBlock::ToolResult {
+                                                            tool_name: tool_call_id.clone(),
+                                                            summary: status.clone(),
+                                                            content: if output.is_empty() { None } else { Some(output.clone()) },
+                                                        }],
+                                                    };
+                                                    if let Err(e) = app_state_clone.chat_event_store.append_message(&session_key, 0, "acp", &chat_message) {
+                                                        tracing::warn!("Failed to persist ACP tool result: {}", e);
+                                                    }
                                                     ServerMessage::AcpToolResult {
                                                         session_id: session_id.clone(),
                                                         tool_call_id,
@@ -1850,8 +1933,9 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             let msg = ServerMessage::ChatFileMessage {
                 session_name: session_id.clone(),
                 window_index: 0,
-                message: chat_message,
+                message: chat_message.clone(),
             };
+            info!("BROADCASTING ChatFileMessage for ACP session: {} (should NOT appear in tmux chat)", session_id);
             state.client_manager.broadcast(msg).await;
 
             // Send prompt to ACP session so AI can see the file

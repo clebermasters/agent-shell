@@ -1030,6 +1030,11 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             )
             .await;
 
+            // ACP sessions have no tmux pane — no watcher to restart
+            if session_name.starts_with("acp_") {
+                return Ok(());
+            }
+
             // Restart the watcher with the clear timestamp
             state
                 .current_session

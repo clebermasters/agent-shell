@@ -1,4 +1,4 @@
-# WebMux Flutter Project Structure
+# AgentShell Flutter Project Structure
 
 ```
 flutter/
@@ -81,5 +81,5 @@ flutter build apk --release
 
 ```bash
 # Build with Docker
-docker build -t webmux-flutter -f docker/flutter/Dockerfile .
+docker build -t agentshell-flutter -f docker/flutter/Dockerfile .
 ```

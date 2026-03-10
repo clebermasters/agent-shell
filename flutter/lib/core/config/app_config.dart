@@ -4,7 +4,7 @@ class AppConfig {
   AppConfig._();
 
   // App Info
-  static const String appName = 'WebMux';
+  static const String appName = 'AgentShell';
   static const String appVersion = '1.0.0';
 
   // API - uses build config defaults if available

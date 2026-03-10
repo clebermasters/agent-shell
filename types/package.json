@@ -1,7 +1,7 @@
 {
-  "name": "@webmux/types",
+  "name": "@agentshell/types",
   "version": "1.0.0",
-  "description": "Shared TypeScript type definitions for WebMux",
+  "description": "Shared TypeScript type definitions for AgentShell",
   "main": "index.ts",
   "types": "index.ts",
   "files": [

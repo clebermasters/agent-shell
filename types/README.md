@@ -1,6 +1,6 @@
-# WebMux TypeScript Type Definitions
+# AgentShell TypeScript Type Definitions
 
-This directory contains comprehensive TypeScript type definitions for the WebMux project, providing type safety and better developer experience for both backend and frontend code.
+This directory contains comprehensive TypeScript type definitions for the AgentShell project, providing type safety and better developer experience for both backend and frontend code.
 
 ## Structure
 

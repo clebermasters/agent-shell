@@ -1,4 +1,4 @@
-# WebMux Flutter Base Image
+# AgentShell Flutter Base Image
 # Includes Flutter SDK, Android SDK, and required build tools
 FROM ubuntu:22.04
 
@@ -57,5 +57,5 @@ RUN java -version
 RUN flutter config --android-sdk=$ANDROID_SDK_ROOT
 
 # Label the image
-LABEL maintainer="webmux"
-LABEL description="Base image for WebMux Flutter builds with Android SDK 34"
+LABEL maintainer="agentshell"
+LABEL description="Base image for AgentShell Flutter builds with Android SDK 34"

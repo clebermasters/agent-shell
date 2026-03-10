@@ -1312,7 +1312,7 @@ class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
       final scaffoldMessenger = ScaffoldMessenger.of(context);
       final dio = Dio();
       final tempDir = await getTemporaryDirectory();
-      final filePath = '${tempDir.path}/webmux_image_${widget.imageId}.png';
+      final filePath = '${tempDir.path}/agentshell_image_${widget.imageId}.png';
       final file = File(filePath);
 
       if (await file.exists()) {
@@ -1321,7 +1321,7 @@ class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
 
       await dio.download(widget.imageUrl!, filePath);
 
-      await Gal.putImage(filePath, album: 'WebMux');
+      await Gal.putImage(filePath, album: 'AgentShell');
 
       await file.delete();
 

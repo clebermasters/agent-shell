@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# WebMux Android Installer Script
+# AgentShell Android Installer Script
 # Installs the APK to a connected Android device via ADB
 # Features:
 # - Auto-detects connected device
@@ -18,7 +18,7 @@ APK_PATH=""
 WIRELESS_MODE=false
 FORCE_INSTALL=false
 LAUNCH_APP=false
-PACKAGE_NAME="com.example.webmux"
+PACKAGE_NAME="com.agentshell.app"
 ADB_PORT=5555
 WIRELESS_PORT=""
 
@@ -75,14 +75,14 @@ done
 
 # Set default APK path if not provided
 if [ -z "$APK_PATH" ]; then
-    APK_PATH="$PROJECT_ROOT/webmux-flutter-release.apk"
+    APK_PATH="$PROJECT_ROOT/agentshell-flutter-release.apk"
 fi
 
 # Create config directory
 mkdir -p "$CONFIG_DIR"
 
 echo "=========================================="
-echo "  WebMux Android Installer"
+echo "  AgentShell Android Installer"
 echo "=========================================="
 echo ""
 
@@ -410,7 +410,7 @@ if echo "$INSTALL_OUTPUT" | grep -q "Success"; then
     
     if [ "$LAUNCH_APP" = true ]; then
         echo "Launching app..."
-        $ADB_CMD shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
+        $ADB_CMD shell am start -n "$PACKAGE_NAME/com.agentshell.app.MainActivity" 2>/dev/null || \
             echo -e "${YELLOW}Could not launch app automatically${NC}"
     fi
     
@@ -435,7 +435,7 @@ if echo "$INSTALL_OUTPUT" | grep -q "INSTALL_FAILED_UPDATE_INCOMPATIBLE"; then
         
         if [ "$LAUNCH_APP" = true ]; then
             echo "Launching app..."
-            $ADB_CMD shell am start -n "$PACKAGE_NAME/com.example.webmux.MainActivity" 2>/dev/null || \
+            $ADB_CMD shell am start -n "$PACKAGE_NAME/com.agentshell.app.MainActivity" 2>/dev/null || \
                 echo -e "${YELLOW}Could not launch app automatically${NC}"
         fi
         

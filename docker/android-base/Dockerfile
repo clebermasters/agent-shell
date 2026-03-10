@@ -39,5 +39,5 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 RUN node --version && npm --version && java --version
 
 # Label the image
-LABEL maintainer="webmux"
-LABEL description="Base image for WebMux Android builds with Node.js 20 and Android SDK 34"
+LABEL maintainer="agentshell"
+LABEL description="Base image for AgentShell Android builds with Node.js 20 and Android SDK 34"

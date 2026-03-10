@@ -1,6 +1,6 @@
 {
-  "name": "WebMux Terminal",
-  "short_name": "WebMux",
+  "name": "AgentShell Terminal",
+  "short_name": "AgentShell",
   "description": "Web-based TMUX session manager",
   "start_url": "/",
   "display": "standalone",

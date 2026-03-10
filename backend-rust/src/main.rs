@@ -43,8 +43,8 @@ pub static ENABLE_AUDIO_LOGS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Parser, Debug)]
-#[command(name = "webmux-backend")]
-#[command(about = "WebMux backend server", long_about = None)]
+#[command(name = "agentshell-backend")]
+#[command(about = "AgentShell backend server", long_about = None)]
 struct Args {
     /// Enable audio streaming debug logs
     #[arg(long)]
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "webmux_backend=debug,tower_http=info".into()),
+                .unwrap_or_else(|_| "agentshell_backend=debug,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -221,7 +221,7 @@ async fn main() -> Result<()> {
 
     // Start HTTP server
     let http_addr = SocketAddr::from(([0, 0, 0, 0], http_port));
-    info!("WebMux HTTP server running on {}", http_addr);
+    info!("AgentShell HTTP server running on {}", http_addr);
     info!("  Local:    http://localhost:{}", http_port);
     info!("  Network:  http://0.0.0.0:{}", http_port);
 
@@ -242,7 +242,7 @@ async fn main() -> Result<()> {
                 }
             };
 
-            info!("WebMux HTTPS server running on {}", https_addr);
+            info!("AgentShell HTTPS server running on {}", https_addr);
             info!("  Local:    https://localhost:{}", https_port);
             info!("  Network:  https://0.0.0.0:{}", https_port);
             info!(

@@ -6,8 +6,8 @@ export interface Host {
   url: string
 }
 
-const STORAGE_KEY = 'webmux-hosts'
-const SELECTED_KEY = 'webmux-selected-host'
+const STORAGE_KEY = 'agentshell-hosts'
+const SELECTED_KEY = 'agentshell-selected-host'
 
 const hosts = ref<Host[]>([])
 const selectedHostId = ref<string | null>(null)

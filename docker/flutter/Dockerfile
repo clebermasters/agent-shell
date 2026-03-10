@@ -1,7 +1,7 @@
-# WebMux Flutter Builder
+# AgentShell Flutter Builder
 # Stage 1: Build the APK
 ARG BUILD_TYPE=debug
-FROM webmux-flutter-base:latest AS builder
+FROM agentshell-flutter-base:latest AS builder
 ARG BUILD_TYPE
 ARG SERVER_LIST=""
 ARG OPENAI_API_KEY=""
@@ -51,10 +51,10 @@ RUN --mount=type=cache,target=/root/.pub-cache \
       find /app/build/app/outputs -maxdepth 5 -type f -name "*.apk" -print || true; \
       exit 1; \
     fi; \
-    cp "$apk_path" "/app/webmux-flutter-${BUILD_TYPE}.apk"
+    cp "$apk_path" "/app/agentshell-flutter-${BUILD_TYPE}.apk"
 
 # Stage 2: Minimal image just to hold the artifact
 FROM alpine:latest AS final
 ARG BUILD_TYPE=debug
-COPY --from=builder /app/webmux-flutter-${BUILD_TYPE}.apk /webmux-flutter-${BUILD_TYPE}.apk
-CMD ["sh", "-c", "echo 'APK is ready at /webmux-flutter-${BUILD_TYPE}.apk'"]
+COPY --from=builder /app/agentshell-flutter-${BUILD_TYPE}.apk /agentshell-flutter-${BUILD_TYPE}.apk
+CMD ["sh", "-c", "echo 'APK is ready at /agentshell-flutter-${BUILD_TYPE}.apk'"]

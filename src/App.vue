@@ -21,7 +21,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
-            <h1 class="text-xs xs:text-sm font-medium">webmux</h1>
+            <h1 class="text-xs xs:text-sm font-medium">agentshell</h1>
             <div class="hidden md:flex items-center space-x-4 text-xs" style="color: var(--text-secondary)">
               <span>{{ stats.hostname }}</span>
               <span>{{ stats.platform }}/{{ stats.arch }}</span>

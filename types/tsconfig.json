@@ -14,8 +14,8 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@webmux/types": ["./index.ts"],
-      "@webmux/types/backend": ["./backend.ts"]
+      "@agentshell/types": ["./index.ts"],
+      "@agentshell/types/backend": ["./backend.ts"]
     }
   },
   "include": ["*.ts"],

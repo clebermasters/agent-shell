@@ -226,7 +226,7 @@ export interface Logger {
 // ==================== Error Types ====================
 
 /**
- * WebMux error codes
+ * AgentShell error codes
  */
 export enum ErrorCode {
   SESSION_NOT_FOUND = 'SESSION_NOT_FOUND',

@@ -16,7 +16,7 @@ This directory contains comprehensive TypeScript type definitions for the AgentS
 import { TmuxSession, TmuxWindow, ClientMessage, ServerMessage } from '../types';
 
 // Import backend-specific types
-import { ExtendedWebSocket, PtyProcess, WebMuxError, ErrorCode } from '../types/backend';
+import { ExtendedWebSocket, PtyProcess, AgentShellError, ErrorCode } from '../types/backend';
 
 // Example: Type-safe WebSocket message handling
 function handleMessage(ws: ExtendedWebSocket, message: ClientMessage) {

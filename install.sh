@@ -5,7 +5,7 @@ INSTALL_DIR="/opt/agentshell"
 SERVICE_USER="${SERVICE_USER:-$(whoami)}"
 FRONTEND_PORT=5174
 BACKEND_PORT=4010
-PROJECT_DIR="/home/cleber_rodrigues/project/webmux"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== AgentShell Installer ==="
 

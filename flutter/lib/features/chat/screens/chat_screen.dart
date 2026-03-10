@@ -36,10 +36,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _showScrollButton = false;
   bool _autoScroll = true;
-  int _previousMessageCount = 0;
+  bool _isProgrammaticScroll = false;
   String? _lastTranscribedText;
-  bool _wasAtBottom = true;
-  static const double _bottomThreshold = 100;
+  static const double _bottomThreshold = 80.0;
   PlatformFile? _selectedFile;
   bool _isUploading = false;
 
@@ -63,69 +62,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (widget.isAcp) {
-        // First select ACP backend to ensure client is initialized, then resume the session
         final ws = ref.read(sharedWebSocketServiceProvider);
-        print('DEBUG ChatScreen: Switching to ACP backend');
         ws.selectBackend('acp');
-        print(
-          'DEBUG ChatScreen: Resuming ACP session ${widget.sessionName} with cwd ${widget.cwd}',
-        );
         ws.acpResumeSession(widget.sessionName, widget.cwd);
-        print('DEBUG ChatScreen: Starting ACP chat for ${widget.sessionName}');
         ref.read(chatProvider.notifier).startAcpChat(widget.sessionName);
       } else {
         ref
             .read(chatProvider.notifier)
             .watchChatLog(widget.sessionName, widget.windowIndex);
       }
-
-      // Initialize scroll position tracking
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _updateScrollState();
-      });
     });
 
     _scrollController.addListener(_onScroll);
   }
 
-  void _updateScrollState() {
-    if (!_scrollController.hasClients) return;
-    final position = _scrollController.position;
-    _wasAtBottom = position.pixels >= position.maxScrollExtent - 10;
-  }
-
   void _onScroll() {
+    if (_isProgrammaticScroll) return;
     if (!_scrollController.hasClients) return;
 
-    final position = _scrollController.position;
-    final isNearBottom =
-        position.maxScrollExtent - position.pixels < _bottomThreshold;
-    final atBottom = position.pixels >= position.maxScrollExtent - 10;
+    final pos = _scrollController.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - _bottomThreshold;
 
-    // Show/hide scroll button based on position
-    if (_showScrollButton != !isNearBottom) {
-      setState(() {
-        _showScrollButton = !isNearBottom;
-      });
+    if (_showScrollButton == atBottom) {
+      setState(() => _showScrollButton = !atBottom);
     }
 
-    // Detect if user scrolled away from bottom - disable auto-scroll
-    if (_wasAtBottom && !atBottom && _autoScroll) {
-      setState(() {
-        _autoScroll = false;
-      });
-    }
-
-    // Detect if user scrolled to bottom - enable auto-scroll
-    if (!_wasAtBottom && atBottom && !_autoScroll) {
-      setState(() {
-        _autoScroll = true;
-      });
+    if (!atBottom && _autoScroll) {
+      setState(() => _autoScroll = false);
+    } else if (atBottom && !_autoScroll) {
+      setState(() => _autoScroll = true);
     }
 
     // Load more messages when scrolled near the top
-    final isNearTop = position.pixels < 100;
-    if (isNearTop) {
+    if (pos.pixels < 100) {
       final chatState = ref.read(chatProvider);
       if (chatState.hasMoreMessages &&
           !chatState.isLoadingMore &&
@@ -133,35 +102,49 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ref.read(chatProvider.notifier).loadMoreMessages();
       }
     }
-
-    _wasAtBottom = atBottom;
   }
 
-  void _checkAndScrollToBottom(int newCount) {
-    if (_autoScroll && newCount > _previousMessageCount) {
-      _smoothScrollToBottom();
-    }
-    _previousMessageCount = newCount;
-  }
+  /// Scrolls to the bottom of the list. Safe to call at any time.
+  /// Uses addPostFrameCallback so maxScrollExtent is always up-to-date.
+  /// After animation, verifies we reached the bottom (content may have grown).
+  void _scrollToBottom({bool animate = true}) {
+    if (!mounted) return;
 
-  void _smoothScrollToBottom() {
-    if (!_scrollController.hasClients) return;
-    if (!_autoScroll) return;
+    _isProgrammaticScroll = true;
 
-    // Use a small delay to ensure widget is fully rendered (especially for big messages)
-    Future.delayed(const Duration(milliseconds: 50), () {
-      if (!_scrollController.hasClients) return;
-      if (!_autoScroll) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) {
+        _isProgrammaticScroll = false;
+        return;
+      }
 
-      final maxScroll = _scrollController.position.maxScrollExtent;
-      final currentScroll = _scrollController.position.pixels;
+      final max = _scrollController.position.maxScrollExtent;
+      final current = _scrollController.position.pixels;
 
-      if (maxScroll - currentScroll > 10) {
-        _scrollController.animateTo(
-          maxScroll,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
+      if (animate && max - current > 10) {
+        _scrollController
+            .animateTo(max,
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOut)
+            .then((_) {
+          if (!mounted) {
+            _isProgrammaticScroll = false;
+            return;
+          }
+          // Content may have grown during animation — jump to actual bottom
+          if (_scrollController.hasClients) {
+            final newMax = _scrollController.position.maxScrollExtent;
+            if (_scrollController.position.pixels < newMax - 10) {
+              _scrollController.jumpTo(newMax);
+            }
+          }
+          _isProgrammaticScroll = false;
+          if (mounted) setState(() => _showScrollButton = false);
+        });
+      } else {
+        _scrollController.jumpTo(max);
+        _isProgrammaticScroll = false;
+        if (mounted) setState(() => _showScrollButton = false);
       }
     });
   }
@@ -199,18 +182,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     _controller.clear();
-    _scrollToBottom();
+    _scrollToBottomAndEnable();
     setState(() {
       _autoScroll = true;
       _showScrollButton = false;
     });
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottomAndEnable() {
     setState(() {
       _autoScroll = true;
+      _showScrollButton = false;
     });
-    _smoothScrollToBottom();
+    _scrollToBottom();
   }
 
   Future<void> _pickFile() async {
@@ -378,7 +362,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _selectedFile = null;
         _autoScroll = true;
       });
-      _scrollToBottom();
+      _scrollToBottomAndEnable();
     } catch (e) {
       print('Error sending file: $e');
     } finally {
@@ -415,9 +399,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     }
 
-    // Check scroll after build completes
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkAndScrollToBottom(chatState.messages.length);
+    // Auto-scroll when new messages arrive (only if user hasn't scrolled up)
+    ref.listen(chatProvider.select((s) => s.messages.length), (prev, next) {
+      if ((next ?? 0) > (prev ?? 0) && _autoScroll) {
+        _scrollToBottom();
+      }
     });
 
     return Scaffold(
@@ -554,12 +540,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             opacity: _showScrollButton ? 1.0 : 0.0,
                             duration: const Duration(milliseconds: 200),
                             child: FloatingActionButton.small(
-                              onPressed: () {
-                                setState(() {
-                                  _autoScroll = true;
-                                });
-                                _scrollToBottom();
-                              },
+                              onPressed: _scrollToBottomAndEnable,
                               backgroundColor: const Color(0xFF6366F1),
                               child: const Icon(
                                 Icons.keyboard_arrow_down,

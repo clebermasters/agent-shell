@@ -1,5 +1,5 @@
 {
-  "name": "webmux",
+  "name": "agentshell",
   "version": "1.0.0",
   "description": "Web-based TMUX session viewer",
   "main": "dist/server.js",

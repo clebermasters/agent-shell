@@ -1,13 +1,13 @@
-import type { CapacitorConfig } from '@capacitor/cli';
+import type { CapacitorConfig } from "@capacitor/cli";
 
 const config = {
-  appId: 'com.webmux.app',
-  appName: 'WebMux',
-  webDir: 'dist',
+  appId: "com.agentshell.app",
+  appName: "AgentShell",
+  webDir: "dist",
   cleartext: true,
   server: {
-    androidScheme: 'http'
-  }
+    androidScheme: "http",
+  },
 } as CapacitorConfig;
 
 export default config;

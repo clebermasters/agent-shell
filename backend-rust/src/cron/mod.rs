@@ -216,14 +216,14 @@ impl CronManager {
         let crontab_content = String::from_utf8_lossy(&output.stdout);
         let mut jobs = self.jobs.write().await;
 
-        // Parse WebMux-managed jobs from crontab
+        // Parse AgentShell-managed jobs from crontab
         // Look for special comment markers
         let lines: Vec<&str> = crontab_content.lines().collect();
         let mut i = 0;
 
         while i < lines.len() {
-            if lines[i].starts_with("# WebMux-Job-Start:") {
-                if let Some(job_id) = lines[i].strip_prefix("# WebMux-Job-Start:") {
+            if lines[i].starts_with("# AgentShell-Job-Start:") {
+                if let Some(job_id) = lines[i].strip_prefix("# AgentShell-Job-Start:") {
                     let job_id = job_id.trim();
 
                     // Parse job metadata from comments
@@ -231,7 +231,7 @@ impl CronManager {
                     let mut enabled = true;
 
                     i += 1;
-                    while i < lines.len() && !lines[i].starts_with("# WebMux-Job-End") {
+                    while i < lines.len() && !lines[i].starts_with("# AgentShell-Job-End") {
                         if lines[i].starts_with("# Name:") {
                             job_name = lines[i]
                                 .strip_prefix("# Name:")
@@ -301,17 +301,17 @@ impl CronManager {
             String::new()
         };
 
-        // Add job with WebMux markers
+        // Add job with AgentShell markers
         let job_entry = if job.enabled {
             // Active job - include the cron line
             format!(
-                "\n# WebMux-Job-Start:{}\n# Name:{}\n# Enabled:{}\n{} {}\n# WebMux-Job-End:{}\n",
+                "\n# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n{} {}\n# AgentShell-Job-End:{}\n",
                 job.id, job.name, job.enabled, job.schedule, job.command, job.id
             )
         } else {
             // Disabled job - comment out the cron line
             format!(
-                "\n# WebMux-Job-Start:{}\n# Name:{}\n# Enabled:{}\n# {} {}\n# WebMux-Job-End:{}\n",
+                "\n# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n# {} {}\n# AgentShell-Job-End:{}\n",
                 job.id, job.name, job.enabled, job.schedule, job.command, job.id
             )
         };
@@ -339,9 +339,9 @@ impl CronManager {
         let mut skip = false;
 
         while i < lines.len() {
-            if lines[i] == &format!("# WebMux-Job-Start:{}", id) {
+            if lines[i] == &format!("# AgentShell-Job-Start:{}", id) {
                 skip = true;
-            } else if lines[i] == &format!("# WebMux-Job-End:{}", id) {
+            } else if lines[i] == &format!("# AgentShell-Job-End:{}", id) {
                 skip = false;
                 i += 1;
                 continue;

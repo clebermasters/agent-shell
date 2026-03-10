@@ -317,6 +317,21 @@ class WebSocketService {
     });
   }
 
+  void sendFileToAcpChat({
+    required String sessionId,
+    required String filename,
+    required String mimeType,
+    required String base64Data,
+    String? prompt,
+  }) {
+    send({
+      'type': 'send-file-to-acp-chat',
+      'sessionId': sessionId,
+      'file': {'filename': filename, 'mimeType': mimeType, 'data': base64Data},
+      'prompt': prompt,
+    });
+  }
+
   void selectBackend(String backend) {
     send({'type': 'select-backend', 'backend': backend});
   }

@@ -349,14 +349,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
       final prompt = _controller.text.trim();
 
-      ws.sendFileToChat(
-        sessionName: widget.sessionName,
-        windowIndex: widget.windowIndex,
-        filename: _selectedFile!.name,
-        mimeType: _selectedFile!.extension ?? 'application/octet-stream',
-        base64Data: base64Data,
-        prompt: prompt.isNotEmpty ? prompt : null,
-      );
+      if (widget.isAcp) {
+        ws.sendFileToAcpChat(
+          sessionId: widget.sessionName,
+          filename: _selectedFile!.name,
+          mimeType: _selectedFile!.extension ?? 'application/octet-stream',
+          base64Data: base64Data,
+          prompt: prompt.isNotEmpty ? prompt : null,
+        );
+      } else {
+        ws.sendFileToChat(
+          sessionName: widget.sessionName,
+          windowIndex: widget.windowIndex,
+          filename: _selectedFile!.name,
+          mimeType: _selectedFile!.extension ?? 'application/octet-stream',
+          base64Data: base64Data,
+          prompt: prompt.isNotEmpty ? prompt : null,
+        );
+      }
 
       _controller.clear();
       setState(() {

@@ -28,31 +28,22 @@ cargo build --release
 echo "Backend built successfully"
 
 echo ""
-echo "=== Step 2: Building Vue.js frontend ==="
-cd "$PROJECT_DIR"
-npm run build:client
-echo "Frontend built successfully"
-
-echo ""
-echo "=== Step 3: Installing files ==="
+echo "=== Step 2: Installing files ==="
 sudo systemctl stop agentshell 2>/dev/null || true
-sudo mkdir -p "$INSTALL_DIR/dist"
 sudo mkdir -p "$INSTALL_DIR/backend"
 sudo mkdir -p "$INSTALL_DIR/certs"
 
-sudo cp -r "$PROJECT_DIR/dist/"* "$INSTALL_DIR/dist/"
 sudo cp "$PROJECT_DIR/backend-rust/target/release/agentshell-backend" "$INSTALL_DIR/backend/"
 sudo cp -r "$PROJECT_DIR/certs/"* "$INSTALL_DIR/certs/" 2>/dev/null || true
 
 cd "$INSTALL_DIR/backend"
-sudo ln -sf ../dist dist
 sudo ln -sf ../certs certs
 cd -
 
 sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
 echo ""
-echo "=== Step 4: Creating systemd service ==="
+echo "=== Step 3: Creating systemd service ==="
 
 SERVICE_FILE="/etc/systemd/system/agentshell.service"
 
@@ -80,7 +71,7 @@ EOF
 echo "Created systemd service at $SERVICE_FILE"
 
 echo ""
-echo "=== Step 5: Starting service ==="
+echo "=== Step 4: Starting service ==="
 sudo systemctl daemon-reload
 sudo systemctl enable agentshell
 sudo systemctl start agentshell

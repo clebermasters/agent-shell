@@ -1143,21 +1143,29 @@ final filteredChatMessagesProvider = Provider<List<ChatMessage>>((ref) {
   final showThinking = chatState.showThinking;
   final showToolCalls = chatState.showToolCalls;
 
-  return chatState.messages.map((message) {
-    if (message.blocks.isEmpty) return message;
+  return chatState.messages
+      .map((message) {
+        if (message.blocks.isEmpty) return message;
 
-    final filteredBlocks = message.blocks.where((block) {
-      if (!showThinking && block.type == ChatBlockType.thinking) {
-        return false;
-      }
-      if (!showToolCalls &&
-          (block.type == ChatBlockType.toolCall ||
-              block.type == ChatBlockType.toolResult)) {
-        return false;
-      }
-      return true;
-    }).toList();
+        final filteredBlocks = message.blocks.where((block) {
+          if (!showThinking && block.type == ChatBlockType.thinking) {
+            return false;
+          }
+          if (!showToolCalls &&
+              (block.type == ChatBlockType.toolCall ||
+                  block.type == ChatBlockType.toolResult)) {
+            return false;
+          }
+          return true;
+        }).toList();
 
-    return message.copyWith(blocks: filteredBlocks);
-  }).toList();
+        // If all blocks were filtered out, return null to exclude this message
+        if (filteredBlocks.isEmpty) {
+          return null;
+        }
+
+        return message.copyWith(blocks: filteredBlocks);
+      })
+      .whereType<ChatMessage>()
+      .toList();
 });

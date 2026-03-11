@@ -103,6 +103,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     setState(() {
       _showThinking = enabled;
     });
+    ref.read(chatProvider.notifier).refreshDisplaySettings();
   }
 
   Future<void> _saveShowToolCalls(bool enabled) async {
@@ -111,6 +112,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     setState(() {
       _showToolCalls = enabled;
     });
+    ref.read(chatProvider.notifier).refreshDisplaySettings();
   }
 
   @override

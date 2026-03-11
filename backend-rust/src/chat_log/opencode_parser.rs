@@ -270,6 +270,64 @@ pub fn fetch_new_messages(db_path: &Path, state: &mut OpencodeState) -> Result<V
     Ok(messages)
 }
 
+/// Read all messages for a session from the OpenCode DB.
+/// Returns (messages, max_time_updated). max_time_updated is 0 if no messages.
+/// Respects cleared_at: messages with time_updated <= cleared_at are excluded.
+pub fn fetch_all_messages(
+    db_path: &Path,
+    session_id: &str,
+    cleared_at: Option<i64>,
+) -> Result<(Vec<ChatMessage>, i64)> {
+    let conn = Connection::open(db_path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
+    let min_time = cleared_at.unwrap_or(0);
+
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.data, p.time_updated, json_extract(m.data, '$.role')
+         FROM part p
+         JOIN message m ON p.message_id = m.id
+         WHERE p.session_id = ? AND p.time_updated > ?
+         ORDER BY p.time_updated ASC",
+    )?;
+
+    let mut rows = stmt.query(rusqlite::params![session_id, min_time])?;
+
+    // Reuse OpencodeState dedup logic
+    let mut state = OpencodeState {
+        pid: 0,
+        session_id: session_id.to_string(),
+        last_time_updated: min_time,
+        cleared_at,
+        seen_text_lengths: std::collections::HashMap::new(),
+        seen_tool_calls: std::collections::HashSet::new(),
+        seen_tool_results: std::collections::HashSet::new(),
+    };
+
+    let mut messages = Vec::new();
+    let mut max_time_updated: i64 = 0;
+
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let data: String = row.get(1)?;
+        let time_updated: i64 = row.get(2)?;
+        let role: Option<String> = row.get(3)?;
+        let role = role.unwrap_or_else(|| "assistant".to_string());
+
+        if time_updated > max_time_updated {
+            max_time_updated = time_updated;
+        }
+
+        if let Ok(part) = serde_json::from_str::<PartData>(&data) {
+            if let Some(msg) = parse_part(&id, &part, time_updated, &mut state, &role) {
+                messages.push(msg);
+            }
+        }
+    }
+
+    Ok((messages, max_time_updated))
+}
+
 fn parse_part(
     id: &str,
     part: &PartData,

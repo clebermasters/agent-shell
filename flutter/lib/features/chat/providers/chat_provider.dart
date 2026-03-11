@@ -190,12 +190,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void _handleAcpHistoryLoaded(Map<String, dynamic> message) {
     try {
       final sessionId = message['sessionId'] as String?;
-      if (sessionId != state.sessionName) {
-        // print(
-        //   'DEBUG: Ignoring history for session $sessionId (current: ${state.sessionName})',
-        // );
-        return;
-      }
+      if (sessionId != state.sessionName) return;
 
       final messagesData = message['messages'] as List<dynamic>? ?? [];
       final hasMore = message['hasMore'] as bool? ?? false;
@@ -209,11 +204,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         isLoading: false,
         hasMoreMessages: hasMore,
       );
-      // print(
-      //   'DEBUG: ACP history loaded: ${messages.length} messages, hasMore: $hasMore',
-      // );
-    } catch (e, stack) {
-      // print('ERROR parsing ACP history: $e\n$stack');
+    } catch (e) {
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to parse history',
@@ -228,20 +219,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
-      // print(
-      //   'DEBUG: Chat history received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
-      // );
-
       if (sessionName != state.sessionName ||
           windowIndex != state.windowIndex) {
-        // print(
-        //   'Ignoring chat history for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
-        // );
         return;
       }
 
       final messagesData = message['messages'] as List<dynamic>? ?? [];
-      // print('DEBUG: Processing ${messagesData.length} messages for history');
 
       final toolRaw = message['tool'];
       String? toolStr;
@@ -251,7 +234,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
         toolStr = toolRaw.keys.first.toString();
       }
 
-      // NO NOT FILTER user messages from history - we want to see previous conversation
       final messages = messagesData
           .map((msg) => _parseMessage(msg as Map<String, dynamic>))
           .toList();
@@ -806,8 +788,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       windowIndex: 0,
       isAcp: true,
     );
-
-    _ws!.acpLoadHistory(sessionName, offset: 0, limit: 50);
+    _ws!.watchAcpChatLog(sessionName, limit: 500);
   }
 
   void watchChatLog(String sessionName, int windowIndex, {int? limit}) async {

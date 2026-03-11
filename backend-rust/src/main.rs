@@ -264,7 +264,10 @@ async fn main() -> Result<()> {
     }
 
     // Run HTTP server with graceful shutdown
-    let listener = tokio::net::TcpListener::bind(http_addr).await?;
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    socket.set_reuseaddr(true)?;
+    socket.bind(http_addr)?;
+    let listener = socket.listen(1024)?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

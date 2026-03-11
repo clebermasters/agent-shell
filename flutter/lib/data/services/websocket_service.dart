@@ -12,6 +12,7 @@ class WebSocketService {
   StreamSubscription? _subscription;
   Timer? _pingTimer;
   Timer? _reconnectTimer;
+  Timer? _pongTimeoutTimer;
 
   bool _isConnected = false;
   String? _currentUrl;
@@ -41,6 +42,10 @@ class WebSocketService {
   Future<void> _doConnect() async {
     if (_currentUrl == null) return;
 
+    // Cancel any existing connection
+    await _subscription?.cancel();
+    await _channel?.sink.close();
+
     try {
       _log('Attempting WebSocket connection to: $_currentUrl');
       _channel = WebSocketChannel.connect(Uri.parse(_currentUrl!));
@@ -49,7 +54,10 @@ class WebSocketService {
         _onMessage,
         onError: _onError,
         onDone: _onDone,
+        cancelOnError: true,
       );
+
+      await _channel!.ready;
 
       _isConnected = true;
       _log('Connected successfully!');
@@ -69,6 +77,9 @@ class WebSocketService {
     try {
       final message = jsonDecode(data as String) as Map<String, dynamic>;
       final type = message['type'];
+      if (type == 'pong') {
+        _pongTimeoutTimer?.cancel();
+      }
       if (type != 'output' &&
           type != 'system-stats' &&
           type != 'pong' &&
@@ -97,14 +108,20 @@ class WebSocketService {
 
   void _startPingTimer() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    _pingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       send({'type': 'ping'});
+      _pongTimeoutTimer?.cancel();
+      _pongTimeoutTimer = Timer(const Duration(seconds: 5), () {
+        _log('Pong timeout - dead connection detected, reconnecting...');
+        forceReconnect();
+      });
     });
   }
 
   void _scheduleReconnect() {
     _log('Scheduling reconnect in 5 seconds...');
     _pingTimer?.cancel();
+    _pongTimeoutTimer?.cancel();
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 5), () {
       _doConnect();
@@ -115,6 +132,7 @@ class WebSocketService {
     if (_currentUrl == null) return;
     _log('Forcing immediate reconnect...');
     _pingTimer?.cancel();
+    _pongTimeoutTimer?.cancel();
     _reconnectTimer?.cancel();
     try {
       _subscription?.cancel();
@@ -126,11 +144,23 @@ class WebSocketService {
   }
 
   void send(Map<String, dynamic> message) {
+    _log('send() called with: ${message['type']}, isConnected: $_isConnected');
     if (_isConnected && _channel != null) {
       _log('Sending: $message');
       _channel!.sink.add(jsonEncode(message));
     } else {
-      _log('Cannot send - not connected');
+      _log('Cannot send - not connected, attempting reconnect...');
+      _scheduleReconnect();
+      // Try sending again after a short delay to allow reconnect
+      Future.delayed(const Duration(seconds: 3), () {
+        _log('Retry check: isConnected: $_isConnected');
+        if (_isConnected && _channel != null) {
+          _log('Retry sending: $message');
+          _channel!.sink.add(jsonEncode(message));
+        } else {
+          _log('Retry failed - still not connected');
+        }
+      });
     }
   }
 
@@ -276,6 +306,15 @@ class WebSocketService {
     });
   }
 
+  void watchAcpChatLog(String sessionId, {int? windowIndex, int? limit}) {
+    send({
+      'type': 'watch-acp-chat-log',
+      'sessionId': sessionId,
+      if (windowIndex != null) 'windowIndex': windowIndex,
+      if (limit != null) 'limit': limit,
+    });
+  }
+
   void unwatchChatLog() {
     send({'type': 'unwatch-chat-log'});
   }
@@ -405,6 +444,7 @@ class WebSocketService {
   void disconnect() {
     _log('Disconnecting...');
     _pingTimer?.cancel();
+    _pongTimeoutTimer?.cancel();
     _reconnectTimer?.cancel();
     _subscription?.cancel();
     _channel?.sink.close();

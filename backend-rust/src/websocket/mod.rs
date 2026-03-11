@@ -976,6 +976,173 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 *handle_guard = Some(handle);
             }
         }
+        WebSocketMessage::WatchAcpChatLog { session_id, window_index } => {
+            let window_index = window_index.unwrap_or(0);
+            let session_key = format!("acp_{}", session_id);
+
+            tracing::debug!("Starting ACP chat log watch for session: {}", session_id);
+            
+            // Set current session for consistency
+            *state.current_session.lock().await = Some(session_key.clone());
+            *state.current_window.lock().await = Some(window_index);
+            
+            // Cancel any existing watcher
+            {
+                let mut handle_guard = state.chat_log_handle.lock().await;
+                if let Some(handle) = handle_guard.take() {
+                    tracing::info!("Stopping previous chat log watcher");
+                    handle.abort();
+                }
+            }
+            
+            let message_tx = state.message_tx.clone();
+            let chat_event_store = state.chat_event_store.clone();
+            let chat_clear_store = state.chat_clear_store.clone();
+            let chat_log_handle = state.chat_log_handle.clone();
+            let state_acp_client = state.acp_client.clone();
+            
+            let handle = tokio::spawn(async move {
+                // 1. Get ACP client, extract what we need, then release the lock
+                let (session_cwd, db_path) = {
+                    let acp_guard = state_acp_client.read().await;
+                    let client = match acp_guard.as_ref() {
+                        Some(c) => c,
+                        None => {
+                            let _ = send_message(
+                                &message_tx,
+                                ServerMessage::ChatLogError {
+                                    error: "ACP backend not initialized".to_string(),
+                                },
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+
+                    // 2. List ACP sessions and find target
+                    let sessions = match client.list_sessions().await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let _ = send_message(
+                                &message_tx,
+                                ServerMessage::ChatLogError {
+                                    error: format!("Failed to list ACP sessions: {}", e),
+                                },
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+
+                    let session_info = match sessions.sessions.iter().find(|s| s.session_id == session_id) {
+                        Some(s) => s,
+                        None => {
+                            let _ = send_message(
+                                &message_tx,
+                                ServerMessage::ChatLogError {
+                                    error: format!("Session not found: {}", session_id),
+                                },
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+
+                    let cwd = session_info.cwd.clone();
+                    // Resume session (ignore error if already running)
+                    let _ = client.resume_session(&session_id, &cwd).await;
+
+                    let db_path = match crate::chat_log::watcher::find_opencode_db() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let _ = send_message(
+                                &message_tx,
+                                ServerMessage::ChatLogError {
+                                    error: format!("Failed to find OpenCode DB: {}", e),
+                                },
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+
+                    (cwd, db_path)
+                    // acp_guard dropped here — lock released before polling
+                };
+
+                // 3. Get chat history from SQLite
+                let history = match chat_event_store.get_acp_history(&session_id, None, None) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        tracing::warn!("Failed to get ACP history: {}", e);
+                        vec![]
+                    }
+                };
+
+                let messages: Vec<crate::chat_log::ChatMessage> =
+                    history.into_iter().map(|e| e.message).collect();
+
+                // 4. Send history
+                let _ = send_message(
+                    &message_tx,
+                    ServerMessage::ChatHistory {
+                        session_name: session_key.clone(),
+                        window_index,
+                        messages,
+                        tool: Some(crate::chat_log::AiTool::Opencode {
+                            cwd: std::path::PathBuf::from(&session_cwd),
+                            pid: 0,
+                        }),
+                    },
+                )
+                .await;
+
+                // 5. Get cleared_at timestamp
+                let cleared_at = chat_clear_store
+                    .get_cleared_at(&session_key, window_index)
+                    .await;
+
+                let mut opencode_state = crate::chat_log::opencode_parser::OpencodeState {
+                    session_id: session_id.clone(),
+                    last_time_updated: cleared_at.unwrap_or(0),
+                    cleared_at,
+                    pid: 0,
+                    seen_text_lengths: std::collections::HashMap::new(),
+                    seen_tool_calls: std::collections::HashSet::new(),
+                    seen_tool_results: std::collections::HashSet::new(),
+                };
+
+                // 6. Poll for new messages (lock is NOT held here)
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(1000));
+                loop {
+                    interval.tick().await;
+                    match crate::chat_log::opencode_parser::fetch_new_messages(&db_path, &mut opencode_state) {
+                        Ok(new_messages) => {
+                            for msg in new_messages {
+                                if let Err(e) = chat_event_store.append_message(&session_key, window_index, "acp", &msg) {
+                                    tracing::warn!("Failed to persist ACP message: {}", e);
+                                }
+                                let _ = send_message(
+                                    &message_tx,
+                                    ServerMessage::ChatEvent {
+                                        session_name: session_key.clone(),
+                                        window_index,
+                                        message: msg,
+                                        source: Some("acp".to_string()),
+                                    },
+                                )
+                                .await;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("Failed to fetch ACP messages: {}", e);
+                        }
+                    }
+                }
+            });
+            
+            *chat_log_handle.lock().await = Some(handle);
+        }
         WebSocketMessage::UnwatchChatLog => {
             info!("Stopping chat log watch");
             let mut handle_guard = state.chat_log_handle.lock().await;
@@ -1397,14 +1564,17 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                                     
                                                     // Merge into last assistant text row instead of inserting a new row per chunk
                                                     let session_key = format!("acp_{}", session_id);
-                                                    if let Err(e) = app_state_clone.chat_event_store.append_or_merge_text(
+                                                    match app_state_clone.chat_event_store.append_or_merge_text(
                                                         &session_key,
                                                         0,
                                                         "acp",
                                                         "assistant",
                                                         &text,
                                                     ) {
-                                                        tracing::warn!("Failed to persist ACP message: {}", e);
+                                                        Ok(_) => {}
+                                                        Err(e) => {
+                                                            tracing::warn!("Failed to persist ACP message: {}", e);
+                                                        }
                                                     }
                                                     
                                                     ServerMessage::AcpMessageChunk {
@@ -2100,14 +2270,14 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             info!("ACP permission response: {} -> {}", request_id, option_id);
         }
         WebSocketMessage::AcpLoadHistory { session_id, offset, limit } => {
-            info!("ACP load history: {} offset={:?} limit={:?}", session_id, offset, limit);
-            
+            tracing::debug!("ACP load history: {} offset={:?} limit={:?}", session_id, offset, limit);
+
             // History loading doesn't require ACP client to be initialized - just read from database
             let offset = offset.unwrap_or(0);
             let limit = limit.unwrap_or(50);
-            
+
             let session_key = format!("acp_{}", session_id);
-            
+
             let messages = match app_state.chat_event_store.list_messages(&session_key, 0) {
                 Ok(msgs) => msgs,
                 Err(e) => {

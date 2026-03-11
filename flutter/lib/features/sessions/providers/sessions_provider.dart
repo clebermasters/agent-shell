@@ -102,7 +102,6 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
   }
 
   void refresh() {
-    // print('FLUTTER: Refreshing sessions...');
     state = state.copyWith(isLoading: true);
     _wsService.requestSessions();
     _wsService.acpListSessions();

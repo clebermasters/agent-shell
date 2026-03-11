@@ -262,6 +262,13 @@ pub enum WebSocketMessage {
         #[serde(rename = "windowIndex")]
         window_index: u32,
     },
+    // ACP chat log watching (direct by session ID)
+    WatchAcpChatLog {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "windowIndex")]
+        window_index: Option<u32>,
+    },
     UnwatchChatLog,
     // Clear chat history for a session
     ClearChatLog {

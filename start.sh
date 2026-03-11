@@ -6,6 +6,9 @@ SERVICE_NAME="agentshell"
 case "$ACTION" in
     start)
         echo "Starting AgentShell service..."
+        # Kill any stale process still holding port 4010
+        STALE=$(lsof -ti :4010 2>/dev/null)
+        [ -n "$STALE" ] && kill -9 $STALE 2>/dev/null && sleep 0.5
         sudo systemctl start "$SERVICE_NAME"
         echo "Service started."
         ;;

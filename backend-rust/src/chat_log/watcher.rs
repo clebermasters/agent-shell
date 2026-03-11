@@ -582,7 +582,7 @@ fn newest_jsonl_in(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Find the Opencode database
-fn find_opencode_db() -> Result<PathBuf> {
+pub fn find_opencode_db() -> Result<PathBuf> {
     let home = dirs::home_dir().context("cannot determine home directory")?;
     let db_path = home.join(".local/share/opencode/opencode.db");
     if db_path.exists() {

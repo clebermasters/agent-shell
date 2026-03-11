@@ -150,7 +150,9 @@ impl ChatEventStore {
         let message = crate::chat_log::ChatMessage {
             role: role.to_string(),
             timestamp: Some(chrono::Utc::now()),
-            blocks: vec![ContentBlock::Text { text: text.to_string() }],
+            blocks: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
         };
         self.append_message(session_name, window_index, source, &message)?;
         Ok(())
@@ -261,5 +263,63 @@ impl ChatEventStore {
             .query_map([], |row| row.get(0))?
             .collect::<std::result::Result<Vec<String>, _>>()?;
         Ok(ids)
+    }
+
+    /// Get chat history for an ACP session by session ID
+    pub fn get_acp_history(
+        &self,
+        session_id: &str,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<StoredChatEvent>> {
+        let conn = Connection::open(&self.db_path)
+            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+
+        let session_key = format!("acp_{}", session_id);
+        let limit = limit.unwrap_or(500) as i64;
+        let offset = offset.unwrap_or(0) as i64;
+
+        tracing::debug!(
+            "get_acp_history: querying for session_key='{}', limit={}, offset={}",
+            session_key,
+            limit,
+            offset
+        );
+
+        let mut stmt = conn.prepare(
+            "SELECT event_id, session_name, window_index, source, timestamp_millis, message_json
+             FROM chat_events
+             WHERE session_name = ?1
+             ORDER BY timestamp_millis ASC
+             LIMIT ?2 OFFSET ?3",
+        )?;
+
+        let rows = stmt.query_map(params![session_key, limit, offset], |row| {
+            let message_json: String = row.get(5)?;
+            let message: crate::chat_log::ChatMessage = serde_json::from_str(&message_json)
+                .unwrap_or(crate::chat_log::ChatMessage {
+                    role: "unknown".to_string(),
+                    timestamp: None,
+                    blocks: vec![],
+                });
+
+            Ok(StoredChatEvent {
+                event_id: row.get(0)?,
+                session_name: row.get(1)?,
+                window_index: row.get(2)?,
+                source: row.get(3)?,
+                timestamp_millis: row.get(4)?,
+                message,
+            })
+        })?;
+
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(row?);
+        }
+
+        tracing::debug!("get_acp_history: found {} events", events.len());
+        Ok(events)
     }
 }

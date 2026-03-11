@@ -190,7 +190,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void _handleAcpHistoryLoaded(Map<String, dynamic> message) {
     try {
       final sessionId = message['sessionId'] as String?;
-      if (sessionId != state.sessionName) return;
+      if (sessionId == null || state.sessionName != 'acp_$sessionId') return;
 
       final messagesData = message['messages'] as List<dynamic>? ?? [];
       final hasMore = message['hasMore'] as bool? ?? false;
@@ -780,11 +780,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void startAcpChat(String sessionName) {
+    // Backend returns session_name as "acp_{sessionId}" in chat-history/chat-event,
+    // so store it with the prefix so all session matching works naturally.
+    final sessionKey = 'acp_$sessionName';
     state = state.copyWith(
       messages: [],
       isLoading: true,
       error: null,
-      sessionName: sessionName,
+      sessionName: sessionKey,
       windowIndex: 0,
       isAcp: true,
     );

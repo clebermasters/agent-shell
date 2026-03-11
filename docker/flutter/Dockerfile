@@ -40,6 +40,7 @@ RUN --mount=type=cache,target=/root/.pub-cache \
 
 # Build APK (debug or release)
 RUN --mount=type=cache,target=/root/.pub-cache \
+    --mount=type=cache,target=/root/.gradle \
     --mount=type=cache,target=/app/flutter/build \
     set -eux; \
     flutter build apk --$BUILD_TYPE; \

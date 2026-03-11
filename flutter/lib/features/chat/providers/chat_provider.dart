@@ -343,12 +343,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final source = message['source'] as String?;
       final msg = _parseMessage(msgData);
 
-      // Skip user messages from backend ONLY for live events since we already add them locally
-      // But NOT for webhook messages - they need to be added
-      if (msg.type == ChatMessageType.user && source != 'webhook') {
-        // print(
-        //   '  -> Skipping live user message from backend (already added locally)',
-        // );
+      // Skip user messages from backend for live tmux events (already added locally),
+      // but allow them through for ACP and webhook sources.
+      if (msg.type == ChatMessageType.user && source != 'webhook' && source != 'acp') {
         return;
       }
 

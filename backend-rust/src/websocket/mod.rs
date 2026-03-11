@@ -999,90 +999,56 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             let chat_event_store = state.chat_event_store.clone();
             let chat_clear_store = state.chat_clear_store.clone();
             let chat_log_handle = state.chat_log_handle.clone();
-            let state_acp_client = state.acp_client.clone();
             
             let handle = tokio::spawn(async move {
-                // 1. Get ACP client, extract what we need, then release the lock
-                let (session_cwd, db_path) = {
-                    let acp_guard = state_acp_client.read().await;
-                    let client = match acp_guard.as_ref() {
-                        Some(c) => c,
-                        None => {
-                            let _ = send_message(
-                                &message_tx,
-                                ServerMessage::ChatLogError {
-                                    error: "ACP backend not initialized".to_string(),
-                                },
-                            )
-                            .await;
-                            return;
-                        }
-                    };
-
-                    // 2. List ACP sessions and find target
-                    let sessions = match client.list_sessions().await {
-                        Ok(s) => s,
-                        Err(e) => {
-                            let _ = send_message(
-                                &message_tx,
-                                ServerMessage::ChatLogError {
-                                    error: format!("Failed to list ACP sessions: {}", e),
-                                },
-                            )
-                            .await;
-                            return;
-                        }
-                    };
-
-                    let session_info = match sessions.sessions.iter().find(|s| s.session_id == session_id) {
-                        Some(s) => s,
-                        None => {
-                            let _ = send_message(
-                                &message_tx,
-                                ServerMessage::ChatLogError {
-                                    error: format!("Session not found: {}", session_id),
-                                },
-                            )
-                            .await;
-                            return;
-                        }
-                    };
-
-                    let cwd = session_info.cwd.clone();
-                    // Resume session (ignore error if already running)
-                    let _ = client.resume_session(&session_id, &cwd).await;
-
-                    let db_path = match crate::chat_log::watcher::find_opencode_db() {
-                        Ok(p) => p,
-                        Err(e) => {
-                            let _ = send_message(
-                                &message_tx,
-                                ServerMessage::ChatLogError {
-                                    error: format!("Failed to find OpenCode DB: {}", e),
-                                },
-                            )
-                            .await;
-                            return;
-                        }
-                    };
-
-                    (cwd, db_path)
-                    // acp_guard dropped here — lock released before polling
-                };
-
-                // 3. Get chat history from SQLite
-                let history = match chat_event_store.get_acp_history(&session_id, None, None) {
-                    Ok(h) => h,
+                // 1. Find OpenCode DB
+                let db_path = match crate::chat_log::watcher::find_opencode_db() {
+                    Ok(p) => p,
                     Err(e) => {
-                        tracing::warn!("Failed to get ACP history: {}", e);
-                        vec![]
+                        let _ = send_message(
+                            &message_tx,
+                            ServerMessage::ChatLogError { error: format!("OpenCode DB not found: {}", e) },
+                        ).await;
+                        return;
                     }
                 };
 
-                let messages: Vec<crate::chat_log::ChatMessage> =
-                    history.into_iter().map(|e| e.message).collect();
+                // 2. Get cleared_at
+                let cleared_at = chat_clear_store.get_cleared_at(&session_key, window_index).await;
 
-                // 4. Send history
+                // 3. Read full history from OpenCode DB
+                let (opencode_messages, max_time_updated) =
+                    match crate::chat_log::opencode_parser::fetch_all_messages(&db_path, &session_id, cleared_at) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!("Failed to read OpenCode history: {}", e);
+                            (vec![], 0)
+                        }
+                    };
+
+                // 4. Read webhook/file overlay from AgentShell DB
+                let overlay = chat_event_store
+                    .get_acp_overlay(&session_key, cleared_at)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|e| (e.timestamp_millis, e.message))
+                    .collect::<Vec<_>>();
+
+                // 5. Merge: interleave OpenCode messages and overlay by timestamp
+                let mut combined: Vec<(i64, crate::chat_log::ChatMessage)> = opencode_messages
+                    .into_iter()
+                    .map(|m| {
+                        let millis = m.timestamp
+                            .map(|t| t.timestamp_millis())
+                            .unwrap_or(0);
+                        (millis, m)
+                    })
+                    .chain(overlay)
+                    .collect();
+                combined.sort_by_key(|(t, _)| *t);
+                let messages: Vec<crate::chat_log::ChatMessage> = combined.into_iter().map(|(_, m)| m).collect();
+
+                // 6. Send history
                 let _ = send_message(
                     &message_tx,
                     ServerMessage::ChatHistory {
@@ -1090,21 +1056,16 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                         window_index,
                         messages,
                         tool: Some(crate::chat_log::AiTool::Opencode {
-                            cwd: std::path::PathBuf::from(&session_cwd),
+                            cwd: std::path::PathBuf::from("/"),
                             pid: 0,
                         }),
                     },
-                )
-                .await;
+                ).await;
 
-                // 5. Get cleared_at timestamp
-                let cleared_at = chat_clear_store
-                    .get_cleared_at(&session_key, window_index)
-                    .await;
-
+                // 7. Poll for new messages from OpenCode DB (no persistence)
                 let mut opencode_state = crate::chat_log::opencode_parser::OpencodeState {
                     session_id: session_id.clone(),
-                    last_time_updated: cleared_at.unwrap_or(0),
+                    last_time_updated: max_time_updated,
                     cleared_at,
                     pid: 0,
                     seen_text_lengths: std::collections::HashMap::new(),
@@ -1112,16 +1073,12 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                     seen_tool_results: std::collections::HashSet::new(),
                 };
 
-                // 6. Poll for new messages (lock is NOT held here)
                 let mut interval = tokio::time::interval(std::time::Duration::from_millis(1000));
                 loop {
                     interval.tick().await;
                     match crate::chat_log::opencode_parser::fetch_new_messages(&db_path, &mut opencode_state) {
                         Ok(new_messages) => {
                             for msg in new_messages {
-                                if let Err(e) = chat_event_store.append_message(&session_key, window_index, "acp", &msg) {
-                                    tracing::warn!("Failed to persist ACP message: {}", e);
-                                }
                                 let _ = send_message(
                                     &message_tx,
                                     ServerMessage::ChatEvent {
@@ -1130,13 +1087,10 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                         message: msg,
                                         source: Some("acp".to_string()),
                                     },
-                                )
-                                .await;
+                                ).await;
                             }
                         }
-                        Err(e) => {
-                            tracing::debug!("Failed to fetch ACP messages: {}", e);
-                        }
+                        Err(e) => tracing::debug!("ACP poll error: {}", e),
                     }
                 }
             });
@@ -1962,22 +1916,6 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::AcpSendPrompt { session_id, message } => {
             info!("ACP send prompt to {}: {}", session_id, message);
             
-            // Persist user message first
-            let session_key = format!("acp_{}", session_id);
-            let chat_message = crate::chat_log::ChatMessage {
-                role: "user".to_string(),
-                timestamp: Some(chrono::Utc::now()),
-                blocks: vec![crate::chat_log::ContentBlock::Text { text: message.clone() }],
-            };
-            if let Err(e) = app_state.chat_event_store.append_message(
-                &session_key,
-                0,
-                "acp",
-                &chat_message,
-            ) {
-                tracing::warn!("Failed to persist user message: {}", e);
-            }
-            
             let acp_guard = app_state.acp_client.read().await;
             if let Some(client) = acp_guard.as_ref() {
                 match client.send_prompt(&session_id, &message).await {
@@ -2302,11 +2240,17 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             send_message(&state.message_tx, response).await?;
         }
         WebSocketMessage::AcpClearHistory { session_id } => {
-            info!("ACP clear history: {}", session_id);
             let session_key = format!("acp_{}", session_id);
             if let Err(e) = app_state.chat_event_store.clear_messages(&session_key, 0) {
-                warn!("Failed to clear ACP history for {}: {}", session_id, e);
+                tracing::warn!("Failed to clear ACP overlay for {}: {}", session_id, e);
             }
+            // Set cleared_at so poll loop and future history loads skip old messages
+            let timestamp = chrono::Utc::now().timestamp_millis();
+            app_state.chat_clear_store.set_cleared_at(&session_key, 0, timestamp).await;
+            send_message(
+                &state.message_tx,
+                ServerMessage::ChatLogCleared { session_name: session_key, window_index: 0, success: true, error: None },
+            ).await?;
         }
         WebSocketMessage::AcpDeleteSession { session_id } => {
             info!("ACP delete session: {}", session_id);

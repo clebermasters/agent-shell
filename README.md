@@ -6,35 +6,38 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-DEA584?style=flat&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/Vue.js-4FC08D?style=flat&logo=vuedotjs&logoColor=white" alt="Vue.js">
-  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Flutter-02569B?style=flat&logo=flutter&logoColor=white" alt="Flutter">
   <img src="https://img.shields.io/badge/OpenCode-FF6B6B?style=flat" alt="OpenCode ACP">
 </p>
 
-A high-performance **web-based TMUX session viewer** built with Rust and Vue.js. Access and control your TMUX sessions through a modern browser interface with full PWA support, WebSocket-based real-time communication, and mobile optimization.
+AgentShell is a **high-performance, Rust-powered terminal session manager** that gives you complete control over your development agents—anywhere, anytime.
 
-> 🚀 **Now with ACP (Agent Control Protocol) support for OpenCode!** - Control AI-powered development sessions directly from your browser.
+Built with Rust for maximum speed and reliability, AgentShell lets you manage TMUX sessions and AI-powered development workflows from your Android device or web browser. Whether you're monitoring autonomous coding agents, controlling remote development sessions via OpenCode, or simply need mobile access to your terminal workflows, AgentShell delivers a seamless, real-time experience.
+
+**Control your AI agents. Control your development. From anywhere.**
+
+> 🚀 **Now with ACP (Agent Control Protocol) support for OpenCode!** - Control AI-powered development sessions directly from your devices.
 
 ## Features
 
-- **Web-based Terminal**: Full terminal emulation in your browser using xterm.js
+- **Agent Control**: Monitor and control AI coding agents running in TMUX sessions
+- **Remote OpenCode Sessions**: Start, monitor, and interact with OpenCode AI development sessions remotely
 - **TMUX Session Management**: Create, attach, rename, and kill TMUX sessions
 - **Window Management**: Create, switch, rename, and kill windows within sessions
 - **Real-time Communication**: WebSocket-based architecture for live terminal I/O
-- **Quick Search**: Fast window navigation with search functionality
-- **Audio Streaming**: System audio capture and streaming (experimental)
-- **Responsive Design**: Modern interface built with Vue 3 and Tailwind CSS
-- **Performance Optimized**: Handles large outputs with buffering and flow control
-- **PWA Support**: Install as a native app on mobile and desktop devices
-- **HTTPS Enabled**: Secure connections with self-signed certificates
+- **Chat Support**: Full chat experience with text, images, audio, and file sharing
+- **Audio Streaming**: Record and play audio messages with transcription support
+- **Image Viewer**: View images inline with full-screen mode and save to device
+- **File Management**: View and manage files in chat sessions
+- **Responsive Design**: Modern Android interface built with Flutter
+- **Performance Optimized**: Rust-powered backend handles large outputs with buffering and flow control
 - **Mobile Optimized**: Touch-friendly interface with iOS safe area support
-- **Network Accessible**: Access via local network or Tailscale IPs
+- **Network Accessible**: Access via local network or Tailscale IPs from anywhere
 - **Session Isolation**: Alternative session manager to avoid attachment conflicts
-- **ACP Support**: Full integration with OpenCode for AI-powered development sessions
 
 ## ACP with OpenCode
 
-AgentShell now supports **ACP (Agent Control Protocol)** - enabling seamless integration with [OpenCode](https://opencode.ai), a powerful AI coding assistant. This feature brings AI-driven development directly to your terminal sessions.
+AgentShell supports **ACP (Agent Control Protocol)** - enabling seamless integration with [OpenCode](https://opencode.ai), a powerful AI coding assistant. This feature brings AI-driven development directly to your terminal sessions.
 
 ### What is ACP?
 
@@ -50,19 +53,16 @@ ACP is a protocol that allows AI agents to interact with your development enviro
 
 1. **Start AgentShell backend**:
    ```bash
-   npm run dev
+   cd backend-rust
+   cargo run --release
    ```
 
 2. **Connect OpenCode**: In your OpenCode configuration, set the AgentShell WebSocket URL:
    ```
-   ws://localhost:4000/ws
-   ```
-   Or with HTTPS in production:
-   ```
-   wss://your-server:3443/ws
+   ws://localhost:4010/ws
    ```
 
-3. **Start a new ACP session**: Select "ACP" as the backend in the AgentShell UI, then create a new session with your desired working directory.
+3. **Start a new ACP session**: Create a new session with your desired working directory.
 
 4. **Watch the AI in action**: OpenCode will connect and begin interacting with your development environment in real-time!
 
@@ -87,7 +87,7 @@ The ACP client in AgentShell acts as a bridge between OpenCode's WebSocket conne
 
 ## Android App (Flutter)
 
-AgentShell now includes a high-performance **Android application** built with Flutter. This app allows you to control your Tmux sessions directly from your phone **without needing SSH**, providing a more secure and mobile-optimized experience than traditional terminal emulators.
+AgentShell includes a high-performance **Android application** built with Flutter. This app allows you to control your Tmux sessions directly from your phone.
 
 ### Key Features
 
@@ -96,162 +96,57 @@ AgentShell now includes a high-performance **Android application** built with Fl
 - **Enhanced Native Keyboard**: Optimized support for the native Android keyboard, including "sticky" modifiers (e.g., tap `CTRL` then `l` to clear screen).
 - **Session Persistence**: The app remembers your active session and navigation tab, automatically restoring them even after app restarts or screen-off events.
 - **Real-time Synchronization**: High-performance terminal rendering with instant cursor updates.
-- **Built-in Docker Build**: Easy compilation process using a pre-configured Docker environment.
-
-### Download
-
-You can download the latest debug APK here:
-[Download AgentShell Android APK](https://images.bitslovers.com/temp/agentshell-flutter-debug.apk)
+- **Audio Playback & Recording**: Play audio messages and record voice notes with transcription support.
+- **Image Viewer**: View images inline with full-screen mode and save to device.
+- **File Support**: View and manage files shared in chat sessions.
 
 ### Building from Source
 
-If you want to build the APK yourself:
-
-1.  Ensure Docker is installed and running.
-2.  Navigate to the `flutter` directory:
-    ```bash
-    cd flutter
-    ```
-3.  Run the build script:
-    ```bash
-    ./build.sh
-    ```
-4.  The generated APK will be available in the project root as `agentshell-flutter-debug.apk`.
+1. Ensure Docker is installed and running.
+2. Navigate to the `flutter` directory:
+   ```bash
+   cd flutter
+   ```
+3. Run the build script:
+   ```bash
+   ./build.sh
+   ```
+4. The generated APK will be available in the project root as `agentshell-flutter-debug.apk`.
 
 ## Prerequisites
 
-- Node.js (v14 or higher)
-- npm or yarn
 - Rust (latest stable version) - Install from [rustup.rs](https://rustup.rs/)
-- cargo-watch (optional, for development) - Install with `cargo install cargo-watch`
+- cargo (comes with Rust)
 - TMUX installed on your system
-- ffmpeg (optional, for audio streaming)
-- Modern web browser with WebSocket support
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/colerafiz/agentshell.git
-cd agentshell
-```
-
-2. Install dependencies:
-```bash
-npm install
-```
+- Modern web browser with WebSocket support (for WebUI)
 
 ## Quick Start
 
-### Development Mode
+### Backend Only
 
-Run both the Rust backend and Vue frontend in development mode:
+Run the Rust backend:
+
 ```bash
-# HTTP mode (default)
-npm run dev
-
-# HTTPS mode (required for PWA and mobile features)
-npm run dev:https
+cd backend-rust
+cargo run --release
 ```
 
-Development servers:
-- Frontend: `http://localhost:5174` (development port)
-- Backend: `http://localhost:4000` (HTTP) or `https://localhost:4443` (HTTPS)
+The backend runs on `http://localhost:4010` with WebSocket at `/ws`.
 
-### Production Mode
+### Backend + WebUI
 
-Build and run for production:
-```bash
-# Build both backend and frontend
-npm run build
-
-# Preview the production build
-npm run preview
-```
-
-Production servers:
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:3000` (HTTP) or `https://localhost:3443` (HTTPS)
-
-### HTTPS Setup
-
-Generate self-signed certificates for HTTPS:
-```bash
-npm run setup-certs
-```
+If you want a simple web interface, you can serve static files from the backend or use a separate frontend.
 
 ## Network Access
 
 The application accepts connections from any network interface:
-- **Local access**: `http://localhost:5174` (dev) or `http://localhost:5173` (prod)
-- **Network access**: `http://[YOUR-IP]:5174` (e.g., `http://192.168.1.100:5174`)
-- **Tailscale access**: `http://[TAILSCALE-IP]:5174` (e.g., `http://100.x.x.x:5174`)
+- **Local access**: `http://localhost:4010`
+- **Network access**: `http://[YOUR-IP]:4010` (e.g., `http://192.168.1.100:4010`)
+- **Tailscale access**: `http://[TAILSCALE-IP]:4010` (e.g., `http://100.x.x.x:4010`)
 
-## Installing as PWA
+## WebSocket Protocol
 
-### iOS (iPhone/iPad)
-1. Open Safari and navigate to the app (HTTPS required)
-2. Tap the Share button (square with arrow)
-3. Scroll down and tap "Add to Home Screen"
-4. Name the app and tap "Add"
-
-### Android
-1. Open Chrome and navigate to the app (HTTPS required)
-2. Tap the menu (three dots)
-3. Tap "Add to Home Screen" or "Install App"
-4. Follow the prompts to install
-
-### Desktop Chrome
-1. Look for the install icon in the address bar
-2. Click "Install" when prompted
-
-## Available Scripts
-
-### Development
-- `npm run dev` - Start both servers in development mode (HTTP)
-- `npm run dev:https` - Start both servers with HTTPS enabled
-- `npm run client` - Run only the frontend development server
-- `npm run rust:dev` - Run only the backend with auto-restart
-
-### Building
-- `npm run build` - Build both backend and frontend for production
-- `npm run rust:build` - Build only the Rust backend
-- `npm run preview` - Preview the production build
-
-### Testing & Quality
-- `npm run rust:test` - Run Rust backend tests
-- `npm run rust:check` - Run Rust code checks
-- `npm run type-check` - Type-check frontend TypeScript
-- `npm run lint` - Lint frontend code with ESLint
-
-### Utilities
-- `npm run setup-certs` - Generate self-signed SSL certificates
-
-## Architecture
-
-### Backend (Rust + Axum)
-- **Web Framework**: Axum for high-performance async HTTP/WebSocket handling
-- **Async Runtime**: Tokio for concurrent operations
-- **Terminal Interface**: portable-pty for cross-platform PTY support
-- **WebSocket**: tokio-tungstenite for real-time communication
-- **Session Management**: Two approaches:
-  - Direct attachment via `tmux attach-session`
-  - Alternative manager using `send-keys` and `capture-pane` for better isolation
-- **Audio Streaming**: FFmpeg integration for system audio capture
-
-### Frontend (Vue 3 + TypeScript)
-- **Framework**: Vue 3 with Composition API
-- **Build Tool**: Vite for fast development and optimized builds
-- **Terminal Emulator**: xterm.js with fit addon
-- **Styling**: Tailwind CSS for responsive design
-- **State Management**: @tanstack/vue-query for server state
-- **WebSocket Client**: Native WebSocket API with reconnection logic
-
-## API Reference
-
-### WebSocket Protocol
-
-All communication with the backend happens through WebSocket connections. There are no REST endpoints - everything is handled via real-time WebSocket messages.
+All communication with the backend happens through WebSocket connections.
 
 Connect to `/ws` endpoint for terminal session management.
 
@@ -274,10 +169,6 @@ Connect to `/ws` endpoint for terminal session management.
 { type: 'select-window', sessionName: string, windowIndex: number }
 { type: 'kill-window', sessionName: string, windowIndex: number }
 { type: 'rename-window', sessionName: string, windowIndex: number, newName: string }
-
-// Audio Streaming
-{ type: 'start-audio' }
-{ type: 'stop-audio' }
 ```
 
 **Server → Client Messages:**
@@ -300,13 +191,27 @@ Connect to `/ws` endpoint for terminal session management.
 { type: 'window-killed', windowIndex: number }
 { type: 'window-renamed', windowIndex: number, newName: string }
 
-// Audio Streaming
-{ type: 'audio-data', data: string }  // Base64 encoded audio
-{ type: 'audio-status', streaming: boolean, error?: string }
-
 // Real-time Updates (from monitor)
 { type: 'tmux-update', event: 'session-added' | 'session-removed' | 'window-added' | 'window-removed' }
 ```
+
+## Architecture
+
+### Backend (Rust + Axum)
+
+- **Web Framework**: Axum for high-performance async HTTP/WebSocket handling
+- **Async Runtime**: Tokio for concurrent operations
+- **Terminal Interface**: portable-pty for cross-platform PTY support
+- **WebSocket**: tokio-tungstenite for real-time communication
+- **Session Management**: Two approaches:
+  - Direct attachment via `tmux attach-session`
+  - Alternative manager using `send-keys` and `capture-pane` for better isolation
+
+### Android App (Flutter)
+
+- **Framework**: Flutter with Dart
+- **State Management**: Riverpod
+- **WebSocket Client**: Native WebSocket API with reconnection logic
 
 ## Troubleshooting
 
@@ -316,29 +221,22 @@ Connect to `/ws` endpoint for terminal session management.
 - Click anywhere in the terminal area to ensure it has focus
 
 **Session not responding**
-- Refresh the page and re-select the session from the list
+- Refresh the connection and re-select the session from the list
 
 **Window switching fails**
 - Ensure you're attached to the session first
 
 **Terminal freezes with large output**
 - The system includes output buffering and flow control
-- Check browser console for debug logs
-
-**HTTPS certificate warnings**
-- Accept the self-signed certificate in your browser
-- For mobile devices, visit the backend URL directly first
+- Check server logs for debug information
 
 ### Debug Mode
 
 Enable detailed logging:
-```bash
-RUST_LOG=debug npm run rust:dev
-```
 
-Enable audio streaming debug:
 ```bash
-cd backend-rust && cargo run -- --audio
+cd backend-rust
+RUST_LOG=debug cargo run --release
 ```
 
 ## Performance Considerations
@@ -359,9 +257,7 @@ cd backend-rust && cargo run -- --audio
 ## Security Notes
 
 - The application is designed for use on trusted networks
-- HTTPS is recommended for production deployments
-- Self-signed certificates are suitable for development/personal use
-- Consider proper certificate management for public deployments
+- Consider proper authentication for production deployments
 
 ## License
 
@@ -369,8 +265,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Acknowledgments
 
-- Terminal emulation by [xterm.js](https://xtermjs.org/)
 - Backend powered by [Rust](https://www.rust-lang.org/) and [Axum](https://github.com/tokio-rs/axum)
-- Frontend built with [Vue.js](https://vuejs.org/) and [Vite](https://vitejs.dev/)
-- Styled with [Tailwind CSS](https://tailwindcss.com/)
+- Android app built with [Flutter](https://flutter.dev/)
 - Real-time communication via [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket)

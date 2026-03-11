@@ -9,6 +9,10 @@ ARG OPENAI_API_KEY=""
 WORKDIR /app
 COPY flutter/ ./
 
+# Copy debug keystore to default location
+RUN mkdir -p /root/.android && \
+    cp /app/android/debug.keystore /root/.android/debug.keystore
+
 # Generate build config if env vars are provided
 RUN if [ -n "$SERVER_LIST" ] || [ -n "$OPENAI_API_KEY" ]; then \
     echo "Generating build config..."; \
@@ -32,7 +36,6 @@ RUN --mount=type=cache,target=/root/.pub-cache \
 
 # Build APK (debug or release)
 RUN --mount=type=cache,target=/root/.pub-cache \
-    --mount=type=cache,target=/root/.gradle \
     --mount=type=cache,target=/app/flutter/build \
     set -eux; \
     flutter build apk --$BUILD_TYPE; \

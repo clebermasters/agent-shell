@@ -28,6 +28,8 @@ class ChatState {
   final String? transcribedText;
   final int? totalMessageCount;
   final bool hasMoreMessages;
+  final bool showThinking;
+  final bool showToolCalls;
 
   const ChatState({
     this.messages = const [],
@@ -44,6 +46,8 @@ class ChatState {
     this.transcribedText,
     this.totalMessageCount,
     this.hasMoreMessages = false,
+    this.showThinking = true,
+    this.showToolCalls = true,
   });
 
   ChatState copyWith({
@@ -61,6 +65,8 @@ class ChatState {
     String? transcribedText,
     int? totalMessageCount,
     bool? hasMoreMessages,
+    bool? showThinking,
+    bool? showToolCalls,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
@@ -77,6 +83,8 @@ class ChatState {
       transcribedText: transcribedText,
       totalMessageCount: totalMessageCount ?? this.totalMessageCount,
       hasMoreMessages: hasMoreMessages ?? this.hasMoreMessages,
+      showThinking: showThinking ?? this.showThinking,
+      showToolCalls: showToolCalls ?? this.showToolCalls,
     );
   }
 }
@@ -94,6 +102,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void setPrefs(SharedPreferences prefs) {
     _prefs = prefs;
+    _loadDisplaySettings();
+  }
+
+  void _loadDisplaySettings() {
+    if (_prefs == null) return;
+    final showThinking =
+        _prefs!.getBool(AppConfig.keyShowThinking) ??
+        AppConfig.defaultShowThinking;
+    final showToolCalls =
+        _prefs!.getBool(AppConfig.keyShowToolCalls) ??
+        AppConfig.defaultShowToolCalls;
+    state = state.copyWith(
+      showThinking: showThinking,
+      showToolCalls: showToolCalls,
+    );
+  }
+
+  void refreshDisplaySettings() {
+    _loadDisplaySettings();
   }
 
   void setWebSocket(WebSocketService ws) {
@@ -107,10 +134,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     _messageSubscription = _ws!.messages.listen((message) {
       final type = message['type'] as String?;
-      print('DEBUG: Received message of type: $type');
+      // print('DEBUG: Received message of type: $type');
 
       if (type == 'chat-history' || type == 'chat-event') {
-        print('DEBUG: Full chat message: $message');
+        // print('DEBUG: Full chat message: $message');
       }
 
       switch (type) {
@@ -164,9 +191,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
     try {
       final sessionId = message['sessionId'] as String?;
       if (sessionId != state.sessionName) {
-        print(
-          'DEBUG: Ignoring history for session $sessionId (current: ${state.sessionName})',
-        );
+        // print(
+        //   'DEBUG: Ignoring history for session $sessionId (current: ${state.sessionName})',
+        // );
         return;
       }
 
@@ -182,11 +209,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
         isLoading: false,
         hasMoreMessages: hasMore,
       );
-      print(
-        'DEBUG: ACP history loaded: ${messages.length} messages, hasMore: $hasMore',
-      );
+      // print(
+      //   'DEBUG: ACP history loaded: ${messages.length} messages, hasMore: $hasMore',
+      // );
     } catch (e, stack) {
-      print('ERROR parsing ACP history: $e\n$stack');
+      // print('ERROR parsing ACP history: $e\n$stack');
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to parse history',
@@ -201,20 +228,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
-      print(
-        'DEBUG: Chat history received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
-      );
+      // print(
+      //   'DEBUG: Chat history received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
+      // );
 
       if (sessionName != state.sessionName ||
           windowIndex != state.windowIndex) {
-        print(
-          'Ignoring chat history for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
-        );
+        // print(
+        //   'Ignoring chat history for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
+        // );
         return;
       }
 
       final messagesData = message['messages'] as List<dynamic>? ?? [];
-      print('DEBUG: Processing ${messagesData.length} messages for history');
+      // print('DEBUG: Processing ${messagesData.length} messages for history');
 
       final toolRaw = message['tool'];
       String? toolStr;
@@ -241,11 +268,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
         totalMessageCount: totalCount,
         hasMoreMessages: hasMore,
       );
-      print(
-        'DEBUG: isLoading set to false, messages count: ${messages.length}, total: $totalCount, hasMore: $hasMore',
-      );
+      // print(
+      //   'DEBUG: isLoading set to false, messages count: ${messages.length}, total: $totalCount, hasMore: $hasMore',
+      // );
     } catch (e, stack) {
-      print('ERROR parsing chat history: $e\n$stack');
+      // print('ERROR parsing chat history: $e\n$stack');
       state = state.copyWith(
         isLoading: false,
         error: 'Failed to parse chat history',
@@ -280,11 +307,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
         isLoadingMore: false,
         hasMoreMessages: hasMore,
       );
-      print(
-        'DEBUG: Loaded ${newMessages.length} more messages. Total: ${allMessages.length}, hasMore: $hasMore',
-      );
+      // print(
+      //   'DEBUG: Loaded ${newMessages.length} more messages. Total: ${allMessages.length}, hasMore: $hasMore',
+      // );
     } catch (e, stack) {
-      print('ERROR parsing chat history chunk: $e\n$stack');
+      // print('ERROR parsing chat history chunk: $e\n$stack');
       state = state.copyWith(
         isLoadingMore: false,
         error: 'Failed to load more messages',
@@ -316,15 +343,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final windowIndexRaw = message['windowIndex'] ?? message['window-index'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
-      print(
-        'DEBUG: Chat event received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
-      );
+      // print(
+      //   'DEBUG: Chat event received for $sessionName:$windowIndex. Current state: ${state.sessionName}:${state.windowIndex}',
+      // );
 
       if (sessionName != state.sessionName ||
           windowIndex != state.windowIndex) {
-        print(
-          'Ignoring chat event for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
-        );
+        // print(
+        //   'Ignoring chat event for session: $sessionName:$windowIndex (current: ${state.sessionName}:${state.windowIndex})',
+        // );
         return;
       }
 
@@ -337,9 +364,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       // Skip user messages from backend ONLY for live events since we already add them locally
       // But NOT for webhook messages - they need to be added
       if (msg.type == ChatMessageType.user && source != 'webhook') {
-        print(
-          '  -> Skipping live user message from backend (already added locally)',
-        );
+        // print(
+        //   '  -> Skipping live user message from backend (already added locally)',
+        // );
         return;
       }
 
@@ -359,7 +386,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       state = state.copyWith(messages: messages);
     } catch (e, stack) {
-      print('ERROR parsing chat event: $e\n$stack');
+      // print('ERROR parsing chat event: $e\n$stack');
     }
   }
 
@@ -396,16 +423,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final windowIndexRaw = message['windowIndex'];
       final windowIndex = windowIndexRaw is num ? windowIndexRaw.toInt() : null;
 
-      print(
-        'DEBUG: _handleChatFileMessage - msg sessionName: $sessionName, windowIndex: $windowIndex',
-      );
-      print(
-        'DEBUG: _handleChatFileMessage - state sessionName: ${state.sessionName}, windowIndex: ${state.windowIndex}',
-      );
+      // print(
+      //   'DEBUG: _handleChatFileMessage - msg sessionName: $sessionName, windowIndex: $windowIndex',
+      // );
+      // print(
+      //   'DEBUG: _handleChatFileMessage - state sessionName: ${state.sessionName}, windowIndex: ${state.windowIndex}',
+      // );
 
       if (sessionName != state.sessionName ||
           windowIndex != state.windowIndex) {
-        print('DEBUG: Session mismatch, ignoring file message');
+        // print('DEBUG: Session mismatch, ignoring file message');
         return;
       }
 
@@ -416,15 +443,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       final messages = List<ChatMessage>.from(state.messages);
       if (_isDuplicateFileMessage(messages, msg)) {
-        print('DEBUG: Skipping duplicate file message');
+        // print('DEBUG: Skipping duplicate file message');
         return;
       }
       messages.add(msg);
 
       state = state.copyWith(messages: messages);
-      print('DEBUG: Added file message to chat');
+      // print('DEBUG: Added file message to chat');
     } catch (e, stack) {
-      print('ERROR parsing chat file message: $e\n$stack');
+      // print('ERROR parsing chat file message: $e\n$stack');
     }
   }
 
@@ -441,7 +468,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         body: preview,
       );
     } catch (e) {
-      print('ERROR handling chat notification: $e');
+      // print('ERROR handling chat notification: $e');
     }
   }
 
@@ -625,7 +652,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
         final lastMsg = messages.last;
         final merged = (lastMsg.blocks.first.content ?? '') + content;
         messages[messages.length - 1] = lastMsg.copyWith(
-          content: (lastMsg.content ?? '') + content,
           blocks: [ChatBlock.thinking(merged)],
         );
       } else {
@@ -633,7 +659,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
           ChatMessage(
             id: _uuid.v4(),
             type: ChatMessageType.assistant,
-            content: content,
             timestamp: DateTime.now(),
             blocks: [ChatBlock.thinking(content)],
           ),
@@ -664,12 +689,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void _handleAcpToolCall(Map<String, dynamic> message) {
-    print('DEBUG: _handleAcpToolCall received: $message');
+    // print('DEBUG: _handleAcpToolCall received: $message');
     final sessionId = message['sessionId'] as String?;
     if (sessionId != state.sessionName) {
-      print(
-        'DEBUG: Session mismatch - message: $sessionId, state: ${state.sessionName}',
-      );
+      // print(
+      //   'DEBUG: Session mismatch - message: $sessionId, state: ${state.sessionName}',
+      // );
       return;
     }
 
@@ -678,7 +703,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final kind = message['kind'] as String? ?? '';
     final inputStr = message['input'] as String? ?? '';
 
-    print('DEBUG: Processing tool call - title: $title, kind: $kind');
+    // print('DEBUG: Processing tool call - title: $title, kind: $kind');
 
     Map<String, dynamic>? inputMap;
     if (inputStr.isNotEmpty) {
@@ -692,15 +717,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final chatMessage = ChatMessage(
       id: toolCallId,
       type: ChatMessageType.toolCall,
-      content: 'Tool: $title ($kind)',
       blocks: [
         ChatBlock.toolCall(toolName: title, input: inputMap, summary: kind),
       ],
       timestamp: DateTime.now(),
-    );
-
-    print(
-      'DEBUG: Created chat message with blocks: ${chatMessage.blocks.length}',
     );
 
     state = state.copyWith(messages: [...state.messages, chatMessage]);
@@ -720,9 +740,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
         ChatMessage(
           id: toolCallId,
           type: ChatMessageType.toolResult,
-          content: output,
+          blocks: [
+            ChatBlock.toolResult(
+              toolName: '',
+              content: output,
+              summary: status,
+            ),
+          ],
           timestamp: DateTime.now(),
-          blocks: [ChatBlock.toolResult(content: output, summary: status)],
         ),
       ],
     );
@@ -856,10 +881,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
       messageType = ChatMessageType.assistant;
     }
 
+    // Don't set content when we have blocks - blocks will be used for rendering
+    // This allows filtering to work properly (e.g., hiding thinking/tool calls)
+    final messageContent = (blocks != null && blocks.isNotEmpty)
+        ? null
+        : content;
+
     final message = ChatMessage(
       id: _uuid.v4(),
       type: messageType,
-      content: content,
+      content: messageContent,
       timestamp: DateTime.now(),
       toolName: toolName,
       blocks: blocks ?? [],
@@ -1104,4 +1135,29 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
   });
 
   return notifier;
+});
+
+final filteredChatMessagesProvider = Provider<List<ChatMessage>>((ref) {
+  final chatState = ref.watch(chatProvider);
+
+  final showThinking = chatState.showThinking;
+  final showToolCalls = chatState.showToolCalls;
+
+  return chatState.messages.map((message) {
+    if (message.blocks.isEmpty) return message;
+
+    final filteredBlocks = message.blocks.where((block) {
+      if (!showThinking && block.type == ChatBlockType.thinking) {
+        return false;
+      }
+      if (!showToolCalls &&
+          (block.type == ChatBlockType.toolCall ||
+              block.type == ChatBlockType.toolResult)) {
+        return false;
+      }
+      return true;
+    }).toList();
+
+    return message.copyWith(blocks: filteredBlocks);
+  }).toList();
 });

@@ -5,6 +5,8 @@ FROM agentshell-flutter-base:latest AS builder
 ARG BUILD_TYPE
 ARG SERVER_LIST=""
 ARG OPENAI_API_KEY=""
+ARG SHOW_THINKING=""
+ARG SHOW_TOOL_CALLS=""
 
 WORKDIR /app
 COPY flutter/ ./
@@ -14,7 +16,7 @@ RUN mkdir -p /root/.android && \
     cp /app/android/debug.keystore /root/.android/debug.keystore
 
 # Generate build config if env vars are provided
-RUN if [ -n "$SERVER_LIST" ] || [ -n "$OPENAI_API_KEY" ]; then \
+RUN if [ -n "$SERVER_LIST" ] || [ -n "$OPENAI_API_KEY" ] || [ -n "$SHOW_THINKING" ] || [ -n "$SHOW_TOOL_CALLS" ]; then \
     echo "Generating build config..."; \
     mkdir -p /app/lib/core/config; \
     echo "// Auto-generated build configuration" > /app/lib/core/config/build_config.dart; \
@@ -24,6 +26,8 @@ RUN if [ -n "$SERVER_LIST" ] || [ -n "$OPENAI_API_KEY" ]; then \
     echo "  BuildConfig._();" >> /app/lib/core/config/build_config.dart; \
     echo "  static const String defaultServerList = '$SERVER_LIST';" >> /app/lib/core/config/build_config.dart; \
     echo "  static const String defaultApiKey = '$OPENAI_API_KEY';" >> /app/lib/core/config/build_config.dart; \
+    echo "  static const bool defaultShowThinking = $([ -n "$SHOW_THINKING" ] && echo "$SHOW_THINKING" || echo "true");" >> /app/lib/core/config/build_config.dart; \
+    echo "  static const bool defaultShowToolCalls = $([ -n "$SHOW_TOOL_CALLS" ] && echo "$SHOW_TOOL_CALLS" || echo "true");" >> /app/lib/core/config/build_config.dart; \
     echo "}" >> /app/lib/core/config/build_config.dart; \
     echo "Build config generated"; \
     else \

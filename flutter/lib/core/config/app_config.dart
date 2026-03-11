@@ -40,10 +40,14 @@ class AppConfig {
   static const String keyTerminalFontSize = 'terminal_font_size';
   static const String keyOpenAiApiKey = 'openai_api_key';
   static const String keyVoiceAutoEnter = 'voice_auto_enter';
+  static const String keyShowThinking = 'show_thinking';
+  static const String keyShowToolCalls = 'show_tool_calls';
 
   // Build-time defaults
   static String get defaultServerList => BuildConfig.defaultServerList;
   static String get defaultApiKey => BuildConfig.defaultApiKey;
+  static bool get defaultShowThinking => BuildConfig.defaultShowThinking;
+  static bool get defaultShowToolCalls => BuildConfig.defaultShowToolCalls;
 
   // Helper to parse SERVER_LIST from env
   // Format: "address:port,name|address:port,name"

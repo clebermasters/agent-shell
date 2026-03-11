@@ -78,7 +78,7 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
             [];
         state = state.copyWith(acpSessions: sessions, isLoading: false);
       } else if (type == 'acp-session-created') {
-        print('FLUTTER: Received acp-session-created, calling refresh()');
+        // print('FLUTTER: Received acp-session-created, calling refresh()');
         refresh(); // Refresh list after session creation
       } else if (type == 'acp-session-deleted') {
         final sessionId = message['sessionId'] as String?;
@@ -102,7 +102,7 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
   }
 
   void refresh() {
-    print('FLUTTER: Refreshing sessions...');
+    // print('FLUTTER: Refreshing sessions...');
     state = state.copyWith(isLoading: true);
     _wsService.requestSessions();
     _wsService.acpListSessions();

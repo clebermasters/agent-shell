@@ -28,7 +28,7 @@ class WebSocketService {
 
   void _log(String message) {
     final timestamp = DateTime.now().toIso8601String();
-    print('WS LOG: [$timestamp] $message');
+    // print('WS LOG: [$timestamp] $message');
     _logController.add('[$timestamp] $message');
   }
 
@@ -73,7 +73,7 @@ class WebSocketService {
           type != 'system-stats' &&
           type != 'pong' &&
           type != 'stats') {
-        print('WS RECV TYPE: $type');
+        // print('WS RECV TYPE: $type');
       }
       _messageController.add(message);
     } catch (e) {

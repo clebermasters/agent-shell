@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
 import '../../../core/config/build_config.dart';
+import '../../chat/providers/chat_provider.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -17,6 +18,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _isSaving = false;
   bool _isSavingVoiceSettings = false;
   bool _voiceAutoEnter = false;
+  bool _showThinking = true;
+  bool _showToolCalls = true;
   String? _savedMessage;
 
   @override
@@ -41,6 +44,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       );
     }
     _voiceAutoEnter = prefs.getBool(AppConfig.keyVoiceAutoEnter) ?? false;
+
+    // Load chat display settings
+    _showThinking =
+        prefs.getBool(AppConfig.keyShowThinking) ??
+        AppConfig.defaultShowThinking;
+    _showToolCalls =
+        prefs.getBool(AppConfig.keyShowToolCalls) ??
+        AppConfig.defaultShowToolCalls;
+
     if (mounted) setState(() {});
   }
 
@@ -82,6 +94,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (!mounted) return;
     setState(() {
       _isSavingVoiceSettings = false;
+    });
+  }
+
+  Future<void> _saveShowThinking(bool enabled) async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setBool(AppConfig.keyShowThinking, enabled);
+    setState(() {
+      _showThinking = enabled;
+    });
+  }
+
+  Future<void> _saveShowToolCalls(bool enabled) async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setBool(AppConfig.keyShowToolCalls, enabled);
+    setState(() {
+      _showToolCalls = enabled;
     });
   }
 
@@ -207,6 +235,48 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       ),
                     ),
                   ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          _buildSectionHeader('Chat Display'),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Control how AI agent activity appears in chat',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDarkMode
+                          ? Colors.grey.shade400
+                          : Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Show AI Thinking'),
+                    subtitle: const Text(
+                      'Display the AI agent\'s thinking process in chat',
+                    ),
+                    value: _showThinking,
+                    onChanged: (value) => _saveShowThinking(value),
+                  ),
+                  const Divider(),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Show Tool Calls'),
+                    subtitle: const Text(
+                      'Display tool calls made by the AI agent (Read, Edit, Bash, etc.)',
+                    ),
+                    value: _showToolCalls,
+                    onChanged: (value) => _saveShowToolCalls(value),
+                  ),
                 ],
               ),
             ),

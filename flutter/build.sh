@@ -56,6 +56,8 @@ done
 # Read .env file if it exists
 SERVER_LIST=""
 OPENAI_API_KEY=""
+SHOW_THINKING=""
+SHOW_TOOL_CALLS=""
 
 if [ -f "$ENV_FILE" ]; then
     echo "Reading .env file..."
@@ -73,11 +75,19 @@ if [ -f "$ENV_FILE" ]; then
             OPENAI_API_KEY)
                 OPENAI_API_KEY="$value"
                 ;;
+            SHOW_THINKING)
+                SHOW_THINKING="$value"
+                ;;
+            SHOW_TOOL_CALLS)
+                SHOW_TOOL_CALLS="$value"
+                ;;
         esac
     done < "$ENV_FILE"
     
     [ -n "$SERVER_LIST" ] && echo "  SERVER_LIST: set"
     [ -n "$OPENAI_API_KEY" ] && echo "  OPENAI_API_KEY: set"
+    [ -n "$SHOW_THINKING" ] && echo "  SHOW_THINKING: $SHOW_THINKING"
+    [ -n "$SHOW_TOOL_CALLS" ] && echo "  SHOW_TOOL_CALLS: $SHOW_TOOL_CALLS"
 fi
 
 # S3 configuration
@@ -115,6 +125,8 @@ DOCKER_BUILDKIT=1 docker build \
     --build-arg BUILDKIT_INLINE_CACHE=1 \
     --build-arg SERVER_LIST="$SERVER_LIST" \
     --build-arg OPENAI_API_KEY="$OPENAI_API_KEY" \
+    --build-arg SHOW_THINKING="$SHOW_THINKING" \
+    --build-arg SHOW_TOOL_CALLS="$SHOW_TOOL_CALLS" \
     2>&1 | tee /tmp/flutter-build.log
 
 # Check if build was successful

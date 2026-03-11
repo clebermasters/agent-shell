@@ -220,7 +220,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         });
       }
     } catch (e) {
-      print('Error picking file: $e');
+      // print('Error picking file: $e');
     }
   }
 
@@ -374,7 +374,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       });
       _scrollToBottomAndEnable();
     } catch (e) {
-      print('Error sending file: $e');
+      // print('Error sending file: $e');
     } finally {
       setState(() {
         _isUploading = false;
@@ -410,11 +410,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     // Auto-scroll when new messages arrive (only if user hasn't scrolled up)
-    ref.listen(chatProvider.select((s) => s.messages.length), (prev, next) {
-      if ((next ?? 0) > (prev ?? 0) && _autoScroll) {
-        _scrollToBottom();
-      }
-    });
+    ref.listen(
+      filteredChatMessagesProvider.select((messages) => messages.length),
+      (prev, next) {
+        if ((next ?? 0) > (prev ?? 0) && _autoScroll) {
+          _scrollToBottom();
+        }
+      },
+    );
 
     return Scaffold(
       backgroundColor: backgroundColor,
@@ -520,7 +523,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           Expanded(
-            child: chatState.messages.isEmpty && !chatState.isLoading
+            child:
+                ref.watch(filteredChatMessagesProvider).isEmpty &&
+                    !chatState.isLoading
                 ? _buildEmptyState()
                 : Stack(
                     children: [
@@ -530,9 +535,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           horizontal: 12,
                           vertical: 16,
                         ),
-                        itemCount: chatState.messages.length,
+                        itemCount: ref
+                            .watch(filteredChatMessagesProvider)
+                            .length,
                         itemBuilder: (context, index) {
-                          final message = chatState.messages[index];
+                          final message = ref.watch(
+                            filteredChatMessagesProvider,
+                          )[index];
                           final hostsState = ref.watch(hostsProvider);
                           return ProfessionalMessageBubble(
                             message: message,

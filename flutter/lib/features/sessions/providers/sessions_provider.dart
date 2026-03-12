@@ -95,7 +95,7 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
         final cwd = message['cwd'] as String?;
         // Only act on actual creation (cwd present), not resume events
         if (cwd != null) {
-          refresh();
+          Future.delayed(const Duration(milliseconds: 300), refresh);
           if (sessionId != null) _newAcpSessionController.add((sessionId: sessionId, cwd: cwd));
         }
       } else if (type == 'acp-session-deleted') {

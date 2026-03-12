@@ -87,7 +87,9 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
             isAcp: true,
             cwd: event.cwd,
           ),
-        ));
+        )).then((_) {
+          if (mounted) ref.read(sessionsProvider.notifier).refresh();
+        });
       });
     });
   }

@@ -3,19 +3,64 @@ name: Build Flutter APK
 on:
   push:
     branches: [main]
-    paths: [flutter/**]
+    paths: [flutter/**, docker/flutter/**, docker/flutter-base/**]
   pull_request:
-    paths: [flutter/**]
+    paths: [flutter/**, docker/flutter/**, docker/flutter-base/**]
   release:
     types: [published]
 
+env:
+  BASE_IMAGE: ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
+
 jobs:
-  build:
+  base-image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build APK via Docker
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push base image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/flutter-base/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:cache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:cache,mode=max
+
+  build:
+    needs: base-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull base image
+        run: docker pull ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
+
+      - name: Tag base image as expected name
+        run: docker tag ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest agentshell-flutter-base:latest
+
+      - name: Build APK
         run: ./build.sh release
         working-directory: flutter
 

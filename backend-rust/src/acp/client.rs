@@ -314,13 +314,15 @@ impl AcpClient {
         };
 
         let normalized_cwd = cwd.trim_end_matches('/');
+        let mcp_servers = load_mcp_servers(normalized_cwd);
+        tracing::info!("ACP session/new with {} MCP server(s)", mcp_servers.len());
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: serde_json::json!(id),
             method: "session/new".to_string(),
             params: Some(serde_json::json!({
                 "cwd": normalized_cwd,
-                "mcpServers": []
+                "mcpServers": mcp_servers
             })),
         };
 
@@ -558,4 +560,92 @@ struct PermissionRequestParams {
     #[serde(rename = "toolCall")]
     tool_call: sj::Value,
     options: Vec<sj::Value>,
+}
+
+/// Load MCP servers from ~/.config/opencode/opencode.json and optionally {cwd}/opencode.json.
+/// Project-level config overrides global config by name.
+fn load_mcp_servers(cwd: &str) -> Vec<sj::Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let global_path = format!("{}/.config/opencode/opencode.json", home);
+    let project_path = format!("{}/opencode.json", cwd);
+
+    let mut servers: HashMap<String, sj::Value> = HashMap::new();
+
+    for path in [&global_path, &project_path] {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            // Strip trailing commas (opencode.json uses relaxed JSON)
+            let cleaned = strip_trailing_commas(&text);
+            if let Ok(config) = sj::from_str::<sj::Value>(&cleaned) {
+                if let Some(mcp) = config.get("mcp").and_then(|v| v.as_object()) {
+                    for (name, def) in mcp {
+                        if def.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+                            continue;
+                        }
+                        if let Some(server) = mcp_def_to_acp(name, def) {
+                            servers.insert(name.clone(), server);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    servers.into_values().collect()
+}
+
+fn mcp_def_to_acp(name: &str, def: &sj::Value) -> Option<sj::Value> {
+    let typ = def.get("type").and_then(|v| v.as_str()).unwrap_or("local");
+
+    match typ {
+        "local" => {
+            let cmd_arr = def.get("command").and_then(|v| v.as_array())?;
+            let command = cmd_arr.first()?.as_str()?;
+            let args: Vec<&str> = cmd_arr[1..].iter().filter_map(|v| v.as_str()).collect();
+            let env = def.get("environment")
+                .or_else(|| def.get("env"))
+                .cloned()
+                .unwrap_or_else(|| sj::json!({}));
+            Some(sj::json!({
+                "name": name,
+                "type": "local",
+                "command": command,
+                "args": args,
+                "env": env
+            }))
+        }
+        "http" | "remote" => {
+            let url = def.get("url").and_then(|v| v.as_str())?;
+            let headers = def.get("headers").cloned().unwrap_or_else(|| sj::json!({}));
+            Some(sj::json!({
+                "name": name,
+                "type": "http",
+                "url": url,
+                "headers": headers
+            }))
+        }
+        _ => None,
+    }
+}
+
+/// Minimal trailing-comma stripper for JSON objects/arrays.
+fn strip_trailing_commas(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b',' {
+            // Look ahead past whitespace for } or ]
+            let mut j = i + 1;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'\n' || bytes[j] == b'\r') {
+                j += 1;
+            }
+            if j < bytes.len() && (bytes[j] == b'}' || bytes[j] == b']') {
+                i += 1; // skip the comma
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }

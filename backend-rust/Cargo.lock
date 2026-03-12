@@ -43,6 +43,7 @@ dependencies = [
  "serde",
  "serde_json",
  "simdutf8",
+ "subtle",
  "sysinfo",
  "tokio",
  "tower-http",

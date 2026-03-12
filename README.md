@@ -254,10 +254,85 @@ RUST_LOG=debug cargo run --release
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## Security Notes
+## Configuration
 
-- The application is designed for use on trusted networks
-- Consider proper authentication for production deployments
+AgentShell reads configuration from a `.env` file in the project root. Create one before building:
+
+```bash
+cp .env.example .env   # if available, or create manually
+```
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `AUTH_TOKEN` | Shared secret that protects all API and WebSocket endpoints. When set, every request must include this token or it will be rejected with HTTP 401. If empty or not set, the backend remains fully open (no authentication). | Recommended |
+| `SERVER_LIST` | Comma-separated list of backend servers for the Flutter app. Format: `host:port,LABEL\|host:port,LABEL`. Example: `192.168.0.10:4010,HOME\|myserver.com:443,CLOUD` | Yes |
+| `OPENAI_API_KEY` | OpenAI API key used by AI-powered features. | Optional |
+| `SHOW_THINKING` | Show AI thinking/reasoning in chat UI (`true`/`false`). Default: `true`. | Optional |
+| `SHOW_TOOL_CALLS` | Show AI tool call details in chat UI (`true`/`false`). Default: `true`. | Optional |
+
+These values are baked into the Flutter app at build time via `BuildConfig`. The backend reads `AUTH_TOKEN` from the process environment at runtime (set automatically by the systemd service when using `install.sh`).
+
+### Example `.env`
+
+```env
+SERVER_LIST=192.168.0.10:4010,HOME|myserver.com:443,CLOUD
+AUTH_TOKEN=your-secret-token-here
+OPENAI_API_KEY=sk-...
+SHOW_THINKING=false
+SHOW_TOOL_CALLS=false
+```
+
+## Security
+
+> **⚠️ IMPORTANT: If you are exposing AgentShell to the public internet (e.g., via Cloudflare, reverse proxy, or port forwarding) without a VPN, you MUST set `AUTH_TOKEN` in your `.env` before building and deploying.** Without it, anyone who discovers your server URL will have full access to your terminal sessions, can execute commands, read files, and control your AI agents. Set a strong, unique token and rebuild all clients (Android, Web, Linux) after adding it.
+
+AgentShell supports token-based authentication to protect all API and WebSocket endpoints.
+
+### How it works
+
+```
+                        ┌──────────────────────────────────────────────┐
+                        │              Rust Backend                    │
+                        │                                              │
+┌───────────┐  ?token=  │  ┌──────────────┐    ┌───────────────────┐   │
+│  Android  │──────────►│  │              │ ✅ │  /ws              │   │
+│  (Flutter)│  ws/wss   │  │              │───►│  /api/clients     │   │
+└───────────┘           │  │  Auth        │    │  /api/chat/files  │   │
+                        │  │  Middleware   │    │  /api/tmux/input  │   │
+┌───────────┐  ?token=  │  │              │    └───────────────────┘   │
+│    Web    │──────────►│  │  Validates   │                            │
+│  (Flutter)│  wss      │  │  AUTH_TOKEN  │    ┌───────────────────┐   │
+└───────────┘           │  │              │ ❌ │  HTTP 401         │   │
+                        │  │              │───►│  Unauthorized     │   │
+┌───────────┐  ?token=  │  │              │    └───────────────────┘   │
+│   Linux   │──────────►│  │              │                            │
+│  (Flutter)│  ws       │  └──────────────┘    ┌───────────────────┐   │
+└───────────┘           │                      │  Static files     │   │
+                        │         No auth ────►│  (index.html, js) │   │
+                        │                      └───────────────────┘   │
+                        └──────────────────────────────────────────────┘
+```
+
+1. Set `AUTH_TOKEN` in your `.env` file
+2. Build the Flutter apps (Android, Web, Linux) — the token is embedded at build time
+3. Run `sudo ./install.sh` to deploy the backend — the token is passed to the systemd service
+4. All requests without a valid token are rejected with HTTP 401
+
+The token can be provided via:
+- **Query parameter**: `?token=your-token` (used by Flutter clients for WebSocket connections)
+- **Header**: `X-Auth-Token: your-token` (alternative for HTTP API calls)
+
+Static files (the web frontend) are served without authentication.
+
+### Backwards compatibility
+
+If `AUTH_TOKEN` is not set, the backend remains fully open — no authentication is required. This preserves the original behavior for local/trusted network setups.
+
+### Security details
+
+- Token comparison uses **constant-time equality** to prevent timing attacks
+- Tokens are **never logged** — only the request path (without query string) appears in logs
+- The token is embedded in the app binary at build time, not transmitted in plain text headers (WebSocket API does not support custom headers)
 
 ## License
 

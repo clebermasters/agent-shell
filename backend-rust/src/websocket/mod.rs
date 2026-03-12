@@ -2104,8 +2104,9 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             }
 
             // Broadcast to all connected clients
+            // Flutter stores ACP sessions as "acp_{session_id}", so prefix accordingly
             let msg = ServerMessage::ChatFileMessage {
-                session_name: session_id.clone(),
+                session_name: format!("acp_{}", session_id),
                 window_index: 0,
                 message: chat_message.clone(),
             };

@@ -58,6 +58,7 @@ SERVER_LIST=""
 OPENAI_API_KEY=""
 SHOW_THINKING=""
 SHOW_TOOL_CALLS=""
+AUTH_TOKEN=""
 
 if [ -f "$ENV_FILE" ]; then
     echo "Reading .env file..."
@@ -81,6 +82,9 @@ if [ -f "$ENV_FILE" ]; then
             SHOW_TOOL_CALLS)
                 SHOW_TOOL_CALLS="$value"
                 ;;
+            AUTH_TOKEN)
+                AUTH_TOKEN="$value"
+                ;;
         esac
     done < "$ENV_FILE"
     
@@ -88,6 +92,7 @@ if [ -f "$ENV_FILE" ]; then
     [ -n "$OPENAI_API_KEY" ] && echo "  OPENAI_API_KEY: set"
     [ -n "$SHOW_THINKING" ] && echo "  SHOW_THINKING: $SHOW_THINKING"
     [ -n "$SHOW_TOOL_CALLS" ] && echo "  SHOW_TOOL_CALLS: $SHOW_TOOL_CALLS"
+    [ -n "$AUTH_TOKEN" ] && echo "  AUTH_TOKEN: set"
 fi
 
 # S3 configuration
@@ -129,6 +134,7 @@ DOCKER_BUILDKIT=1 docker build \
     --build-arg SHOW_THINKING="$SHOW_THINKING" \
     --build-arg SHOW_TOOL_CALLS="$SHOW_TOOL_CALLS" \
     --build-arg BUILD_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)" \
+    --build-arg AUTH_TOKEN="$AUTH_TOKEN" \
     2>&1 | tee /tmp/flutter-build.log
 
 # Check if build was successful

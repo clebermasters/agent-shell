@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:io' show Platform;
 import 'dart:ui';
 import 'package:xterm/xterm.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -86,7 +87,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     WidgetsBinding.instance.addObserver(this);
     _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
     _inputController = TextEditingController();
-    VolumeKeyBoard.instance.addListener(_handleVolumeKey);
+    if (Platform.isAndroid || Platform.isIOS) {
+      VolumeKeyBoard.instance.addListener(_handleVolumeKey);
+    }
     widget.terminal.addListener(_onTerminalChange);
     _fontSize =
         widget.prefs.getDouble(AppConfig.keyTerminalFontSize) ??
@@ -106,7 +109,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   void dispose() {
     _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
-    VolumeKeyBoard.instance.removeListener();
+    if (Platform.isAndroid || Platform.isIOS) {
+      VolumeKeyBoard.instance.removeListener();
+    }
     widget.terminal.removeListener(_onTerminalChange);
     _wrapperFocusNode.dispose();
     _inputController.dispose();

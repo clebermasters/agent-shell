@@ -1,7 +1,7 @@
 # AgentShell
 
 <p align="center">
-  <img src="logo.png" alt="AgentShell Logo" width="200">
+  <img src="logo-square.png" alt="AgentShell Logo" width="200">
 </p>
 
 <p align="center">

@@ -126,10 +126,11 @@ tramp
 *.temp
 .tmp/
 .temp/
-
+agentshell-web.zip
 node_modules/
 dist/
 *.apk
 opencode.jsonbackend-rust/chat_files/
 backend-rust/chat_events.db
 scripts/.config/wireless_ip
+agentshell-linux.tar.gz

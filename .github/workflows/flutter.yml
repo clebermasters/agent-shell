@@ -116,3 +116,42 @@ jobs:
           files: agentshell-web.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    needs: base-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and tag base image
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
+          docker tag ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest agentshell-flutter-base:latest
+
+      - name: Build Linux
+        run: ./build.sh linux
+        working-directory: flutter
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshell-linux
+          path: agentshell-linux.tar.gz
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agentshell-linux.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

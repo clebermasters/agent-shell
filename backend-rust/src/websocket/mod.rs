@@ -223,10 +223,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             msg = receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        info!("Received WebSocket message: {}", text);
+                        debug!("Received WebSocket message: {}", text);
                         match serde_json::from_str::<WebSocketMessage>(&text) {
                             Ok(ws_msg) => {
-                                info!("Parsed message type: {:?}", std::mem::discriminant(&ws_msg));
+                                debug!("Parsed message type: {:?}", std::mem::discriminant(&ws_msg));
                                 if let Err(e) = handle_message(ws_msg, &mut ws_state, state.clone()).await {
                                     error!("Error handling message: {}", e);
                                 }
@@ -623,42 +623,35 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
 
         // System stats
         WebSocketMessage::GetStats => {
-            let mut sys = System::new_all();
-            sys.refresh_all();
-
-            let load_avg = System::load_average();
-            let stats = SystemStats {
-                cpu: CpuInfo {
-                    cores: sys.cpus().len(),
-                    model: sys
-                        .cpus()
-                        .first()
-                        .map(|c| c.brand().to_string())
-                        .unwrap_or_default(),
-                    usage: load_avg.one as f32,
-                    load_avg: [
-                        load_avg.one as f32,
-                        load_avg.five as f32,
-                        load_avg.fifteen as f32,
-                    ],
-                },
-                memory: MemoryInfo {
-                    total: sys.total_memory(),
-                    used: sys.used_memory(),
-                    free: sys.available_memory(),
-                    percent: format!(
-                        "{:.1}",
-                        (sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0
-                    ),
-                },
-                uptime: System::uptime(),
-                hostname: System::host_name().unwrap_or_default(),
-                platform: std::env::consts::OS.to_string(),
-                arch: std::env::consts::ARCH.to_string(),
-            };
-
-            let response = ServerMessage::Stats { stats };
-            send_message(&state.message_tx, response).await?;
+            let stats = tokio::task::spawn_blocking(|| {
+                let mut sys = System::new_with_specifics(
+                    sysinfo::RefreshKind::new()
+                        .with_memory(sysinfo::MemoryRefreshKind::everything())
+                        .with_cpu(sysinfo::CpuRefreshKind::everything()),
+                );
+                sys.refresh_memory();
+                sys.refresh_cpu_usage();
+                let load_avg = System::load_average();
+                SystemStats {
+                    cpu: CpuInfo {
+                        cores: sys.cpus().len(),
+                        model: sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_default(),
+                        usage: load_avg.one as f32,
+                        load_avg: [load_avg.one as f32, load_avg.five as f32, load_avg.fifteen as f32],
+                    },
+                    memory: MemoryInfo {
+                        total: sys.total_memory(),
+                        used: sys.used_memory(),
+                        free: sys.available_memory(),
+                        percent: format!("{:.1}", (sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0),
+                    },
+                    uptime: System::uptime(),
+                    hostname: System::host_name().unwrap_or_default(),
+                    platform: std::env::consts::OS.to_string(),
+                    arch: std::env::consts::ARCH.to_string(),
+                }
+            }).await?;
+            send_message(&state.message_tx, ServerMessage::Stats { stats }).await?;
         }
 
         // Cron management
@@ -1031,14 +1024,14 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 let cleared_at = chat_clear_store.get_cleared_at(&session_key, window_index).await;
 
                 // 3. Read full history from OpenCode DB
-                let (opencode_messages, max_time_updated) =
-                    match crate::chat_log::opencode_parser::fetch_all_messages(&db_path, &session_id, cleared_at) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            tracing::warn!("Failed to read OpenCode history: {}", e);
-                            (vec![], 0)
-                        }
-                    };
+                let (opencode_messages, max_time_updated) = {
+                    let db_path2 = db_path.clone();
+                    let session_id2 = session_id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::chat_log::opencode_parser::fetch_all_messages(&db_path2, &session_id2, cleared_at)
+                    }).await.unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {}", e)))
+                        .unwrap_or_else(|e| { tracing::warn!("Failed to read OpenCode history: {}", e); (vec![], 0) })
+                };
 
                 // 4. Read webhook/file overlay from AgentShell DB
                 let overlay = chat_event_store

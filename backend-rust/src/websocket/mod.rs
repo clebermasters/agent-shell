@@ -1029,7 +1029,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 // 4. Read webhook/file overlay from AgentShell DB
                 let overlay = chat_event_store
                     .get_acp_overlay(&session_key, cleared_at)
-                    .unwrap_or_default()
+                    .unwrap_or_else(|e| { tracing::warn!("Failed to read ACP overlay: {}", e); vec![] })
                     .into_iter()
                     .map(|e| (e.timestamp_millis, e.message))
                     .collect::<Vec<_>>();

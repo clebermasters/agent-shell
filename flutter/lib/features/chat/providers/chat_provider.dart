@@ -925,7 +925,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (state.isAcp) {
       // ACP: clear DB via backend, then reset local state
       if (state.sessionName != null && _ws != null) {
-        _ws!.clearAcpHistory(state.sessionName!);
+        final rawId = state.sessionName!.replaceFirst('acp_', '');
+        _ws!.clearAcpHistory(rawId);
       }
       final sessionName = state.sessionName;
       state = const ChatState();

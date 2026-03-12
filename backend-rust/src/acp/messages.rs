@@ -65,6 +65,10 @@ pub enum JsonRpcMessage {
 }
 
 pub fn parse_jsonrpc_message(line: &str) -> Option<JsonRpcMessage> {
+    if !line.starts_with('{') {
+        tracing::debug!("ACP stdout (non-JSON): {}", line);
+        return None;
+    }
     match serde_json::from_str::<JsonRpcMessage>(line) {
         Ok(msg) => Some(msg),
         Err(e) => {

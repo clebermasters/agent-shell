@@ -1941,16 +1941,38 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             match list_result {
                 Ok(result) => {
                     info!("[TIMING] AcpListSessions total {:?}", t_total.elapsed());
-                    info!("ACP sessions: {:?}", result.sessions);
-                    // Filter out sessions the user has deleted
-                    let deleted_ids = app_state.chat_event_store
-                        .get_deleted_acp_session_ids()
-                        .unwrap_or_default();
-                    let sessions = result.sessions.into_iter()
-                        .filter(|s| !deleted_ids.contains(&s.session_id))
-                        .collect();
-                    let response = ServerMessage::AcpSessionsListed { sessions };
-                    send_message(&state.message_tx, response).await?;
+                    // Use DB directly to list all sessions across all projects
+                    let db_path = crate::chat_log::watcher::find_opencode_db();
+                    let sessions_result = match db_path {
+                        Ok(p) => tokio::task::spawn_blocking(move || crate::chat_log::opencode_parser::list_all_sessions(&p))
+                            .await.unwrap_or_else(|e| Err(anyhow::anyhow!("join error: {}", e))),
+                        Err(e) => Err(anyhow::anyhow!("opencode.db not found: {}", e)),
+                    };
+
+                    match sessions_result {
+                        Ok(all_sessions) => {
+                            let deleted_ids = app_state.chat_event_store
+                                .get_deleted_acp_session_ids()
+                                .unwrap_or_default();
+                            let sessions = all_sessions.into_iter()
+                                .filter(|s| !deleted_ids.contains(&s.session_id))
+                                .collect();
+                            let response = ServerMessage::AcpSessionsListed { sessions };
+                            send_message(&state.message_tx, response).await?;
+                        }
+                        Err(e) => {
+                            // Fall back to ACP result
+                            warn!("DB session list failed, using ACP fallback: {}", e);
+                            let deleted_ids = app_state.chat_event_store
+                                .get_deleted_acp_session_ids()
+                                .unwrap_or_default();
+                            let sessions = result.sessions.into_iter()
+                                .filter(|s| !deleted_ids.contains(&s.session_id))
+                                .collect();
+                            let response = ServerMessage::AcpSessionsListed { sessions };
+                            send_message(&state.message_tx, response).await?;
+                        }
+                    }
                 }
                 Err(e) => {
                     error!("Failed to list ACP sessions: {}", e);

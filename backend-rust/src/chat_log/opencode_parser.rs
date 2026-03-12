@@ -472,3 +472,40 @@ fn extract_thinking(text: &str) -> (String, String) {
 
     (thinking.trim().to_string(), regular.trim().to_string())
 }
+
+/// List all sessions from the OpenCode SQLite DB, across all projects.
+/// Returns sessions sorted by time_updated descending.
+pub fn list_all_sessions(db_path: &Path) -> Result<Vec<crate::acp::session::SessionInfo>> {
+    let conn = Connection::open(db_path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, directory, title, time_updated FROM session \
+         WHERE parent_id IS NULL \
+         ORDER BY time_updated DESC \
+         LIMIT 500"
+    )?;
+
+    let sessions = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let directory: String = row.get(1)?;
+        let title: String = row.get(2).unwrap_or_default();
+        let time_updated: i64 = row.get(3)?;
+        Ok((id, directory, title, time_updated))
+    })?
+    .filter_map(|r| r.ok())
+    .map(|(id, directory, title, time_updated)| {
+        let updated_at = chrono::DateTime::from_timestamp_millis(time_updated)
+            .unwrap_or_default()
+            .to_rfc3339();
+        crate::acp::session::SessionInfo {
+            session_id: id,
+            cwd: directory,
+            title,
+            updated_at,
+        }
+    })
+    .collect();
+
+    Ok(sessions)
+}

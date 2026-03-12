@@ -612,13 +612,36 @@ fn load_mcp_servers(cwd: &str) -> Vec<sj::Value> {
     servers.into_values().collect()
 }
 
+/// Resolve a command name to its full path, checking common user-local bin dirs.
+/// Falls back to the original name if not found (let the OS handle it).
+fn resolve_command(cmd: &str) -> String {
+    if cmd.starts_with('/') {
+        return cmd.to_string();
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        format!("{}/.local/bin/{}", home, cmd),
+        format!("{}/.cargo/bin/{}", home, cmd),
+        format!("/usr/local/bin/{}", cmd),
+        format!("/usr/bin/{}", cmd),
+    ];
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return path.clone();
+        }
+    }
+    cmd.to_string()
+}
+
 fn mcp_def_to_acp(name: &str, def: &sj::Value) -> Option<sj::Value> {
     let typ = def.get("type").and_then(|v| v.as_str()).unwrap_or("local");
 
     match typ {
         "local" => {
             let cmd_arr = def.get("command").and_then(|v| v.as_array())?;
-            let command = cmd_arr.first()?.as_str()?;
+            let command_str = cmd_arr.first()?.as_str()?;
+            // Resolve to full path so OpenCode (running as service) can find it
+            let command = resolve_command(command_str);
             let args: Vec<&str> = cmd_arr[1..].iter().filter_map(|v| v.as_str()).collect();
             let env: Vec<sj::Value> = def.get("environment")
                 .or_else(|| def.get("env"))

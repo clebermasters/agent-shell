@@ -136,6 +136,7 @@ impl AcpClient {
         let mut lines = reader.lines();
         
         tokio::spawn(async move {
+            let mut last_event_time: Option<std::time::Instant> = None;
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::debug!("ACP received: {}", line);                if let Some(msg) = parse_jsonrpc_message(&line) {
                     match msg {
@@ -158,12 +159,31 @@ impl AcpClient {
                                 if let Some(params) = notif.params {
                                     match serde_json::from_value::<SessionUpdateParams>(params.clone()) {
                                         Ok(update_params) => {
-                                            tracing::info!("Sending session update event for {}", update_params.session_id);
+                                            let now = std::time::Instant::now();
+                                            let gap = last_event_time.map(|t| t.elapsed());
+                                            let update_type = match &update_params.update {
+                                                SessionUpdate::AgentMessageChunk { .. } => "agent_message_chunk",
+                                                SessionUpdate::AgentThoughtChunk { .. } => "agent_thought_chunk",
+                                                SessionUpdate::UserMessageChunk { .. } => "user_message_chunk",
+                                                SessionUpdate::ToolCall { .. } => "tool_call",
+                                                SessionUpdate::ToolCallUpdate { .. } => "tool_call_update",
+                                                SessionUpdate::Plan { .. } => "plan",
+                                                SessionUpdate::UsageUpdate { .. } => "usage_update",
+                                                SessionUpdate::AvailableCommandsUpdate { .. } => "available_commands_update",
+                                                SessionUpdate::Unknown => "unknown",
+                                            };
+                                            if let Some(gap) = gap {
+                                                tracing::info!("[TIMING] ACP event '{}' for {} (gap since last: {:?})", update_type, update_params.session_id, gap);
+                                            } else {
+                                                tracing::info!("[TIMING] ACP first event '{}' for {}", update_type, update_params.session_id);
+                                            }
+                                            last_event_time = Some(now);
+                                            let t_send = std::time::Instant::now();
                                             match event_tx.send(AcpEvent::SessionUpdate {
                                                 session_id: update_params.session_id,
                                                 update: update_params.update,
                                             }).await {
-                                                Ok(_) => tracing::info!("Event sent successfully"),
+                                                Ok(_) => tracing::debug!("Event sent in {:?}", t_send.elapsed()),
                                                 Err(e) => tracing::error!("Failed to send event: {}", e),
                                             }
                                         }

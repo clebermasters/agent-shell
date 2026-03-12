@@ -60,11 +60,13 @@ class WebSocketService {
       await _channel!.ready;
 
       _isConnected = true;
-      _log('Connected successfully!');
+      // ignore: avoid_print
+      print('[CONN] Flutter→Backend CONNECTED to $_currentUrl');
       _connectionController.add(true);
       _startPingTimer();
     } catch (e) {
-      _log('Connection failed: $e');
+      // ignore: avoid_print
+      print('[CONN] Flutter→Backend CONNECT FAILED: $e (url: $_currentUrl)');
       _isConnected = false;
       _connectionController.add(false);
       _scheduleReconnect();
@@ -93,14 +95,16 @@ class WebSocketService {
   }
 
   void _onError(dynamic error) {
-    _log('WebSocket error: $error');
+    // ignore: avoid_print
+    print('[CONN] Flutter→Backend WebSocket ERROR: $error (url: $_currentUrl)');
     _isConnected = false;
     _connectionController.add(false);
     _scheduleReconnect();
   }
 
   void _onDone() {
-    _log('WebSocket connection closed');
+    // ignore: avoid_print
+    print('[CONN] Flutter→Backend WebSocket CLOSED (url: $_currentUrl)');
     _isConnected = false;
     _connectionController.add(false);
     _scheduleReconnect();
@@ -112,7 +116,8 @@ class WebSocketService {
       send({'type': 'ping'});
       _pongTimeoutTimer?.cancel();
       _pongTimeoutTimer = Timer(const Duration(seconds: 20), () {
-        _log('Pong timeout - dead connection detected, reconnecting...');
+        // ignore: avoid_print
+        print('[CONN] Flutter→Backend PONG TIMEOUT — forcing reconnect');
         forceReconnect();
       });
     });

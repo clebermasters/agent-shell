@@ -191,13 +191,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (close_tx, mut close_rx) = tokio::sync::oneshot::channel::<()>();
 
     // Spawn task to forward server messages to WebSocket with backpressure handling
+    let sender_client_id = client_id.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             match msg {
                 BroadcastMessage::Text(json) => {
                     // Check if we can send without blocking
                     if let Err(e) = sender.send(Message::Text(json.to_string())).await {
-                        error!("Failed to send message to WebSocket: {}", e);
+                        error!("[CONN] Backend→Flutter send FAILED ({}): {}", sender_client_id, e);
                         let _ = close_tx.send(());
                         break;
                     }
@@ -208,7 +209,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
                 BroadcastMessage::Binary(data) => {
                     if let Err(e) = sender.send(Message::Binary(data.to_vec())).await {
-                        error!("Failed to send binary to WebSocket: {}", e);
+                        error!("[CONN] Backend→Flutter binary send FAILED ({}): {}", sender_client_id, e);
                         let _ = close_tx.send(());
                         break;
                     }
@@ -243,17 +244,24 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                     Some(Ok(Message::Close(_))) => {
-                        info!("WebSocket connection closed: {}", client_id);
+                        info!("[CONN] Flutter→Backend CLOSE frame received ({})", client_id);
                         break;
                     }
                     Some(Ok(_)) => {
                         debug!("Ignoring WebSocket message type");
                     }
-                    _ => break,
+                    Some(Err(e)) => {
+                        error!("[CONN] Flutter→Backend recv ERROR ({}): {}", client_id, e);
+                        break;
+                    }
+                    None => {
+                        info!("[CONN] Flutter→Backend stream ENDED ({})", client_id);
+                        break;
+                    }
                 }
             }
             _ = &mut close_rx => {
-                info!("Sender failed, closing receiver for: {}", client_id);
+                info!("[CONN] Backend→Flutter sender DIED, closing receiver ({})", client_id);
                 break;
             }
         }

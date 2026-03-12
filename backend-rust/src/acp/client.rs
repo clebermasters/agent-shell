@@ -137,8 +137,7 @@ impl AcpClient {
         
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
-                tracing::debug!("ACP received: {}", line);
-                if let Some(msg) = parse_jsonrpc_message(&line) {
+                tracing::debug!("ACP received: {}", line);                if let Some(msg) = parse_jsonrpc_message(&line) {
                     match msg {
                         JsonRpcMessage::Response(resp) => {
                             if let Some(id) = resp.id.as_u64().map(|id| id as usize) {
@@ -190,7 +189,7 @@ impl AcpClient {
                     }
                 }
             }
-            tracing::info!("ACP reader task ended");
+            tracing::warn!("[CONN] Backend→ACP reader task ENDED — opencode process may have died");
         });
 
         // Send initialize request

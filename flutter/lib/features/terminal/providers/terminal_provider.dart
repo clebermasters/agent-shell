@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
 import 'package:flutter_background_service/flutter_background_service.dart'
@@ -113,11 +114,13 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
       controller: _controllers[controllerKey],
     );
 
-    // Start background service to keep socket alive
-    final service = FlutterBackgroundService();
-    var isRunning = await service.isRunning();
-    if (!isRunning) {
-      service.startService();
+    // Start background service to keep socket alive (Android/iOS only)
+    if (Platform.isAndroid || Platform.isIOS) {
+      final service = FlutterBackgroundService();
+      var isRunning = await service.isRunning();
+      if (!isRunning) {
+        service.startService();
+      }
     }
   }
 
@@ -134,7 +137,9 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   void disconnect() {
     _activeSessionName = null;
-    FlutterBackgroundService().invoke('stopService');
+    if (Platform.isAndroid || Platform.isIOS) {
+      FlutterBackgroundService().invoke('stopService');
+    }
   }
 
   void sendData(String sessionName, String data) {

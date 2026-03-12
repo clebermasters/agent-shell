@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-dev \
     liblzma-dev \
     libstdc++-12-dev \
+    lld \
     && rm -rf /var/lib/apt/lists/*
 
 # Set environment variables
@@ -46,8 +47,8 @@ RUN $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
 # Clone and setup Flutter SDK
 RUN git clone https://github.com/flutter/flutter.git -b stable --depth 1 $FLUTTER_ROOT
 
-# Pre-cache Flutter dependencies
-RUN flutter precache --android --web --no-tree-shake-icons || true
+# Pre-cache Flutter dependencies (Android, Web, Linux)
+RUN flutter precache --android --web --linux --no-tree-shake-icons || true
 
 # Verify installations
 RUN flutter --version
@@ -58,4 +59,4 @@ RUN flutter config --android-sdk=$ANDROID_SDK_ROOT
 
 # Label the image
 LABEL maintainer="agentshell"
-LABEL description="Base image for AgentShell Flutter builds with Android SDK 34"
+LABEL description="Base image for AgentShell Flutter builds (Android, Web, Linux)"

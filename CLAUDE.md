@@ -14,6 +14,7 @@ All Flutter builds run inside Docker (requires `agentshell-flutter-base:latest` 
 # Flutter
 cd flutter
 ./build.sh web               # Web build → agentshell-web.zip
+./build.sh linux             # Linux desktop build → agentshell-linux.tar.gz
 ./build.sh release           # Release APK
 ./build.sh debug             # Debug APK
 ./build.sh release --install # Build + install via USB

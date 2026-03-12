@@ -26,7 +26,7 @@ FORCE_INSTALL=false
 # Parse arguments
 for arg in "$@"; do
     case "$arg" in
-        debug|release|web)
+        debug|release|web|linux)
             BUILD_TYPE="$arg"
             ;;
         --install|-i)
@@ -40,14 +40,14 @@ for arg in "$@"; do
             FORCE_INSTALL=true
             ;;
         --help|-h)
-            echo "Usage: $0 [debug|release] [options]"
+            echo "Usage: $0 [debug|release|web|linux] [options]"
             echo ""
             echo "Arguments:"
-            echo "  debug,release     Build type (default: release)"
-            echo "  --install, -i    Auto-install to connected Android device (USB)"
-            echo "  --wireless, -w   Auto-install via WiFi"
-            echo "  --force, -f      Force install on Work Profile devices"
-            echo "  --help, -h       Show this help message"
+            echo "  debug,release,web,linux  Build type (default: release)"
+            echo "  --install, -i            Auto-install to connected Android device (USB)"
+            echo "  --wireless, -w           Auto-install via WiFi"
+            echo "  --force, -f              Force install on Work Profile devices"
+            echo "  --help, -h               Show this help message"
             exit 0
             ;;
     esac
@@ -96,7 +96,7 @@ S3_KEY="agentshell-flutter-${BUILD_TYPE}.apk"
 APK_FILENAME="agentshell-flutter-${BUILD_TYPE}.apk"
 WEB_FILENAME="agentshell-web.zip"
 
-echo "Building Flutter ${BUILD_TYPE} APK..."
+echo "Building Flutter ${BUILD_TYPE}..."
 echo "  Build type: $BUILD_TYPE"
 
 # Get number of CPU cores
@@ -152,6 +152,23 @@ if [ $? -eq 0 ]; then
             echo "ERROR: Web build output not found!"
             exit 1
         fi
+    elif [ "$BUILD_TYPE" = "linux" ]; then
+        # Copy Linux build output and create archive
+        echo "Copying Linux build to project root..."
+        rm -f "$PROJECT_ROOT/agentshell-linux.tar.gz"
+        docker cp "$CONTAINER_ID:/agentshell-linux" /tmp/agentshell-linux
+        docker rm "$CONTAINER_ID"
+        (cd /tmp && tar -czf "$PROJECT_ROOT/agentshell-linux.tar.gz" agentshell-linux && rm -rf agentshell-linux)
+
+        if [ -f "$PROJECT_ROOT/agentshell-linux.tar.gz" ]; then
+            echo ""
+            echo "Linux build successful!"
+            ls -lh "$PROJECT_ROOT/agentshell-linux.tar.gz"
+            docker image prune -f
+        else
+            echo "ERROR: Linux build output not found!"
+            exit 1
+        fi
     else
         # Remove old APK to be sure we get the new one
         rm -f "$PROJECT_ROOT/agentshell-flutter-debug.apk" "$PROJECT_ROOT/agentshell-flutter-release.apk"
@@ -161,35 +178,35 @@ if [ $? -eq 0 ]; then
         docker cp "$CONTAINER_ID:/$APK_FILENAME" "$PROJECT_ROOT/$APK_FILENAME"
         docker rm "$CONTAINER_ID"
 
-    if [ -f "$PROJECT_ROOT/$APK_FILENAME" ]; then
-        echo ""
-        echo "APK built successfully!"
-        ls -lh "$PROJECT_ROOT/$APK_FILENAME"
+        if [ -f "$PROJECT_ROOT/$APK_FILENAME" ]; then
+            echo ""
+            echo "APK built successfully!"
+            ls -lh "$PROJECT_ROOT/$APK_FILENAME"
 
-        # Cleanup dangling images to save space
-        echo "Cleaning up dangling Docker images..."
-        docker image prune -f
-        
-        # Auto-install to device if requested
-        if [ "$AUTO_INSTALL" = true ]; then
-            if [ -f "$INSTALL_SCRIPT" ]; then
-                echo ""
-                echo "=========================================="
-                echo "Auto-installing to device..."
-                echo "=========================================="
-                INSTALL_ARGS=""
-                [ "$WIRELESS_INSTALL" = true ] && INSTALL_ARGS="--wireless"
-                [ "$FORCE_INSTALL" = true ] && INSTALL_ARGS="$INSTALL_ARGS --force"
-                "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME" $INSTALL_ARGS
-            else
-                echo "Warning: Install script not found at $INSTALL_SCRIPT"
+            # Cleanup dangling images to save space
+            echo "Cleaning up dangling Docker images..."
+            docker image prune -f
+
+            # Auto-install to device if requested
+            if [ "$AUTO_INSTALL" = true ]; then
+                if [ -f "$INSTALL_SCRIPT" ]; then
+                    echo ""
+                    echo "=========================================="
+                    echo "Auto-installing to device..."
+                    echo "=========================================="
+                    INSTALL_ARGS=""
+                    [ "$WIRELESS_INSTALL" = true ] && INSTALL_ARGS="--wireless"
+                    [ "$FORCE_INSTALL" = true ] && INSTALL_ARGS="$INSTALL_ARGS --force"
+                    "$INSTALL_SCRIPT" "$PROJECT_ROOT/$APK_FILENAME" $INSTALL_ARGS
+                else
+                    echo "Warning: Install script not found at $INSTALL_SCRIPT"
+                fi
             fi
+        else
+            echo "ERROR: APK was not generated or could not be copied!"
+            exit 1
         fi
-    else
-        echo "ERROR: APK was not generated or could not be copied!"
-        exit 1
     fi
-    fi  # end else (non-web build)
 else
     echo "Build failed! Check /tmp/flutter-build.log for details"
     exit 1

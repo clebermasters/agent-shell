@@ -32,17 +32,25 @@ RUN echo "Generating build config..."; \
     echo "}" >> /app/lib/core/config/build_config.dart; \
     echo "Build config generated with timestamp: $BUILD_TIMESTAMP"
 
+# Initialize Linux platform directory if missing (flutter build linux requires it)
+RUN if [ "$BUILD_TYPE" = "linux" ] && [ ! -d "linux" ]; then \
+      flutter create --platforms=linux .; \
+    fi
+
 # Get dependencies
 RUN --mount=type=cache,target=/root/.pub-cache \
     flutter pub get
 
-# Build APK or web
+# Build APK, Web, or Linux
 RUN --mount=type=cache,target=/root/.pub-cache \
     --mount=type=cache,target=/root/.gradle \
     set -eux; \
     if [ "$BUILD_TYPE" = "web" ]; then \
       flutter build web --release; \
       cp -r /app/build/web /agentshell-web; \
+    elif [ "$BUILD_TYPE" = "linux" ]; then \
+      flutter build linux --release; \
+      cp -r /app/build/linux/x64/release/bundle /agentshell-linux; \
     else \
       flutter build apk --$BUILD_TYPE; \
       apk_path=""; \
@@ -68,4 +76,5 @@ FROM alpine:latest AS final
 ARG BUILD_TYPE=debug
 COPY --from=builder /app/agentshell-flutter-${BUILD_TYPE}.apk* /
 COPY --from=builder /agentshell-web* /agentshell-web/
+COPY --from=builder /agentshell-linux* /agentshell-linux/
 CMD ["sh", "-c", "echo 'Build artifact ready'"]

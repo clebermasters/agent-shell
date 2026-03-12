@@ -78,19 +78,32 @@ pub fn parse_line(line: &str) -> Option<ChatMessage> {
         }
     };
 
-    // Only keep user / assistant turns.
-    if raw.line_type != "user" && raw.line_type != "assistant" {
+    // Only keep user / assistant turns, plus tool_use/tool_result entries.
+    if raw.line_type != "user"
+        && raw.line_type != "assistant"
+        && raw.line_type != "tool_use"
+        && raw.line_type != "tool_result"
+    {
         return None;
     }
 
     let msg = raw.message?;
     let mut blocks = convert_content(msg.content);
 
-    // For user messages, only keep Text blocks.  The JSONL also records
-    // tool_result entries under `type:"user"` (API convention) – those are
-    // system-level, not something the human typed.
-    if msg.role == "user" {
+    // For user messages (including tool_result entries), only keep Text blocks.
+    // The JSONL records tool_result entries under `type:"user"` (API convention)
+    // and tool_use under `type:"assistant"`. For tool_use/tool_result entries,
+    // we want to keep the tool blocks.
+    if msg.role == "user" && raw.line_type != "tool_use" && raw.line_type != "tool_result" {
         blocks.retain(|b| matches!(b, ContentBlock::Text { .. }));
+    }
+
+    // For tool_use/tool_result entries, only keep tool blocks
+    if raw.line_type == "tool_use" || raw.line_type == "tool_result" {
+        blocks.retain(|b| {
+            matches!(b, ContentBlock::ToolCall { .. })
+                || matches!(b, ContentBlock::ToolResult { .. })
+        });
     }
 
     if blocks.is_empty() {
@@ -400,5 +413,42 @@ mod tests {
         let line = r#"{"uuid":"t3","parentUuid":"u3","timestamp":"2026-02-24T10:08:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig789"}]}}"#;
         // Empty thinking gets filtered out, resulting in empty blocks, so message is skipped
         assert!(parse_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_separate_tool_use_entry() {
+        // Test parsing a standalone tool_use entry (not embedded in assistant message)
+        let line = r#"{"parentUuid":"abc","type":"tool_use","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Glob","input":{"pattern":"**/*.rs"}}]},"uuid":"tool1","timestamp":"2026-02-24T10:09:00Z"}"#;
+        let msg = parse_line(line).expect("should parse");
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.blocks.len(), 1);
+        match &msg.blocks[0] {
+            ContentBlock::ToolCall { name, summary, .. } => {
+                assert_eq!(name, "Glob");
+                assert_eq!(summary, "Glob: **/*.rs");
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_separate_tool_result_entry() {
+        // Test parsing a standalone tool_result entry
+        let line = r#"{"parentUuid":"tool1","type":"tool_result","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"file1.rs\nfile2.rs"}]},"uuid":"result1","timestamp":"2026-02-24T10:09:05Z"}"#;
+        let msg = parse_line(line).expect("should parse");
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.blocks.len(), 1);
+        match &msg.blocks[0] {
+            ContentBlock::ToolResult {
+                tool_name,
+                summary,
+                content,
+            } => {
+                assert_eq!(tool_name, "tu1");
+                assert_eq!(summary, "2 lines");
+                assert_eq!(content.as_deref(), Some("file1.rs\nfile2.rs"));
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
     }
 }

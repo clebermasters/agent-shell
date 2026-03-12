@@ -601,24 +601,30 @@ fn mcp_def_to_acp(name: &str, def: &sj::Value) -> Option<sj::Value> {
             let cmd_arr = def.get("command").and_then(|v| v.as_array())?;
             let command = cmd_arr.first()?.as_str()?;
             let args: Vec<&str> = cmd_arr[1..].iter().filter_map(|v| v.as_str()).collect();
-            let env = def.get("environment")
+            let env: Vec<sj::Value> = def.get("environment")
                 .or_else(|| def.get("env"))
-                .cloned()
-                .unwrap_or_else(|| sj::json!({}));
+                .and_then(|v| v.as_object())
+                .map(|m| m.iter().map(|(k, v)| sj::json!({"name": k, "value": v})).collect())
+                .unwrap_or_default();
+            // McpServerStdio has no "type" field in the ACP schema
             Some(sj::json!({
                 "name": name,
-                "type": "local",
                 "command": command,
                 "args": args,
                 "env": env
             }))
         }
-        "http" | "remote" => {
+        "http" | "remote" | "sse" => {
             let url = def.get("url").and_then(|v| v.as_str())?;
-            let headers = def.get("headers").cloned().unwrap_or_else(|| sj::json!({}));
+            let headers: Vec<sj::Value> = def.get("headers")
+                .and_then(|v| v.as_object())
+                .map(|m| m.iter().map(|(k, v)| sj::json!({"name": k, "value": v})).collect())
+                .unwrap_or_default();
+            // "remote" maps to "sse" in ACP schema
+            let acp_type = if typ == "http" { "http" } else { "sse" };
             Some(sj::json!({
                 "name": name,
-                "type": "http",
+                "type": acp_type,
                 "url": url,
                 "headers": headers
             }))

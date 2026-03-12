@@ -2,7 +2,7 @@
 set -e
 
 INSTALL_DIR="/opt/agentshell"
-SERVICE_USER="${SERVICE_USER:-$(whoami)}"
+SERVICE_USER="${SERVICE_USER:-${SUDO_USER:-$(whoami)}}"
 FRONTEND_PORT=5174
 BACKEND_PORT=4010
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +17,9 @@ echo "=== AgentShell Installer ==="
 
 if [ "$EUID" -eq 0 ]; then
     echo "Running as root - will install system-wide"
-    SERVICE_USER="${SERVICE_USER:-root}"
+    # When run via sudo, use SUDO_USER so the service runs as the real user
+    # (needed for tmux session access)
+    SERVICE_USER="${SERVICE_USER:-${SUDO_USER:-root}}"
 else
     echo "Running as regular user - will install for current user"
     SERVICE_USER=$(whoami)

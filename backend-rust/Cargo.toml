@@ -49,6 +49,9 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 # Base64 encoding for audio streaming
 base64 = "0.21"
 
+# Constant-time comparison for auth tokens
+subtle = "2.6"
+
 # Lazy static for global state
 lazy_static = "1.4"
 

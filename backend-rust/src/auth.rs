@@ -1,4 +1,5 @@
 use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
+use subtle::ConstantTimeEq;
 use tracing::warn;
 
 /// Read AUTH_TOKEN from environment. If not set, auth is disabled (open access).
@@ -16,9 +17,7 @@ fn extract_token_from_query(query: &str) -> Option<String> {
     for pair in query.split('&') {
         if let Some(value) = pair.strip_prefix("token=") {
             // URL-decode the value
-            return Some(
-                percent_decode(value.as_bytes())
-            );
+            return Some(percent_decode(value.as_bytes()));
         }
     }
     None
@@ -45,6 +44,18 @@ fn percent_decode(input: &[u8]) -> String {
     String::from_utf8_lossy(&output).to_string()
 }
 
+/// Constant-time token comparison to prevent timing attacks.
+fn tokens_match(provided: &str, expected: &str) -> bool {
+    // Constant-time comparison — both length and content are compared
+    // without leaking information through timing side-channels.
+    provided.as_bytes().ct_eq(expected.as_bytes()).into()
+}
+
+/// Return the request path without query string (strips token from logged URIs).
+fn safe_path(request: &Request) -> &str {
+    request.uri().path()
+}
+
 /// Middleware that validates the auth token from query param or header.
 /// If AUTH_TOKEN env var is not set, all requests are allowed (backwards compatible).
 pub async fn auth_middleware(request: Request, next: Next) -> Result<Response, StatusCode> {
@@ -69,12 +80,12 @@ pub async fn auth_middleware(request: Request, next: Next) -> Result<Response, S
     let provided = token_from_query.or(token_from_header);
 
     match provided {
-        Some(ref t) if t == &expected => Ok(next.run(request).await),
+        Some(ref t) if tokens_match(t, &expected) => Ok(next.run(request).await),
         Some(_) => {
             warn!(
                 "Rejected request with invalid auth token: {} {}",
                 request.method(),
-                request.uri().path()
+                safe_path(&request)
             );
             Err(StatusCode::UNAUTHORIZED)
         }
@@ -82,7 +93,7 @@ pub async fn auth_middleware(request: Request, next: Next) -> Result<Response, S
             warn!(
                 "Rejected request with missing auth token: {} {}",
                 request.method(),
-                request.uri().path()
+                safe_path(&request)
             );
             Err(StatusCode::UNAUTHORIZED)
         }

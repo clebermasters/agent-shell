@@ -30,7 +30,7 @@ done
 
 # Load .env
 if [ -f "$ENV_FILE" ]; then
-    while IFS='=' read -r key value; do
+    while IFS='=' read -r key value || [ -n "$key" ]; do
         [[ -z "$key" || "$key" =~ ^# ]] && continue
         key=$(echo "$key" | xargs)
         value=$(echo "$value" | xargs)

@@ -62,7 +62,7 @@ AUTH_TOKEN=""
 
 if [ -f "$ENV_FILE" ]; then
     echo "Reading .env file..."
-    while IFS='=' read -r key value; do
+    while IFS='=' read -r key value || [ -n "$key" ]; do
         # Skip comments and empty lines
         [[ -z "$key" || "$key" =~ ^# ]] && continue
         # Remove leading/trailing whitespace

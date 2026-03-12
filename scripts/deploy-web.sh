@@ -146,7 +146,7 @@ else
 import json
 domain = 'https://$CF_DOMAIN'
 files = [
-    '$',
+    '/',
     '/index.html',
     '/main.dart.js',
     '/flutter_service_worker.js',

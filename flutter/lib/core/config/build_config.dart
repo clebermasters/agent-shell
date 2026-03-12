@@ -10,4 +10,5 @@ class BuildConfig {
   static const bool defaultShowThinking = true;
   static const bool defaultShowToolCalls = true;
   static const String buildTimestamp = '';
+  static const String authToken = '';
 }

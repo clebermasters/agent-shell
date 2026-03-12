@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../core/config/app_config.dart';
+import '../../core/config/build_config.dart';
 import '../models/models.dart';
 
 typedef MessageHandler = void Function(Map<String, dynamic> message);
@@ -41,9 +42,21 @@ class WebSocketService {
     }
     // Remove explicit :443 port (redundant for wss://)
     url = url.replaceFirst(RegExp(r':443(/|$)'), r'$1');
+
+    // Append auth token as query parameter (works on all platforms including web)
+    if (BuildConfig.authToken.isNotEmpty) {
+      final separator = url.contains('?') ? '&' : '?';
+      url = '$url${separator}token=${Uri.encodeComponent(BuildConfig.authToken)}';
+    }
+
     _currentUrl = url;
-    _log('Connecting to: $url');
+    _log('Connecting to: ${_sanitizeUrl(url)}');
     await _doConnect();
+  }
+
+  /// Remove token from URL for safe logging
+  String _sanitizeUrl(String url) {
+    return url.replaceFirst(RegExp(r'[?&]token=[^&]*'), '');
   }
 
   Future<void> _doConnect() async {
@@ -54,7 +67,7 @@ class WebSocketService {
     await _channel?.sink.close();
 
     try {
-      _log('Attempting WebSocket connection to: $_currentUrl');
+      _log('Attempting WebSocket connection to: ${_sanitizeUrl(_currentUrl!)}');
       _channel = WebSocketChannel.connect(Uri.parse(_currentUrl!));
 
       _subscription = _channel!.stream.listen(
@@ -68,12 +81,13 @@ class WebSocketService {
 
       _isConnected = true;
       // ignore: avoid_print
-      print('[CONN] Flutter→Backend CONNECTED to $_currentUrl');
+      print('[CONN] Flutter→Backend CONNECTED to ${_sanitizeUrl(_currentUrl!)}');
       _connectionController.add(true);
       _startPingTimer();
     } catch (e) {
       // ignore: avoid_print
-      print('[CONN] Flutter→Backend CONNECT FAILED: $e (url: $_currentUrl)');
+      print('[CONN] Flutter→Backend CONNECT FAILED: $e (url: ${_sanitizeUrl(_currentUrl!)})');
+
       _isConnected = false;
       _connectionController.add(false);
       _scheduleReconnect();
@@ -103,7 +117,8 @@ class WebSocketService {
 
   void _onError(dynamic error) {
     // ignore: avoid_print
-    print('[CONN] Flutter→Backend WebSocket ERROR: $error (url: $_currentUrl)');
+    print('[CONN] Flutter→Backend WebSocket ERROR: $error (url: ${_sanitizeUrl(_currentUrl ?? '')})');
+
     _isConnected = false;
     _connectionController.add(false);
     _scheduleReconnect();
@@ -111,7 +126,8 @@ class WebSocketService {
 
   void _onDone() {
     // ignore: avoid_print
-    print('[CONN] Flutter→Backend WebSocket CLOSED (url: $_currentUrl)');
+    print('[CONN] Flutter→Backend WebSocket CLOSED (url: ${_sanitizeUrl(_currentUrl ?? '')})');
+
     _isConnected = false;
     _connectionController.add(false);
     _scheduleReconnect();

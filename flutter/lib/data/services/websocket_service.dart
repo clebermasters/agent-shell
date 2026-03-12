@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../core/config/app_config.dart';
 import '../models/models.dart';
@@ -34,6 +35,10 @@ class WebSocketService {
   }
 
   Future<void> connect(String url) async {
+    // On web (HTTPS), upgrade ws:// to wss:// to avoid mixed content errors
+    if (kIsWeb && url.startsWith('ws://')) {
+      url = 'wss://${url.substring(5)}';
+    }
     _currentUrl = url;
     _log('Connecting to: $url');
     await _doConnect();

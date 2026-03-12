@@ -132,6 +132,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _connectionSubscription = ws.connectionState.listen((connected) {
       if (connected && state.isAcp && state.sessionName != null) {
         final rawId = state.sessionName!.replaceFirst('acp_', '');
+        _chatHistoryRequestedAt = DateTime.now();
+        // ignore: avoid_print
+        print('[TIMING] watchAcpChatLog sent (reconnect) at ${_chatHistoryRequestedAt!.toIso8601String()}');
         _ws!.watchAcpChatLog(rawId, limit: 500);
       }
     });

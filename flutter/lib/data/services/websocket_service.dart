@@ -39,6 +39,8 @@ class WebSocketService {
     if (kIsWeb && url.startsWith('ws://')) {
       url = 'wss://${url.substring(5)}';
     }
+    // Remove explicit :443 port (redundant for wss://)
+    url = url.replaceFirst(RegExp(r':443(/|$)'), r'$1');
     _currentUrl = url;
     _log('Connecting to: $url');
     await _doConnect();

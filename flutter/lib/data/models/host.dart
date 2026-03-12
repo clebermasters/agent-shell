@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 class Host extends Equatable {
   final String id;
@@ -15,8 +16,8 @@ class Host extends Equatable {
     this.lastConnected,
   });
 
-  String get wsUrl => 'ws://$address:$port';
-  String get httpUrl => 'http://$address:$port';
+  String get wsUrl => kIsWeb ? 'wss://$address' : 'ws://$address:$port';
+  String get httpUrl => kIsWeb ? 'https://$address' : 'http://$address:$port';
 
   Host copyWith({
     String? id,

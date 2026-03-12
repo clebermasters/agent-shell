@@ -6,6 +6,12 @@ SERVICE_USER="${SERVICE_USER:-$(whoami)}"
 FRONTEND_PORT=5174
 BACKEND_PORT=4010
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$PROJECT_DIR/.env"
+
+# Read AUTH_TOKEN from .env if not already set
+if [ -z "$AUTH_TOKEN" ] && [ -f "$ENV_FILE" ]; then
+    AUTH_TOKEN=$(grep -E '^AUTH_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | xargs)
+fi
 
 echo "=== AgentShell Installer ==="
 
@@ -19,6 +25,11 @@ fi
 
 echo "Installation directory: $INSTALL_DIR"
 echo "Service user: $SERVICE_USER"
+if [ -n "$AUTH_TOKEN" ]; then
+    echo "AUTH_TOKEN: set (${#AUTH_TOKEN} chars)"
+else
+    echo "AUTH_TOKEN: NOT SET — backend will be open to all connections"
+fi
 echo ""
 
 echo "=== Step 1: Building Rust backend (release) ==="
@@ -58,6 +69,7 @@ User=$SERVICE_USER
 WorkingDirectory=$INSTALL_DIR/backend
 ExecStart=$INSTALL_DIR/backend/agentshell-backend
 Environment="RUST_LOG=info"
+Environment="AUTH_TOKEN=$AUTH_TOKEN"
 Environment="PATH=/home/cleber_rodrigues/.opencode/bin:/home/cleber_rodrigues/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 Restart=always
 RestartSec=5

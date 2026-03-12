@@ -1711,38 +1711,34 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         }
         WebSocketMessage::AcpResumeSession { session_id, cwd } => {
             info!("ACP resume session: {} in {}", session_id, cwd);
-            let t_total = std::time::Instant::now();
-            let t_lock = std::time::Instant::now();
-            let acp_guard = app_state.acp_client.read().await;
-            info!("[TIMING] AcpResumeSession read lock in {:?}", t_lock.elapsed());
-            if let Some(client) = acp_guard.as_ref() {
-                match client.resume_session(&session_id, &cwd).await {
-                    Ok(result) => {
-                        info!("[TIMING] AcpResumeSession total {:?}", t_total.elapsed());
-                        info!("ACP session resumed: {:?}", result.session_id);
-                        write_acp_session_file(&session_id, &cwd);
-                        let response = ServerMessage::AcpSessionCreated {
-                            session_id: result.session_id,
-                            current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
-                            available_models: None,
-                            current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
-                        };
-                        send_message(&state.message_tx, response).await?;
+            let acp_client = app_state.acp_client.clone();
+            let message_tx = state.message_tx.clone();
+            tokio::spawn(async move {
+                let t_total = std::time::Instant::now();
+                let acp_guard = acp_client.read().await;
+                if let Some(client) = acp_guard.as_ref() {
+                    match client.resume_session(&session_id, &cwd).await {
+                        Ok(result) => {
+                            info!("[TIMING] AcpResumeSession total {:?}", t_total.elapsed());
+                            write_acp_session_file(&session_id, &cwd);
+                            let _ = send_message(&message_tx, ServerMessage::AcpSessionCreated {
+                                session_id: result.session_id,
+                                current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
+                                available_models: None,
+                                current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
+                            }).await;
+                        }
+                        Err(e) => {
+                            error!("Failed to resume ACP session: {}", e);
+                            let _ = send_message(&message_tx, ServerMessage::AcpError { message: e }).await;
+                        }
                     }
-                    Err(e) => {
-                        error!("Failed to resume ACP session: {}", e);
-                        let response = ServerMessage::AcpError {
-                            message: e,
-                        };
-                        send_message(&state.message_tx, response).await?;
-                    }
+                } else {
+                    let _ = send_message(&message_tx, ServerMessage::AcpError {
+                        message: "ACP client not initialized".to_string(),
+                    }).await;
                 }
-            } else {
-                let response = ServerMessage::AcpError {
-                    message: "ACP client not initialized".to_string(),
-                };
-                send_message(&state.message_tx, response).await?;
-            }
+            });
         }
         WebSocketMessage::AcpForkSession { session_id, cwd } => {
             info!("ACP fork session: {} in {}", session_id, cwd);
@@ -1952,35 +1948,30 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             }
         }
         WebSocketMessage::AcpSendPrompt { session_id, message } => {
-            info!("ACP send prompt to {}: {}", session_id, message);
-            
-            let t_lock = std::time::Instant::now();
-            let acp_guard = app_state.acp_client.read().await;
-            info!("[TIMING] acp_client read lock acquired in {:?}", t_lock.elapsed());
-            if let Some(client) = acp_guard.as_ref() {
-                let t = std::time::Instant::now();
-                match client.send_prompt(&session_id, &message).await {
-                    Ok(_result) => {
-                        info!("[TIMING] send_prompt took {:?}", t.elapsed());
-                        let response = ServerMessage::AcpPromptSent {
-                            session_id: session_id.clone(),
-                        };
-                        send_message(&state.message_tx, response).await?;
+            info!("ACP send prompt to {}", session_id);
+            // Spawn so the main loop is never blocked waiting for OpenCode's response
+            let acp_client = app_state.acp_client.clone();
+            let message_tx = state.message_tx.clone();
+            tokio::spawn(async move {
+                let acp_guard = acp_client.read().await;
+                if let Some(client) = acp_guard.as_ref() {
+                    let t = std::time::Instant::now();
+                    match client.send_prompt(&session_id, &message).await {
+                        Ok(_) => {
+                            info!("[TIMING] send_prompt took {:?}", t.elapsed());
+                            let _ = send_message(&message_tx, ServerMessage::AcpPromptSent { session_id }).await;
+                        }
+                        Err(e) => {
+                            error!("Failed to send prompt (took {:?}): {}", t.elapsed(), e);
+                            let _ = send_message(&message_tx, ServerMessage::AcpError { message: e }).await;
+                        }
                     }
-                    Err(e) => {
-                        error!("Failed to send prompt (took {:?}): {}", t.elapsed(), e);
-                        let response = ServerMessage::AcpError {
-                            message: e,
-                        };
-                        send_message(&state.message_tx, response).await?;
-                    }
+                } else {
+                    let _ = send_message(&message_tx, ServerMessage::AcpError {
+                        message: "ACP client not initialized".to_string(),
+                    }).await;
                 }
-            } else {
-                let response = ServerMessage::AcpError {
-                    message: "ACP client not initialized".to_string(),
-                };
-                send_message(&state.message_tx, response).await?;
-            }
+            });
         }
         WebSocketMessage::SendFileToAcpChat {
             session_id,

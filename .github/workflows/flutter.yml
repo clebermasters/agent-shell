@@ -1,4 +1,4 @@
-name: Build Flutter APK
+name: Build Flutter
 
 on:
   push:
@@ -9,9 +9,6 @@ on:
   release:
     types: [published]
   workflow_dispatch:
-
-env:
-  BASE_IMAGE: ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
 
 jobs:
   base-image:
@@ -39,10 +36,10 @@ jobs:
           file: docker/flutter-base/Dockerfile
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=flutter-base
+          cache-to: type=gha,mode=max,scope=flutter-base
 
-  build:
+  build-apk:
     needs: base-image
     runs-on: ubuntu-latest
     permissions:
@@ -58,11 +55,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull base image
-        run: docker pull ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
-
-      - name: Tag base image as expected name
-        run: docker tag ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest agentshell-flutter-base:latest
+      - name: Pull and tag base image
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
+          docker tag ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest agentshell-flutter-base:latest
 
       - name: Build APK
         run: ./build.sh release
@@ -79,5 +75,44 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: agentshell-flutter-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-web:
+    needs: base-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and tag base image
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest
+          docker tag ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest agentshell-flutter-base:latest
+
+      - name: Build Web
+        run: ./build.sh web
+        working-directory: flutter
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshell-web
+          path: agentshell-web.zip
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agentshell-web.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

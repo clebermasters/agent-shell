@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_background_service/flutter_background_service.dart'
+    if (dart.library.html) '../../../core/utils/background_service_stub.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../data/services/websocket_service.dart';
 import '../../../data/services/terminal_service.dart';

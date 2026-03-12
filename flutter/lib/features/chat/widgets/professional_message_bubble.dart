@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -13,9 +14,9 @@ import 'package:dio/dio.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:gal/gal.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../data/models/chat_message.dart';
+import '../../../core/utils/gal_helper.dart';
 import 'chat_audio_tile.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
@@ -1308,6 +1309,10 @@ class _FullScreenImageViewer extends StatefulWidget {
 class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
   bool _isSaving = false;
 
+  Future<void> _saveToGallery(String filePath) async {
+    await galPutImage(filePath);
+  }
+
   Future<void> _saveImageToGallery() async {
     if (widget.imageUrl == null || _isSaving) return;
 
@@ -1315,6 +1320,14 @@ class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
 
     try {
       final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+      if (kIsWeb) {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(content: Text('Save to gallery not supported on web')),
+        );
+        return;
+      }
+
       final dio = Dio();
       final tempDir = await getTemporaryDirectory();
       final filePath = '${tempDir.path}/agentshell_image_${widget.imageId}.png';
@@ -1326,7 +1339,7 @@ class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
 
       await dio.download(widget.imageUrl!, filePath);
 
-      await Gal.putImage(filePath, album: 'AgentShell');
+      await _saveToGallery(filePath);
 
       await file.delete();
 

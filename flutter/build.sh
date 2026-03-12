@@ -26,7 +26,7 @@ FORCE_INSTALL=false
 # Parse arguments
 for arg in "$@"; do
     case "$arg" in
-        debug|release)
+        debug|release|web)
             BUILD_TYPE="$arg"
             ;;
         --install|-i)
@@ -94,6 +94,7 @@ fi
 S3_BUCKET="s3://images.bitslovers.com/temp"
 S3_KEY="agentshell-flutter-${BUILD_TYPE}.apk"
 APK_FILENAME="agentshell-flutter-${BUILD_TYPE}.apk"
+WEB_FILENAME="agentshell-web.zip"
 
 echo "Building Flutter ${BUILD_TYPE} APK..."
 echo "  Build type: $BUILD_TYPE"
@@ -131,14 +132,33 @@ DOCKER_BUILDKIT=1 docker build \
 
 # Check if build was successful
 if [ $? -eq 0 ]; then
-    # Remove old APK to be sure we get the new one
-    rm -f "$PROJECT_ROOT/agentshell-flutter-debug.apk" "$PROJECT_ROOT/agentshell-flutter-release.apk"
-
-    # Copy APK to project root
-    echo "Copying APK to project root..."
     CONTAINER_ID=$(docker create agentshell-flutter-builder:latest)
-    docker cp "$CONTAINER_ID:/$APK_FILENAME" "$PROJECT_ROOT/$APK_FILENAME"
-    docker rm "$CONTAINER_ID"
+
+    if [ "$BUILD_TYPE" = "web" ]; then
+        # Copy web build output and zip it
+        echo "Copying web build to project root..."
+        rm -f "$PROJECT_ROOT/$WEB_FILENAME"
+        docker cp "$CONTAINER_ID:/agentshell-web" /tmp/agentshell-web
+        docker rm "$CONTAINER_ID"
+        (cd /tmp && zip -r "$PROJECT_ROOT/$WEB_FILENAME" agentshell-web && rm -rf agentshell-web)
+
+        if [ -f "$PROJECT_ROOT/$WEB_FILENAME" ]; then
+            echo ""
+            echo "Web build successful!"
+            ls -lh "$PROJECT_ROOT/$WEB_FILENAME"
+            docker image prune -f
+        else
+            echo "ERROR: Web build output not found!"
+            exit 1
+        fi
+    else
+        # Remove old APK to be sure we get the new one
+        rm -f "$PROJECT_ROOT/agentshell-flutter-debug.apk" "$PROJECT_ROOT/agentshell-flutter-release.apk"
+
+        # Copy APK to project root
+        echo "Copying APK to project root..."
+        docker cp "$CONTAINER_ID:/$APK_FILENAME" "$PROJECT_ROOT/$APK_FILENAME"
+        docker rm "$CONTAINER_ID"
 
     if [ -f "$PROJECT_ROOT/$APK_FILENAME" ]; then
         echo ""
@@ -168,6 +188,7 @@ if [ $? -eq 0 ]; then
         echo "ERROR: APK was not generated or could not be copied!"
         exit 1
     fi
+    fi  # end else (non-web build)
 else
     echo "Build failed! Check /tmp/flutter-build.log for details"
     exit 1

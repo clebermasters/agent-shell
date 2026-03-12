@@ -47,7 +47,7 @@ RUN $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
 RUN git clone https://github.com/flutter/flutter.git -b stable --depth 1 $FLUTTER_ROOT
 
 # Pre-cache Flutter dependencies
-RUN flutter precache --android --no-tree-shake-icons || true
+RUN flutter precache --android --web --no-tree-shake-icons || true
 
 # Verify installations
 RUN flutter --version

@@ -1,8 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:xterm/xterm.dart';
-import 'package:flutter_pty/flutter_pty.dart';
 import 'websocket_service.dart';
+
+// flutter_pty uses dart:ffi which is not available on web
+// ignore: uri_does_not_exist
+import 'package:flutter_pty/flutter_pty.dart'
+    if (dart.library.html) 'pty_stub.dart';
 
 class TerminalService {
   final WebSocketService _wsService;

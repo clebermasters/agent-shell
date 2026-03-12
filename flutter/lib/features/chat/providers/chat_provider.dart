@@ -92,6 +92,7 @@ class ChatState {
 class ChatNotifier extends StateNotifier<ChatState> {
   final Uuid _uuid = const Uuid();
   StreamSubscription? _messageSubscription;
+  StreamSubscription? _connectionSubscription;
   WebSocketService? _ws;
   final AudioService _audioService = AudioService();
   final WhisperService _whisperService = WhisperService();
@@ -126,6 +127,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void setWebSocket(WebSocketService ws) {
     _ws = ws;
     _listenToMessages();
+    _connectionSubscription?.cancel();
+    _connectionSubscription = ws.connectionState.listen((connected) {
+      if (connected && state.isAcp && state.sessionName != null) {
+        final rawId = state.sessionName!.replaceFirst('acp_', '');
+        _ws!.watchAcpChatLog(rawId, limit: 500);
+      }
+    });
   }
 
   void _listenToMessages() {

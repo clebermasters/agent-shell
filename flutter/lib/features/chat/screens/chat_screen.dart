@@ -532,7 +532,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ListView.builder(
                         controller: _scrollController,
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
+                          horizontal: 8,
                           vertical: 16,
                         ),
                         itemCount: ref

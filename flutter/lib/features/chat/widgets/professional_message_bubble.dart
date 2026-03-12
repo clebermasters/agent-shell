@@ -149,10 +149,15 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         child: Align(
           alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.82,
+            constraints: isUser
+                ? BoxConstraints(
+                    maxWidth: MediaQuery.of(context).size.width * 0.82,
+                  )
+                : null,
+            margin: EdgeInsets.symmetric(
+              vertical: 6,
+              horizontal: isUser ? 4 : 0,
             ),
-            margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
             child: Column(
               crossAxisAlignment: isUser
                   ? CrossAxisAlignment.end

@@ -92,9 +92,12 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
         state = state.copyWith(acpSessions: sessions, isLoading: false);
       } else if (type == 'acp-session-created') {
         final sessionId = message['sessionId'] as String?;
-        final cwd = message['cwd'] as String? ?? '';
-        refresh();
-        if (sessionId != null) _newAcpSessionController.add((sessionId: sessionId, cwd: cwd));
+        final cwd = message['cwd'] as String?;
+        // Only act on actual creation (cwd present), not resume events
+        if (cwd != null) {
+          refresh();
+          if (sessionId != null) _newAcpSessionController.add((sessionId: sessionId, cwd: cwd));
+        }
       } else if (type == 'acp-session-deleted') {
         final sessionId = message['sessionId'] as String?;
         if (sessionId != null) {

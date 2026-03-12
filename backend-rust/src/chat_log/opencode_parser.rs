@@ -345,20 +345,40 @@ fn parse_part(
     let block = match part.part_type.as_str() {
         "text" => {
             let full_text = part.text.as_deref().unwrap_or_default();
-            let last_len = state.seen_text_lengths.get(id).copied().unwrap_or(0);
+            let (thinking, regular) = extract_thinking(full_text);
 
-            if full_text.len() <= last_len {
-                return None; // no new text to send
+            let mut blocks = Vec::new();
+
+            if !thinking.is_empty() {
+                let key = format!("thinking_{}", id);
+                let last_len = state.seen_text_lengths.get(&key).copied().unwrap_or(0);
+                if thinking.len() > last_len {
+                    blocks.push(ContentBlock::Thinking {
+                        content: thinking[last_len..].to_string(),
+                    });
+                    state.seen_text_lengths.insert(key, thinking.len());
+                }
             }
 
-            let new_chunk = &full_text[last_len..];
-            state
-                .seen_text_lengths
-                .insert(id.to_string(), full_text.len());
-
-            ContentBlock::Text {
-                text: new_chunk.to_string(),
+            if !regular.is_empty() {
+                let last_len = state.seen_text_lengths.get(id).copied().unwrap_or(0);
+                if regular.len() > last_len {
+                    blocks.push(ContentBlock::Text {
+                        text: regular[last_len..].to_string(),
+                    });
+                    state.seen_text_lengths.insert(id.to_string(), regular.len());
+                }
             }
+
+            if blocks.is_empty() {
+                return None;
+            }
+
+            return Some(ChatMessage {
+                role: final_role,
+                timestamp,
+                blocks,
+            });
         }
         "reasoning" => {
             // Extract thinking/reasoning content from AI models
@@ -427,4 +447,28 @@ fn parse_part(
         timestamp,
         blocks: vec![block],
     })
+}
+
+/// Split text into (thinking_content, regular_content) by extracting <think>...</think> tags.
+/// Handles unclosed tags (still streaming) by treating the remainder as thinking.
+fn extract_thinking(text: &str) -> (String, String) {
+    let mut thinking = String::new();
+    let mut regular = String::new();
+    let mut remaining = text;
+
+    while let Some(start) = remaining.find("<think>") {
+        regular.push_str(&remaining[..start]);
+        remaining = &remaining[start + 7..];
+        if let Some(end) = remaining.find("</think>") {
+            thinking.push_str(&remaining[..end]);
+            remaining = &remaining[end + 8..];
+        } else {
+            thinking.push_str(remaining);
+            remaining = "";
+            break;
+        }
+    }
+    regular.push_str(remaining);
+
+    (thinking.trim().to_string(), regular.trim().to_string())
 }

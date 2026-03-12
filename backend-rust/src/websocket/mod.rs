@@ -1703,11 +1703,14 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         }
         WebSocketMessage::AcpResumeSession { session_id, cwd } => {
             info!("ACP resume session: {} in {}", session_id, cwd);
-            
+            let t_total = std::time::Instant::now();
+            let t_lock = std::time::Instant::now();
             let acp_guard = app_state.acp_client.read().await;
+            info!("[TIMING] AcpResumeSession read lock in {:?}", t_lock.elapsed());
             if let Some(client) = acp_guard.as_ref() {
                 match client.resume_session(&session_id, &cwd).await {
                     Ok(result) => {
+                        info!("[TIMING] AcpResumeSession total {:?}", t_total.elapsed());
                         info!("ACP session resumed: {:?}", result.session_id);
                         write_acp_session_file(&session_id, &cwd);
                         let response = ServerMessage::AcpSessionCreated {
@@ -1765,10 +1768,13 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         }
         WebSocketMessage::AcpListSessions => {
             info!("ACP list sessions");
+            let t_total = std::time::Instant::now();
             
             // Auto-initialize ACP client if not initialized
+            let t_lock = std::time::Instant::now();
             let list_result = {
                 let mut acp_guard = app_state.acp_client.write().await;
+                info!("[TIMING] AcpListSessions write lock in {:?}", t_lock.elapsed());
                 if acp_guard.is_none() {
                     info!("ACP client not initialized, auto-initializing...");
                     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<crate::acp::AcpEvent>(100);
@@ -1916,6 +1922,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             
             match list_result {
                 Ok(result) => {
+                    info!("[TIMING] AcpListSessions total {:?}", t_total.elapsed());
                     info!("ACP sessions: {:?}", result.sessions);
                     // Filter out sessions the user has deleted
                     let deleted_ids = app_state.chat_event_store

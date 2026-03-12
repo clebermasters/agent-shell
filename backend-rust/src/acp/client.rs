@@ -235,6 +235,7 @@ impl AcpClient {
     }
 
     async fn send_request_raw(&self, id: usize, request: JsonRpcRequest) -> Result<sj::Value, String> {
+        let method = request.method.clone();
         let pending = Arc::clone(&self.pending);
         let stdin = Arc::clone(&self.stdin);
         
@@ -250,7 +251,12 @@ impl AcpClient {
         let request_json = serde_json::to_string(&request)
             .map_err(|e| format!("Failed to serialize request: {}", e))?;
         
+        let t_lock = std::time::Instant::now();
         let mut stdin_guard = stdin.lock().await;
+        let lock_wait = t_lock.elapsed();
+        if lock_wait.as_millis() > 10 {
+            tracing::info!("[TIMING] ACP stdin lock wait for '{}': {:?}", method, lock_wait);
+        }
         if let Some(ref mut stdin) = *stdin_guard {
             stdin.write_all(format!("{}\n", request_json).as_bytes())
                 .await
@@ -261,8 +267,10 @@ impl AcpClient {
         }
         drop(stdin_guard);
 
+        let t_wait = std::time::Instant::now();
         tokio::select! {
             result = rx => {
+                tracing::info!("[TIMING] ACP '{}' response in {:?}", method, t_wait.elapsed());
                 match result {
                     Ok(Ok(value)) => Ok(value),
                     Ok(Err(e)) => Err(e),
@@ -270,6 +278,7 @@ impl AcpClient {
                 }
             }
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(120)) => {
+                tracing::warn!("[TIMING] ACP '{}' TIMEOUT after 120s", method);
                 Err("Request timeout".to_string())
             }
         }

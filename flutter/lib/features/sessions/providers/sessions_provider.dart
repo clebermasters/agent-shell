@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/tmux_session.dart';
 import '../../../data/models/acp_session.dart';
@@ -54,6 +55,8 @@ class SessionsState {
 
 class SessionsNotifier extends StateNotifier<SessionsState> {
   final WebSocketService _wsService;
+  final _newAcpSessionController = StreamController<({String sessionId, String cwd})>.broadcast();
+  Stream<({String sessionId, String cwd})> get newAcpSession => _newAcpSessionController.stream;
 
   SessionsNotifier(this._wsService) : super(const SessionsState()) {
     _init();
@@ -88,8 +91,10 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
             [];
         state = state.copyWith(acpSessions: sessions, isLoading: false);
       } else if (type == 'acp-session-created') {
-        // print('FLUTTER: Received acp-session-created, calling refresh()');
-        refresh(); // Refresh list after session creation
+        final sessionId = message['sessionId'] as String?;
+        final cwd = message['cwd'] as String? ?? '';
+        refresh();
+        if (sessionId != null) _newAcpSessionController.add((sessionId: sessionId, cwd: cwd));
       } else if (type == 'acp-session-deleted') {
         final sessionId = message['sessionId'] as String?;
         if (sessionId != null) {

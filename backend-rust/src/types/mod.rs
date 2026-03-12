@@ -602,6 +602,8 @@ pub enum ServerMessage {
         available_models: Option<Vec<crate::acp::ModelInfo>>,
         #[serde(rename = "currentModeId")]
         current_mode_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
     },
     AcpSessionResumed {
         #[serde(rename = "sessionId")]

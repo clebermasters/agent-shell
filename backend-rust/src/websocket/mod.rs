@@ -1691,6 +1691,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                             current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
                             available_models: None,
                             current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
+                            cwd: Some(cwd.clone()),
                         };
                         send_message(&state.message_tx, response).await?;
                     }
@@ -1726,6 +1727,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                 current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
                                 available_models: None,
                                 current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
+                                cwd: None,
                             }).await;
                         }
                         Err(e) if e.starts_with("__already_active:") => {
@@ -1736,6 +1738,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                 current_model_id: None,
                                 available_models: None,
                                 current_mode_id: None,
+                                cwd: None,
                             }).await;
                         }
                         Err(e) => {
@@ -1762,6 +1765,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                             current_model_id: result.models.as_ref().map(|m| m.current_model_id.clone()),
                             available_models: None,
                             current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
+                            cwd: None,
                         };
                         send_message(&state.message_tx, response).await?;
                     }

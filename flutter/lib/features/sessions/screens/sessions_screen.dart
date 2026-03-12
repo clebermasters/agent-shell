@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/tmux_session.dart';
@@ -20,6 +21,7 @@ class SessionsScreen extends ConsumerStatefulWidget {
 class _SessionsScreenState extends ConsumerState<SessionsScreen> {
   final Set<String> _selectedIds = {};
   bool _isSelecting = false;
+  StreamSubscription<({String sessionId, String cwd})>? _newSessionSub;
 
   void _enterSelectionMode(String sessionId) {
     setState(() {
@@ -76,7 +78,24 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
     super.initState();
     Future.microtask(() {
       ref.read(sessionsProvider.notifier).refresh();
+      _newSessionSub = ref.read(sessionsProvider.notifier).newAcpSession.listen((event) {
+        if (!mounted) return;
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            sessionName: event.sessionId,
+            windowIndex: 0,
+            isAcp: true,
+            cwd: event.cwd,
+          ),
+        ));
+      });
     });
+  }
+
+  @override
+  void dispose() {
+    _newSessionSub?.cancel();
+    super.dispose();
   }
 
   @override

@@ -395,24 +395,43 @@ impl AcpClient {
     }
 
     pub async fn list_sessions(&self) -> Result<ListSessionsResult, String> {
-        let id = {
-            let mut guard = self.request_id.lock().await;
-            let id = *guard;
-            *guard += 1;
-            id
-        };
+        let mut all_sessions = Vec::new();
+        let mut cursor: Option<String> = None;
 
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: serde_json::json!(id),
-            method: "session/list".to_string(),
-            params: Some(serde_json::json!({})),
-        };
+        loop {
+            let id = {
+                let mut guard = self.request_id.lock().await;
+                let id = *guard;
+                *guard += 1;
+                id
+            };
 
-        let result = self.send_request_raw(id, request).await?;
-        
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse list sessions result: {}", e))
+            let mut params = serde_json::json!({});
+            if let Some(ref c) = cursor {
+                params["cursor"] = serde_json::json!(c);
+            }
+
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: serde_json::json!(id),
+                method: "session/list".to_string(),
+                params: Some(params),
+            };
+
+            let result = self.send_request_raw(id, request).await?;
+            let page: ListSessionsResult = serde_json::from_value(result)
+                .map_err(|e| format!("Failed to parse list sessions result: {}", e))?;
+
+            let next_cursor = page.next_cursor.clone();
+            all_sessions.extend(page.sessions);
+
+            match next_cursor {
+                Some(c) if !c.is_empty() => cursor = Some(c),
+                _ => break,
+            }
+        }
+
+        Ok(ListSessionsResult { sessions: all_sessions, next_cursor: None })
     }
 
     pub async fn set_model(&self, session_id: &str, model_id: &str) -> Result<sj::Value, String> {

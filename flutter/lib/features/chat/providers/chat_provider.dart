@@ -353,7 +353,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       // Skip user messages from backend for live tmux events (already added locally),
       // but allow them through for ACP and webhook sources.
-      if (msg.type == ChatMessageType.user && source != 'webhook' && source != 'acp') {
+      if (msg.type == ChatMessageType.user && source != 'webhook') {
         return;
       }
 

@@ -43,6 +43,9 @@ struct RawBlock {
     // tool_result block
     tool_use_id: Option<String>,
     content: Option<RawToolResultContent>,
+    // thinking block
+    thinking: Option<String>,
+    signature: Option<String>,
 }
 
 /// Tool result content can be a plain string or a structured value.
@@ -150,6 +153,13 @@ fn convert_block(block: RawBlock) -> Option<ContentBlock> {
                 summary,
                 content: content_str,
             })
+        }
+        "thinking" => {
+            let content = block.thinking.unwrap_or_default();
+            if content.is_empty() {
+                return None;
+            }
+            Some(ContentBlock::Thinking { content })
         }
         _ => None,
     }
@@ -350,5 +360,45 @@ mod tests {
             ContentBlock::Text { text } => assert_eq!(text, "ok do it"),
             other => panic!("expected Text, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_thinking_block() {
+        let line = r#"{"uuid":"t","parentUuid":"u","timestamp":"2026-02-24T10:06:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me analyze this request carefully.","signature":"sig123"},{"type":"text","text":"Here is my response."}]}}"#;
+        let msg = parse_line(line).expect("should parse");
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.blocks.len(), 2);
+        match &msg.blocks[0] {
+            ContentBlock::Thinking { content } => {
+                assert_eq!(content, "Let me analyze this request carefully.");
+            }
+            other => panic!("expected Thinking, got {other:?}"),
+        }
+        match &msg.blocks[1] {
+            ContentBlock::Text { text } => assert_eq!(text, "Here is my response."),
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_thinking_only() {
+        let line = r#"{"uuid":"t2","parentUuid":"u2","timestamp":"2026-02-24T10:07:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Deep reasoning here","signature":"sig456"}]}}"#;
+        let msg = parse_line(line).expect("should parse");
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.blocks.len(), 1);
+        match &msg.blocks[0] {
+            ContentBlock::Thinking { content } => {
+                assert_eq!(content, "Deep reasoning here");
+            }
+            other => panic!("expected Thinking, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skip_empty_thinking() {
+        // When thinking block is empty, the message has no valid blocks and should be skipped
+        let line = r#"{"uuid":"t3","parentUuid":"u3","timestamp":"2026-02-24T10:08:00Z","type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig789"}]}}"#;
+        // Empty thinking gets filtered out, resulting in empty blocks, so message is skipped
+        assert!(parse_line(line).is_none());
     }
 }

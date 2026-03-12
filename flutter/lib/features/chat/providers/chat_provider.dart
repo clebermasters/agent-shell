@@ -93,6 +93,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final Uuid _uuid = const Uuid();
   StreamSubscription? _messageSubscription;
   StreamSubscription? _connectionSubscription;
+  DateTime? _chatHistoryRequestedAt;
   WebSocketService? _ws;
   final AudioService _audioService = AudioService();
   final WhisperService _whisperService = WhisperService();
@@ -232,7 +233,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
         return;
       }
 
+      final elapsed = _chatHistoryRequestedAt != null
+          ? DateTime.now().difference(_chatHistoryRequestedAt!).inMilliseconds
+          : -1;
       final messagesData = message['messages'] as List<dynamic>? ?? [];
+      // ignore: avoid_print
+      print('[TIMING] chat-history received: ${messagesData.length} msgs in ${elapsed}ms');
 
       final toolRaw = message['tool'];
       String? toolStr;
@@ -788,6 +794,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // Backend returns session_name as "acp_{sessionId}" in chat-history/chat-event,
     // so store it with the prefix so all session matching works naturally.
     final sessionKey = 'acp_$sessionName';
+    _chatHistoryRequestedAt = DateTime.now();
+    // ignore: avoid_print
+    print('[TIMING] watchAcpChatLog sent at ${_chatHistoryRequestedAt!.toIso8601String()}');
     state = state.copyWith(
       messages: [],
       isLoading: true,

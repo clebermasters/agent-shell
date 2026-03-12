@@ -64,6 +64,11 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
       // Handle both response formats: 'sessions-list' (Capacitor) and 'session_list' (legacy)
       final type = message['type'] as String?;
       if (type == 'sessions-list' || type == 'session_list') {
+        final elapsed = _refreshStartedAt != null
+            ? DateTime.now().difference(_refreshStartedAt!).inMilliseconds
+            : -1;
+        // ignore: avoid_print
+        print('[TIMING] sessions-list received in ${elapsed}ms');
         final sessions =
             (message['sessions'] as List?)
                 ?.map((s) => TmuxSession.fromJson(s as Map<String, dynamic>))
@@ -71,6 +76,11 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
             [];
         state = state.copyWith(sessions: sessions, isLoading: false);
       } else if (type == 'acp-sessions-listed') {
+        final elapsed = _refreshStartedAt != null
+            ? DateTime.now().difference(_refreshStartedAt!).inMilliseconds
+            : -1;
+        // ignore: avoid_print
+        print('[TIMING] acp-sessions-listed received in ${elapsed}ms');
         final sessions =
             (message['sessions'] as List?)
                 ?.map((s) => AcpSession.fromJson(s as Map<String, dynamic>))
@@ -103,9 +113,14 @@ class SessionsNotifier extends StateNotifier<SessionsState> {
 
   void refresh() {
     state = state.copyWith(isLoading: true);
+    final t = DateTime.now();
     _wsService.requestSessions();
     _wsService.acpListSessions();
+    // timing start stored for response handlers
+    _refreshStartedAt = t;
   }
+
+  DateTime? _refreshStartedAt;
 
   Future<void> createSession(String name) async {
     state = state.copyWith(isLoading: true);

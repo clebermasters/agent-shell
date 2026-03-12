@@ -52,6 +52,12 @@ Create an Nginx config to proxy traffic to the backend. This handles both regula
 ### `/etc/nginx/sites-available/agentshell`
 
 ```nginx
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 server {
     listen 80;
     server_name agent-backend.your-domain.com;

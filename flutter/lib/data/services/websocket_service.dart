@@ -108,10 +108,10 @@ class WebSocketService {
 
   void _startPingTimer() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+    _pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       send({'type': 'ping'});
       _pongTimeoutTimer?.cancel();
-      _pongTimeoutTimer = Timer(const Duration(seconds: 5), () {
+      _pongTimeoutTimer = Timer(const Duration(seconds: 20), () {
         _log('Pong timeout - dead connection detected, reconnecting...');
         forceReconnect();
       });
@@ -149,18 +149,10 @@ class WebSocketService {
       _log('Sending: $message');
       _channel!.sink.add(jsonEncode(message));
     } else {
-      _log('Cannot send - not connected, attempting reconnect...');
-      _scheduleReconnect();
-      // Try sending again after a short delay to allow reconnect
-      Future.delayed(const Duration(seconds: 3), () {
-        _log('Retry check: isConnected: $_isConnected');
-        if (_isConnected && _channel != null) {
-          _log('Retry sending: $message');
-          _channel!.sink.add(jsonEncode(message));
-        } else {
-          _log('Retry failed - still not connected');
-        }
-      });
+      _log('Cannot send - not connected');
+      if (_reconnectTimer == null || !_reconnectTimer!.isActive) {
+        _scheduleReconnect();
+      }
     }
   }
 

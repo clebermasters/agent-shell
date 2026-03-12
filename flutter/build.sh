@@ -128,6 +128,7 @@ DOCKER_BUILDKIT=1 docker build \
     --build-arg OPENAI_API_KEY="$OPENAI_API_KEY" \
     --build-arg SHOW_THINKING="$SHOW_THINKING" \
     --build-arg SHOW_TOOL_CALLS="$SHOW_TOOL_CALLS" \
+    --build-arg BUILD_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)" \
     2>&1 | tee /tmp/flutter-build.log
 
 # Check if build was successful

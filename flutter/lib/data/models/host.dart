@@ -16,8 +16,10 @@ class Host extends Equatable {
     this.lastConnected,
   });
 
-  String get wsUrl => kIsWeb ? 'wss://$address' : 'ws://$address:$port';
-  String get httpUrl => kIsWeb ? 'https://$address' : 'http://$address:$port';
+  bool get _secure => kIsWeb || port == 443;
+
+  String get wsUrl => _secure ? 'wss://$address' : 'ws://$address:$port';
+  String get httpUrl => _secure ? 'https://$address' : 'http://$address:$port';
 
   Host copyWith({
     String? id,

@@ -126,7 +126,7 @@ tramp
 *.temp
 .tmp/
 .temp/
-
+agentshell-web.zip
 node_modules/
 dist/
 *.apk

@@ -7,6 +7,7 @@ ARG SERVER_LIST=""
 ARG OPENAI_API_KEY=""
 ARG SHOW_THINKING=""
 ARG SHOW_TOOL_CALLS=""
+ARG BUILD_TIMESTAMP=""
 
 WORKDIR /app
 COPY flutter/ ./
@@ -15,9 +16,8 @@ COPY flutter/ ./
 RUN mkdir -p /root/.android && \
     cp /app/android/debug.keystore /root/.android/debug.keystore
 
-# Generate build config if env vars are provided
-RUN if [ -n "$SERVER_LIST" ] || [ -n "$OPENAI_API_KEY" ] || [ -n "$SHOW_THINKING" ] || [ -n "$SHOW_TOOL_CALLS" ]; then \
-    echo "Generating build config..."; \
+# Generate build config (always, to embed BUILD_TIMESTAMP and bust the SW cache hash)
+RUN echo "Generating build config..."; \
     mkdir -p /app/lib/core/config; \
     echo "// Auto-generated build configuration" > /app/lib/core/config/build_config.dart; \
     echo "// DO NOT EDIT - Generated at build time" >> /app/lib/core/config/build_config.dart; \
@@ -28,11 +28,9 @@ RUN if [ -n "$SERVER_LIST" ] || [ -n "$OPENAI_API_KEY" ] || [ -n "$SHOW_THINKING
     echo "  static const String defaultApiKey = '$OPENAI_API_KEY';" >> /app/lib/core/config/build_config.dart; \
     echo "  static const bool defaultShowThinking = $([ -n "$SHOW_THINKING" ] && echo "$SHOW_THINKING" || echo "true");" >> /app/lib/core/config/build_config.dart; \
     echo "  static const bool defaultShowToolCalls = $([ -n "$SHOW_TOOL_CALLS" ] && echo "$SHOW_TOOL_CALLS" || echo "true");" >> /app/lib/core/config/build_config.dart; \
+    echo "  static const String buildTimestamp = '$BUILD_TIMESTAMP';" >> /app/lib/core/config/build_config.dart; \
     echo "}" >> /app/lib/core/config/build_config.dart; \
-    echo "Build config generated"; \
-    else \
-    echo "No build config (env vars not set)"; \
-    fi
+    echo "Build config generated with timestamp: $BUILD_TIMESTAMP"
 
 # Get dependencies
 RUN --mount=type=cache,target=/root/.pub-cache \

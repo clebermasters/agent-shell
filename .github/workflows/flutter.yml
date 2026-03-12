@@ -1,0 +1,34 @@
+name: Build Flutter APK
+
+on:
+  push:
+    branches: [main]
+    paths: [flutter/**]
+  pull_request:
+    paths: [flutter/**]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build APK via Docker
+        run: ./build.sh release
+        working-directory: flutter
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshell-flutter-release
+          path: agentshell-flutter-release.apk
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agentshell-flutter-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

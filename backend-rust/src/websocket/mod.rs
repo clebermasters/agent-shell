@@ -226,9 +226,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         debug!("Received WebSocket message: {}", text);
                         match serde_json::from_str::<WebSocketMessage>(&text) {
                             Ok(ws_msg) => {
-                                debug!("Parsed message type: {:?}", std::mem::discriminant(&ws_msg));
+                                let msg_type = format!("{:?}", std::mem::discriminant(&ws_msg));
+                                debug!("Parsed message type: {}", msg_type);
+                                let t = std::time::Instant::now();
                                 if let Err(e) = handle_message(ws_msg, &mut ws_state, state.clone()).await {
                                     error!("Error handling message: {}", e);
+                                }
+                                let elapsed = t.elapsed();
+                                if elapsed.as_millis() > 50 {
+                                    info!("[TIMING] handle_message({}) took {:?}", msg_type, elapsed);
                                 }
                             }
                             Err(e) => {
@@ -1027,19 +1033,24 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 let (opencode_messages, max_time_updated) = {
                     let db_path2 = db_path.clone();
                     let session_id2 = session_id.clone();
-                    tokio::task::spawn_blocking(move || {
+                    let t = std::time::Instant::now();
+                    let result = tokio::task::spawn_blocking(move || {
                         crate::chat_log::opencode_parser::fetch_all_messages(&db_path2, &session_id2, cleared_at)
                     }).await.unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {}", e)))
-                        .unwrap_or_else(|e| { tracing::warn!("Failed to read OpenCode history: {}", e); (vec![], 0) })
+                        .unwrap_or_else(|e| { tracing::warn!("Failed to read OpenCode history: {}", e); (vec![], 0) });
+                    info!("[TIMING] fetch_all_messages({} msgs) took {:?}", result.0.len(), t.elapsed());
+                    result
                 };
 
                 // 4. Read webhook/file overlay from AgentShell DB
+                let t = std::time::Instant::now();
                 let overlay = chat_event_store
                     .get_acp_overlay(&session_key, cleared_at)
                     .unwrap_or_else(|e| { tracing::warn!("Failed to read ACP overlay: {}", e); vec![] })
                     .into_iter()
                     .map(|e| (e.timestamp_millis, e.message))
                     .collect::<Vec<_>>();
+                info!("[TIMING] get_acp_overlay({} msgs) took {:?}", overlay.len(), t.elapsed());
 
                 // 5. Merge: interleave OpenCode messages and overlay by timestamp
                 let mut combined: Vec<(i64, crate::chat_log::ChatMessage)> = opencode_messages
@@ -1083,8 +1094,13 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 let mut interval = tokio::time::interval(std::time::Duration::from_millis(1000));
                 loop {
                     interval.tick().await;
+                    let t = std::time::Instant::now();
                     match crate::chat_log::opencode_parser::fetch_new_messages(&db_path, &mut opencode_state) {
                         Ok(new_messages) => {
+                            let elapsed = t.elapsed();
+                            if elapsed.as_millis() > 100 || !new_messages.is_empty() {
+                                info!("[TIMING] poll fetch_new_messages({} new) took {:?}", new_messages.len(), elapsed);
+                            }
                             for msg in new_messages {
                                 let _ = send_message(
                                     &message_tx,
@@ -1923,17 +1939,21 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::AcpSendPrompt { session_id, message } => {
             info!("ACP send prompt to {}: {}", session_id, message);
             
+            let t_lock = std::time::Instant::now();
             let acp_guard = app_state.acp_client.read().await;
+            info!("[TIMING] acp_client read lock acquired in {:?}", t_lock.elapsed());
             if let Some(client) = acp_guard.as_ref() {
+                let t = std::time::Instant::now();
                 match client.send_prompt(&session_id, &message).await {
                     Ok(_result) => {
+                        info!("[TIMING] send_prompt took {:?}", t.elapsed());
                         let response = ServerMessage::AcpPromptSent {
                             session_id: session_id.clone(),
                         };
                         send_message(&state.message_tx, response).await?;
                     }
                     Err(e) => {
-                        error!("Failed to send prompt: {}", e);
+                        error!("Failed to send prompt (took {:?}): {}", t.elapsed(), e);
                         let response = ServerMessage::AcpError {
                             message: e,
                         };

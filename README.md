@@ -334,6 +334,16 @@ If `AUTH_TOKEN` is not set, the backend remains fully open — no authentication
 - Tokens are **never logged** — only the request path (without query string) appears in logs
 - The token is embedded in the app binary at build time, not transmitted in plain text headers (WebSocket API does not support custom headers)
 
+### Exposing to the Internet
+
+For a complete guide on exposing AgentShell to the public internet using **Cloudflare** and **Nginx** as a reverse proxy, see **[docs/deployment.md](docs/deployment.md)**. It covers:
+
+- Nginx reverse proxy configuration with WebSocket support
+- Cloudflare DNS, TLS, and WebSocket settings
+- S3 + Cloudflare deployment for the Flutter web app
+- Building all clients with the auth token
+- Verification steps and troubleshooting
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.

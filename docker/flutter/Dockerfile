@@ -8,6 +8,7 @@ ARG OPENAI_API_KEY=""
 ARG SHOW_THINKING=""
 ARG SHOW_TOOL_CALLS=""
 ARG BUILD_TIMESTAMP=""
+ARG AUTH_TOKEN=""
 
 WORKDIR /app
 COPY flutter/ ./
@@ -29,6 +30,7 @@ RUN echo "Generating build config..."; \
     echo "  static const bool defaultShowThinking = $([ -n "$SHOW_THINKING" ] && echo "$SHOW_THINKING" || echo "true");" >> /app/lib/core/config/build_config.dart; \
     echo "  static const bool defaultShowToolCalls = $([ -n "$SHOW_TOOL_CALLS" ] && echo "$SHOW_TOOL_CALLS" || echo "true");" >> /app/lib/core/config/build_config.dart; \
     echo "  static const String buildTimestamp = '$BUILD_TIMESTAMP';" >> /app/lib/core/config/build_config.dart; \
+    echo "  static const String authToken = '$AUTH_TOKEN';" >> /app/lib/core/config/build_config.dart; \
     echo "}" >> /app/lib/core/config/build_config.dart; \
     echo "Build config generated with timestamp: $BUILD_TIMESTAMP"
 

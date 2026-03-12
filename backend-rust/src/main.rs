@@ -1,6 +1,7 @@
 use anyhow::Result;
 use axum::{
     extract::State,
+    middleware,
     routing::{get, post},
     Json, Router,
 };
@@ -24,6 +25,7 @@ struct TmuxInput {
 }
 
 mod audio;
+mod auth;
 mod chat_clear_store;
 mod chat_event_store;
 mod chat_file_storage;
@@ -125,8 +127,15 @@ async fn main() -> Result<()> {
     let serve_dir =
         ServeDir::new("../dist").not_found_service(ServeFile::new("../dist/index.html"));
 
-    // Build the router
-    let app = Router::new()
+    // Log AUTH_TOKEN status at startup
+    if std::env::var("AUTH_TOKEN").ok().filter(|t| !t.is_empty()).is_some() {
+        info!("AUTH_TOKEN is set — all API/WebSocket requests require valid token");
+    } else {
+        info!("WARNING: AUTH_TOKEN not set — backend is open to all connections");
+    }
+
+    // Build the router — protected routes require auth token
+    let protected = Router::new()
         // API: Get connected clients count
         .route(
             "/api/clients",
@@ -204,7 +213,12 @@ async fn main() -> Result<()> {
         )
         // WebSocket endpoint
         .route("/ws", get(websocket::ws_handler))
-        // Serve static files (Vue app)
+        // Apply auth middleware to all protected routes
+        .layer(middleware::from_fn(auth::auth_middleware));
+
+    let app = Router::new()
+        .merge(protected)
+        // Serve static files (Vue app) — no auth required
         .fallback_service(serve_dir)
         // Add CORS
         .layer(

@@ -1728,6 +1728,16 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                                 current_mode_id: result.modes.as_ref().map(|m| m.current_mode_id.clone()),
                             }).await;
                         }
+                        Err(e) if e.starts_with("__already_active:") => {
+                            // Session already active — skip resume, still notify Flutter
+                            info!("[TIMING] AcpResumeSession skipped (already active) in {:?}", t_total.elapsed());
+                            let _ = send_message(&message_tx, ServerMessage::AcpSessionCreated {
+                                session_id: session_id.clone(),
+                                current_model_id: None,
+                                available_models: None,
+                                current_mode_id: None,
+                            }).await;
+                        }
                         Err(e) => {
                             error!("Failed to resume ACP session: {}", e);
                             let _ = send_message(&message_tx, ServerMessage::AcpError { message: e }).await;

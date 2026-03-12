@@ -17,6 +17,7 @@ pub struct AcpClient {
     event_tx: mpsc::Sender<AcpEvent>,
     initialized: Arc<RwLock<bool>>,
     stdin: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+    active_session_id: Arc<Mutex<Option<String>>>,
 }
 
 type RequestCallback = Box<dyn FnOnce(Result<sj::Value, String>) + Send + 'static>;
@@ -97,6 +98,7 @@ impl AcpClient {
             event_tx,
             initialized: Arc::new(RwLock::new(false)),
             stdin: Arc::new(Mutex::new(None)),
+            active_session_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -329,6 +331,15 @@ impl AcpClient {
     }
 
     pub async fn resume_session(&self, session_id: &str, cwd: &str) -> Result<CreateSessionResult, String> {
+        {
+            let active = self.active_session_id.lock().await;
+            if active.as_deref() == Some(session_id) {
+                tracing::info!("[TIMING] AcpResumeSession skipped — '{}' already active", session_id);
+                // Return a minimal result so the caller can still send AcpSessionCreated
+                return Err(format!("__already_active:{}", session_id));
+            }
+        }
+
         let id = {
             let mut guard = self.request_id.lock().await;
             let id = *guard;
@@ -349,8 +360,11 @@ impl AcpClient {
 
         let result = self.send_request_raw(id, request).await?;
         
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse resume result: {}", e))
+        let parsed = serde_json::from_value::<CreateSessionResult>(result)
+            .map_err(|e| format!("Failed to parse resume result: {}", e))?;
+        
+        *self.active_session_id.lock().await = Some(session_id.to_string());
+        Ok(parsed)
     }
 
     pub async fn fork_session(&self, session_id: &str, cwd: &str) -> Result<CreateSessionResult, String> {

@@ -8,6 +8,7 @@ on:
     paths: [flutter/**, docker/flutter/**, docker/flutter-base/**]
   release:
     types: [published]
+  workflow_dispatch:
 
 env:
   BASE_IMAGE: ghcr.io/${{ github.repository_owner }}/agentshell-flutter-base:latest

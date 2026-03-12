@@ -2114,18 +2114,15 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
 
             // Send prompt to ACP session so AI can see the file
             let file_ref = file_path_str.clone().unwrap_or_else(|| format!("[File: {}]", file.filename));
-            if !prompt_text.is_empty() || file.mime_type.starts_with("image/") {
-                let combined = if prompt_text.is_empty() {
-                    file_ref
-                } else {
-                    format!("{}\n\nHere is the file: {}", prompt_text, file_ref)
-                };
-                
-                let acp_guard = app_state.acp_client.read().await;
-                if let Some(client) = acp_guard.as_ref() {
-                    if let Err(e) = client.send_prompt(&session_id, &combined).await {
-                        error!("Failed to send file prompt to ACP: {}", e);
-                    }
+            let combined = if prompt_text.is_empty() {
+                file_ref
+            } else {
+                format!("{}\n\nHere is the file: {}", prompt_text, file_ref)
+            };
+            let acp_guard = app_state.acp_client.read().await;
+            if let Some(client) = acp_guard.as_ref() {
+                if let Err(e) = client.send_prompt(&session_id, &combined).await {
+                    error!("Failed to send file prompt to ACP: {}", e);
                 }
             }
         }

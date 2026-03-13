@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -653,14 +653,22 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
     try {
       Duration? duration;
-      debugPrint('Audio URL: $url');
+
+      // Add auth token as query parameter (works on web without CORS issues)
+      var audioUrl = url;
+      if (BuildConfig.authToken.isNotEmpty) {
+        final separator = url.contains('?') ? '&' : '?';
+        audioUrl = '$url${separator}token=${Uri.encodeComponent(BuildConfig.authToken)}';
+      }
+
+      debugPrint('Audio URL: $audioUrl');
       try {
-        duration = await _audioPlayer.setUrl(url);
+        duration = await _audioPlayer.setUrl(audioUrl);
       } catch (streamError) {
         debugPrint(
           'Streaming audio failed, trying local fallback: $streamError',
         );
-        final localPath = await _downloadAudioToTemp(blockId, url);
+        final localPath = await _downloadAudioToTemp(blockId, audioUrl);
         duration = await _audioPlayer.setFilePath(localPath);
       }
 
@@ -699,6 +707,11 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   }
 
   Future<String> _downloadAudioToTemp(String blockId, String url) async {
+    // On web, we can't cache to temp directory — stream directly
+    if (kIsWeb) {
+      return url; // just_audio will fetch with auth headers
+    }
+
     final cachedPath = _audioCachePaths[blockId];
     if (cachedPath != null && await File(cachedPath).exists()) {
       return cachedPath;
@@ -706,7 +719,13 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
     final tempDir = await getTemporaryDirectory();
     final filePath = '${tempDir.path}/chat_audio_$blockId.bin';
-    await Dio().download(url, filePath, deleteOnError: true);
+
+    // Add auth token to the request headers
+    final dio = Dio();
+    if (BuildConfig.authToken.isNotEmpty) {
+      dio.options.headers['Authorization'] = 'Bearer ${BuildConfig.authToken}';
+    }
+    await dio.download(url, filePath, deleteOnError: true);
     _audioCachePaths[blockId] = filePath;
     return filePath;
   }
@@ -796,6 +815,20 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
       return;
     }
 
+    // On web, file downloads are handled by the browser
+    if (kIsWeb) {
+      // Open the file with auth token in the URL
+      var url = fileUrl;
+      if (BuildConfig.authToken.isNotEmpty) {
+        final separator = url.contains('?') ? '&' : '?';
+        url = '$url${separator}token=${Uri.encodeComponent(BuildConfig.authToken)}';
+      }
+      if (await canLaunchUrl(Uri.parse(url))) {
+        await launchUrl(url);
+      }
+      return;
+    }
+
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     try {
       scaffoldMessenger.showSnackBar(
@@ -803,6 +836,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
       );
 
       final dio = Dio();
+      if (BuildConfig.authToken.isNotEmpty) {
+        dio.options.headers['Authorization'] = 'Bearer ${BuildConfig.authToken}';
+      }
       final cacheDir = await getTemporaryDirectory();
       final downloadsDir = Directory('${cacheDir.path}/chat_downloads');
 
@@ -1329,6 +1365,9 @@ class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
       }
 
       final dio = Dio();
+      if (BuildConfig.authToken.isNotEmpty) {
+        dio.options.headers['Authorization'] = 'Bearer ${BuildConfig.authToken}';
+      }
       final tempDir = await getTemporaryDirectory();
       final filePath = '${tempDir.path}/agentshell_image_${widget.imageId}.png';
       final file = File(filePath);

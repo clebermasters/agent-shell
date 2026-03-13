@@ -32,7 +32,9 @@ pub fn get_session_path(session_name: &str) -> Option<PathBuf> {
 /// Metadata about a tmux pane, used for history capture.
 pub struct PaneMetadata {
     pub history_size: i64,
+    #[allow(dead_code)]
     pub pane_height: u32,
+    #[allow(dead_code)]
     pub pane_width: u32,
 }
 
@@ -461,47 +463,6 @@ pub async fn select_window(session_name: &str, window_index: &str) -> Result<()>
 
 // Alternative session management functions that avoid direct attachment
 
-pub async fn capture_pane(session_name: &str) -> Result<String> {
-    let output = Command::new("tmux")
-        .args(&[
-            "capture-pane",
-            "-t",
-            session_name,
-            "-p", // Print to stdout
-            "-e", // Include escape sequences
-            "-J", // Join wrapped lines
-            "-S",
-            "-", // Start from beginning of visible area
-            "-E",
-            "-", // End at bottom
-        ])
-        .output()
-        .await?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to capture pane: {}", stderr)
-    }
-}
-
-pub async fn send_keys_to_session(session_name: &str, window_index: u32, keys: &str) -> Result<()> {
-    let target = format!("{}:{}", session_name, window_index);
-
-    // Use send-keys WITHOUT -l flag (literal mode) to send plain text
-    // The -l flag interprets keys as literal characters (like special keys)
-    let status = Command::new("tmux")
-        .args(&["send-keys", "-t", &target, keys])
-        .status()
-        .await?;
-
-    if !status.success() {
-        anyhow::bail!("Failed to send keys to session");
-    }
-
-    Ok(())
-}
 
 pub async fn send_special_key(session_name: &str, window_index: u32, key: &str) -> Result<()> {
     let target = format!("{}:{}", session_name, window_index);
@@ -517,53 +478,3 @@ pub async fn send_special_key(session_name: &str, window_index: u32, key: &str) 
     Ok(())
 }
 
-// Batch command execution for better performance
-pub struct TmuxCommandBatch {
-    commands: Vec<String>,
-}
-
-impl TmuxCommandBatch {
-    pub fn new() -> Self {
-        Self {
-            commands: Vec::new(),
-        }
-    }
-
-    pub fn add_command(&mut self, args: &[&str]) {
-        let cmd = args.join(" ");
-        self.commands.push(cmd);
-    }
-
-    pub async fn execute(&self) -> Result<Vec<Result<String>>> {
-        if self.commands.is_empty() {
-            return Ok(vec![]);
-        }
-
-        // Execute multiple commands in a single tmux invocation
-        let script = self.commands.join(" \\; ");
-        let output = Command::new("tmux")
-            .args(&["-C"]) // Control mode
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        let mut child = output;
-
-        // Write commands
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            stdin.write_all(script.as_bytes()).await?;
-            stdin.write_all(b"\nexit\n").await?;
-        }
-
-        let output = child.wait_with_output().await?;
-
-        // Parse results
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let results: Vec<Result<String>> =
-            stdout.lines().map(|line| Ok(line.to_string())).collect();
-
-        Ok(results)
-    }
-}

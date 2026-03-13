@@ -9,26 +9,6 @@ pub struct JsonRpcRequest {
     pub params: Option<serde_json::Value>,
 }
 
-impl JsonRpcRequest {
-    pub fn new(method: &str) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id: serde_json::Value::Null,
-            method: method.to_string(),
-            params: None,
-        }
-    }
-
-    pub fn with_id(mut self, id: usize) -> Self {
-        self.id = serde_json::json!(id);
-        self
-    }
-
-    pub fn with_params<T: Serialize>(mut self, params: T) -> Self {
-        self.params = serde_json::to_value(params).ok();
-        self
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JsonRpcResponse {

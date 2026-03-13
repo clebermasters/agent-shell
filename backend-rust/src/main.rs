@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{
     extract::State,
     middleware,
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
@@ -37,7 +37,6 @@ mod terminal_buffer;
 mod tmux;
 mod types;
 mod websocket;
-mod agent;
 mod acp;
 
 // Global flag for audio logging
@@ -102,7 +101,7 @@ async fn main() -> Result<()> {
 
     let base_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-    let state = AppState {
+    let app_state = AppState {
         enable_audio_logs: args.audio,
         broadcast_tx: broadcast_tx.clone(),
         client_manager,
@@ -139,19 +138,16 @@ async fn main() -> Result<()> {
         // API: Get connected clients count
         .route(
             "/api/clients",
-            get({
-                let state = Arc::new(state.clone());
-                move |State(s): State<Arc<AppState>>| async move {
-                    let count = s.client_manager.client_count().await;
-                    format!("{{\"clients\":{}}}", count)
-                }
+            get(|State(s): State<Arc<AppState>>| async move {
+                let count = s.client_manager.client_count().await;
+                format!("{{\"clients\":{}}}", count)
             }),
         )
         // API: Get chat file by ID
         .route(
             "/api/chat/files/:id",
             get({
-                let storage = state.chat_file_storage.clone();
+                let storage = app_state.chat_file_storage.clone();
                 move |axum::extract::Path(id): axum::extract::Path<String>| async move {
                     if let Some(path) = storage.get_path(&id) {
                         if let Ok(data) = std::fs::read(&path) {
@@ -226,7 +222,7 @@ async fn main() -> Result<()> {
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
-        .with_state(Arc::new(state));
+        .with_state(Arc::new(app_state));
 
     // Dev branch uses different ports
     let http_port = 4010;

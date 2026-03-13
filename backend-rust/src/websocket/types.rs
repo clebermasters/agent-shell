@@ -44,6 +44,7 @@ pub(crate) struct WsState {
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
     pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
     pub client_manager: Arc<ClientManager>,
+    #[allow(dead_code)]
     pub acp_client: Arc<tokio::sync::RwLock<Option<crate::acp::AcpClient>>>,
 }
 

@@ -40,7 +40,7 @@ impl ChatFileStorage {
         std::fs::create_dir_all(target_dir)
             .map_err(|e| format!("Failed to create directory: {}", e))?;
 
-        let extension = extension_from_filename(filename)
+        let _extension = extension_from_filename(filename)
             .or_else(|| extension_from_mime_type(mime_type))
             .unwrap_or_else(|| "bin".to_string());
 

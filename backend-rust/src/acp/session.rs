@@ -1,41 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitializeParams {
-    pub protocol_version: usize,
-    #[serde(rename = "clientCapabilities")]
-    pub client_capabilities: ClientCapabilities,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ClientCapabilities {
-    #[serde(rename = "resources", skip_serializing_if = "Option::is_none")]
-    pub resources: Option<Capability>,
-    #[serde(rename = "prompts", skip_serializing_if = "Option::is_none")]
-    pub prompts: Option<Capability>,
-    #[serde(rename = "tools", skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Capability>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<MetaCapabilities>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Capability {
-    #[serde(default)]
-    pub list: bool,
-    #[serde(default)]
-    pub subscribe: bool,
-    #[serde(default)]
-    pub call: bool,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MetaCapabilities {
-    #[serde(rename = "terminal-auth", skip_serializing_if = "Option::is_none")]
-    pub terminal_auth: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitializeResult {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: usize,
@@ -118,29 +83,6 @@ pub struct AgentInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateSessionParams {
-    pub cwd: String,
-    #[serde(default)]
-    pub mcp_servers: Vec<McpServer>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum McpServer {
-    Local {
-        name: String,
-        command: String,
-        args: Vec<String>,
-        env: std::collections::HashMap<String, String>,
-    },
-    Http {
-        name: String,
-        url: String,
-        headers: std::collections::HashMap<String, String>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSessionResult {
     #[serde(rename = "sessionId")]
     pub session_id: String,
@@ -180,25 +122,6 @@ pub struct ModeInfo {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResumeSessionParams {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-    pub cwd: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForkSessionParams {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-    pub cwd: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListSessionsParams {
-    #[serde(default)]
-    pub cursor: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListSessionsResult {
@@ -215,54 +138,6 @@ pub struct SessionInfo {
     pub title: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetModelParams {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-    #[serde(rename = "modelId")]
-    pub model_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SetModeParams {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-    #[serde(rename = "modeId")]
-    pub mode_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PromptParams {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-    pub prompt: Vec<ContentBlock>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ContentBlock {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(rename = "image")]
-    Image {
-        uri: Option<String>,
-        data: Option<String>,
-        mime_type: Option<String>,
-    },
-    #[serde(rename = "resource_link")]
-    ResourceLink { uri: String, name: Option<String> },
-    #[serde(rename = "resource")]
-    Resource { resource: ResourceContent },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourceContent {
-    pub uri: String,
-    #[serde(rename = "mimeType", skip_serializing_if = "Option::is_none")]
-    pub mime_type: Option<String>,
-    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,8 +160,3 @@ pub struct UsageInfo {
     pub thought_tokens: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CancelParams {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-}

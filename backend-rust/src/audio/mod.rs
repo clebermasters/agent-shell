@@ -1,12 +1,12 @@
 use anyhow::Result;
-use bytes::Bytes;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{process::Stdio, sync::Arc};
 use tokio::{
     io::AsyncReadExt,
     process::{Child, Command},
     sync::{mpsc, Mutex},
 };
-use tracing::{error, info};
+use tracing::error;
 
 use crate::{types::ServerMessage, websocket::BroadcastMessage};
 
@@ -28,7 +28,7 @@ pub async fn start_streaming(client_tx: mpsc::UnboundedSender<BroadcastMessage>)
 
     // Add client
     state.clients.push(client_tx.clone());
-    info!("Audio client added. Total clients: {}", state.clients.len());
+    tracing::info!("Audio client added. Total clients: {}", state.clients.len());
 
     // Send current status
     let status = ServerMessage::AudioStatus {
@@ -63,7 +63,7 @@ pub async fn stop_streaming_for_client(
 
     // Remove only this specific client
     state.clients.retain(|c| !c.same_channel(client_tx));
-    info!(
+    tracing::info!(
         "Audio client removed. Remaining clients: {}",
         state.clients.len()
     );
@@ -93,7 +93,7 @@ async fn get_default_monitor_source() -> Result<String> {
 }
 
 async fn start_ffmpeg(state: &mut AudioState) -> Result<()> {
-    info!("Starting audio streaming...");
+    tracing::info!("Starting audio streaming...");
     state.is_streaming = true;
 
     // Determine platform-specific input args
@@ -101,11 +101,11 @@ async fn start_ffmpeg(state: &mut AudioState) -> Result<()> {
         // First try to get the default monitor source
         match get_default_monitor_source().await {
             Ok(source) => {
-                info!("Using PulseAudio monitor source: {}", source);
+                tracing::info!("Using PulseAudio monitor source: {}", source);
                 (source, vec!["-f", "pulse", "-i"])
             }
             Err(_) => {
-                info!("Using default PulseAudio source");
+                tracing::info!("Using default PulseAudio source");
                 ("default".to_string(), vec!["-f", "pulse", "-i"])
             }
         }
@@ -143,9 +143,9 @@ async fn start_ffmpeg(state: &mut AudioState) -> Result<()> {
                 Ok(0) => break, // EOF
                 Ok(n) => {
                     // Convert to base64 and send as JSON for client compatibility
-                    let base64_data = base64::encode(&buffer[..n]);
+                    let base64_data = STANDARD.encode(&buffer[..n]);
                     let msg = ServerMessage::AudioStream { data: base64_data };
-                    info!("Sending audio chunk: {} bytes", n);
+                    tracing::info!("Sending audio chunk: {} bytes", n);
                     broadcast_json_to_clients(&clients_clone, msg).await;
                 }
                 Err(e) => {
@@ -166,7 +166,7 @@ async fn start_ffmpeg(state: &mut AudioState) -> Result<()> {
                 }
                 if crate::ENABLE_AUDIO_LOGS.load(std::sync::atomic::Ordering::Relaxed) {
                     let log = String::from_utf8_lossy(&buffer[..n]);
-                    info!("FFmpeg: {}", log);
+                    tracing::info!("FFmpeg: {}", log);
                 }
             }
         });
@@ -181,7 +181,7 @@ async fn start_ffmpeg(state: &mut AudioState) -> Result<()> {
 }
 
 async fn stop_ffmpeg(state: &mut AudioState) {
-    info!("Stopping audio streaming...");
+    tracing::info!("Stopping audio streaming...");
 
     if let Some(mut child) = state.ffmpeg_process.take() {
         let _ = child.kill().await;

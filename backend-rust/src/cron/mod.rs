@@ -1,23 +1,12 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::types::CronJob;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobExecution {
-    pub job_id: String,
-    pub started_at: DateTime<Utc>,
-    pub finished_at: Option<DateTime<Utc>>,
-    pub success: bool,
-    pub output: Option<String>,
-    pub error: Option<String>,
-}
 
 pub struct CronManager {
     jobs: RwLock<HashMap<String, CronJob>>,
@@ -195,12 +184,6 @@ impl CronManager {
         } else {
             Ok(format!("Failed:\nStdout: {}\nStderr: {}", stdout, stderr))
         }
-    }
-
-    pub async fn get_job_history(&self, _id: &str) -> Vec<JobExecution> {
-        // TODO: Implement job execution history
-        // This would require storing execution results in a database or log file
-        Vec::new()
     }
 
     // Private helper methods

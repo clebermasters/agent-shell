@@ -4,14 +4,15 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
-use super::{AiTool, ChatMessage, ContentBlock};
+use super::{ChatMessage, ContentBlock};
 
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct OpencodeState {
+    #[allow(dead_code)]
     pub pid: u32,
     pub session_id: String,
     pub last_time_updated: i64,
@@ -97,7 +98,7 @@ pub fn init_opencode_state(
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     );
 
-    let (session_id, time_created, time_updated) = match result {
+    let (session_id, _time_created, time_updated) = match result {
         Ok(data) => {
             debug!(
                 "Matched session {} (created: {}, updated: {}) to PID {} (started: {})",

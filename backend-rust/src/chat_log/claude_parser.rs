@@ -45,6 +45,7 @@ struct RawBlock {
     content: Option<RawToolResultContent>,
     // thinking block
     thinking: Option<String>,
+    #[allow(dead_code)]
     signature: Option<String>,
 }
 

@@ -62,7 +62,7 @@ pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(P
 // ---------------------------------------------------------------------------
 
 pub enum LogWatcher {
-    File(notify::RecommendedWatcher),
+    File(#[allow(dead_code)] notify::RecommendedWatcher),
     Task(tokio::task::JoinHandle<()>),
 }
 

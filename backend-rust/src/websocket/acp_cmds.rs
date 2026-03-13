@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use super::types::{send_message, BroadcastMessage, WsState};
-use crate::{chat_log::ChatMessage, types::*, AppState};
+use super::types::{send_message, WsState};
+use crate::{types::*, AppState};
 
 fn write_acp_session_file(session_id: &str, cwd: &str) {
     let home = match std::env::var("HOME") {

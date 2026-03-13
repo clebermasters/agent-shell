@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use super::types::{send_message, merge_history_messages, BroadcastMessage, WsState};
+use super::types::{send_message, merge_history_messages, WsState};
 use crate::{types::*, AppState};
 
 pub(crate) async fn handle(

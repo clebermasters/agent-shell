@@ -1,6 +1,6 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:io' show Platform;
 import 'dart:ui';
 import 'package:xterm/xterm.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -87,7 +87,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     WidgetsBinding.instance.addObserver(this);
     _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
     _inputController = TextEditingController();
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!kIsWeb) {
       VolumeKeyBoard.instance.addListener(_handleVolumeKey);
     }
     widget.terminal.addListener(_onTerminalChange);
@@ -109,7 +109,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   void dispose() {
     _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!kIsWeb) {
       VolumeKeyBoard.instance.removeListener();
     }
     widget.terminal.removeListener(_onTerminalChange);

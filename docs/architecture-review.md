@@ -119,7 +119,7 @@ sharedWebSocketServiceProvider   ← singleton WebSocket, reconnects on host cha
 
 | # | Severity | Description | File | Line |
 |---|----------|-------------|------|------|
-| B11 | 🔴 Critical | `sendInput()` appends `"\n"` (literal newline) instead of sending a separate Enter keypress — causes new line in terminal instead of submit | `chat_provider.dart` | 846 |
+| B11 | ~~🔴 Critical~~ | ~~`sendInput()` appends `"\n"` (literal newline) instead of sending a separate Enter keypress — causes new line in terminal instead of submit~~ — **FIXED: `sendInput()` now sends text without `\n`, backend issues two separate tmux calls for text and Enter.** | `chat_provider.dart` | 834 |
 | B12 | 🟠 High | Messages sent while WebSocket reconnecting are silently dropped — no queue | `websocket_service.dart` | 176 |
 | B13 | 🟠 High | Chat history race condition: 500ms hardcoded delay before requesting history; fast session switching loads wrong history | `chat_provider.dart` | 826 |
 | B14 | 🟠 High | `_connectionSubscription` never cancelled in dispose — stream leak | `chat_provider.dart` | 95 |

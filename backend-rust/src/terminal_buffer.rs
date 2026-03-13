@@ -1,4 +1,26 @@
 use simdutf8;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    /// Pattern to match Device Attributes (DA) responses
+    /// Matches sequences like ESC[?0c or ESC[?0;0c
+    static ref DA_PATTERN: String = r#"\x1b\[\?[0-9;]*c"#.to_string();
+}
+
+/// Remove unwanted control sequences that appear in terminal output
+/// These are typically responses to terminal capability queries that shouldn't be displayed
+pub fn filter_control_sequences(text: &str) -> String {
+    // Only remove Device Attributes responses (ESC[?...c format)
+    // This is much more conservative than removing literal 0;0;0c patterns
+    // which could appear in legitimate output
+    let mut filtered = text.replace("\x1b[?0c", "");
+    filtered = filtered.replace("\x1b[?1c", "");
+    filtered = filtered.replace("\x1b[?0;0c", "");
+    filtered = filtered.replace("\x1b[?1;0c", "");
+    filtered = filtered.replace("\x1b[?2c", "");
+
+    filtered
+}
 
 /// Zero-copy UTF-8 streaming decoder for terminal output chunks
 pub struct Utf8StreamDecoder {

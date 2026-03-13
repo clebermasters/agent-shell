@@ -185,25 +185,24 @@ async fn main() -> Result<()> {
                     session, window, text
                 );
 
-                // Execute direct tmux send-keys command
+                // Two separate tmux calls: text then Enter.
                 let target = format!("{}:{}", session, window);
+                let clean_text = text.trim_end_matches('\n');
+                let _ = tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", &target, "-l", clean_text])
+                    .output()
+                    .await;
                 let result = tokio::process::Command::new("tmux")
-                    .args(&["send-keys", "-t", &target, &text])
+                    .args(&["send-keys", "-t", &target, "Enter"])
                     .output()
                     .await;
 
                 match result {
-                    Ok(output) => {
-                        if output.status.success() {
-                            // Also send Enter key
-                            let _ = tokio::process::Command::new("tmux")
-                                .args(&["send-keys", "-t", &target, "Enter"])
-                                .output()
-                                .await;
-                            format!("{{\"success\":true}}")
-                        } else {
-                            format!("{{\"success\":false,\"error\":\"tmux command failed\"}}")
-                        }
+                    Ok(output) if output.status.success() => {
+                        format!("{{\"success\":true}}")
+                    }
+                    Ok(_) => {
+                        format!("{{\"success\":false,\"error\":\"tmux command failed\"}}")
                     }
                     Err(e) => {
                         format!("{{\"success\":false,\"error\":\"{}\"}}", e)

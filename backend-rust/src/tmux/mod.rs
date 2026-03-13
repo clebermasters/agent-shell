@@ -109,7 +109,10 @@ pub async fn capture_history_above_viewport(session: &str, window: u32) -> Resul
     match tokio::time::timeout(tokio::time::Duration::from_secs(2), capture_future).await {
         Ok(Ok(output)) => {
             if output.status.success() {
-                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+                let raw = String::from_utf8_lossy(&output.stdout).to_string();
+                // Filter out unwanted control sequences
+                let filtered = crate::terminal_buffer::filter_control_sequences(&raw);
+                Ok(filtered)
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 anyhow::bail!("capture-pane failed: {}", stderr)

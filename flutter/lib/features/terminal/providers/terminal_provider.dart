@@ -93,9 +93,15 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
     final terminal = terminalService.createTerminal(sessionName);
 
-    // Create or get existing controller for this session
+    // Create or get existing controller for this session.
+    // Evict the oldest entry when the map exceeds 20 entries to prevent leaks.
     final controllerKey = '${sessionName}_$windowIndex';
     if (!_controllers.containsKey(controllerKey)) {
+      if (_controllers.length >= 20) {
+        final oldest = _controllers.keys.first;
+        _controllers[oldest]?.dispose();
+        _controllers.remove(oldest);
+      }
       _controllers[controllerKey] = TerminalController();
     }
 

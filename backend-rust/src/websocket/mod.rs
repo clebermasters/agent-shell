@@ -332,33 +332,44 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 global_session, global_window
             );
 
-            let session = session_name.or(global_session);
+            let session = session_name.or(global_session.clone());
             let idx = window_index.or(global_window);
 
             info!("  Using session: {:?}, window: {:?}", session, idx);
 
-            if let (Some(session), Some(window_idx)) = (session, idx) {
+            if let (Some(ref session), Some(window_idx)) = (&session, idx) {
                 let target = format!("{}:{}", session, window_idx);
 
-                // Use direct tmux command - this works!
+                // Send text literally, then Enter as a separate tmux invocation.
+                // Note: ";" in .args() is passed as a literal argument, not a tmux
+                // command separator. Two separate calls are required.
                 let text = data.trim_end_matches('\n');
-                let result = tokio::process::Command::new("tmux")
-                    .args(&["send-keys", "-t", &target, text])
+                let send_text = tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", &target, "-l", text])
+                    .output()
+                    .await;
+                let send_enter = tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", &target, "Enter"])
                     .output()
                     .await;
 
-                if result.is_ok() {
-                    // Also send Enter
-                    let _ = tokio::process::Command::new("tmux")
-                        .args(&["send-keys", "-t", &target, "Enter"])
-                        .output()
-                        .await;
-                    debug!("Sent keys via tmux: {:?}", data);
-                } else {
-                    error!("Failed to send keys via tmux");
+                match (send_text, send_enter) {
+                    (Ok(t), Ok(e)) if t.status.success() && e.status.success() => {
+                        debug!("Sent text+Enter to tmux target {}: {:?}", target, text);
+                    }
+                    (Ok(t), _) if !t.status.success() => {
+                        error!("tmux send-keys (text) returned non-zero exit for {}: {}", target, t.status);
+                    }
+                    (_, Ok(e)) if !e.status.success() => {
+                        error!("tmux send-keys (Enter) returned non-zero exit for {}: {}", target, e.status);
+                    }
+                    (Err(e), _) | (_, Err(e)) => {
+                        error!("Failed to send keys via tmux to {}: {}", target, e);
+                    }
+                    _ => {}
                 }
             } else {
-                debug!("No session/window active, ignoring input via tmux");
+                warn!("No session/window available. Message: {:?}, session: {:?}, window: {:?}", data, session, idx);
             }
         }
 
@@ -1427,19 +1438,26 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 let target = format!("{}:{}", session_name, window_index);
                 let text = combined_text_for_tmux.trim_end_matches('\n');
 
-                let result = tokio::process::Command::new("tmux")
+                // Two separate tmux calls: text first, then Enter.
+                let _ = tokio::process::Command::new("tmux")
                     .args(&["send-keys", "-t", &target, "-l", text])
                     .output()
                     .await;
+                let result = tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", &target, "Enter"])
+                    .output()
+                    .await;
 
-                if result.is_ok() {
-                    let _ = tokio::process::Command::new("tmux")
-                        .args(&["send-keys", "-t", &target, "C-m"])
-                        .output()
-                        .await;
-                    info!("Sent file prompt to tmux: {:?}", text);
-                } else {
-                    error!("Failed to send file prompt to tmux session {}", target);
+                match result {
+                    Ok(output) if output.status.success() => {
+                        info!("Sent file prompt to tmux: {:?}", text);
+                    }
+                    Ok(output) => {
+                        error!("tmux send-keys failed for {}: {}", target, output.status);
+                    }
+                    Err(e) => {
+                        error!("Failed to send file prompt to tmux session {}: {}", target, e);
+                    }
                 }
             }
         }
@@ -1505,19 +1523,26 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             let target = format!("{}:{}", session_name, window_index);
             let text = message.trim();
 
-            let result = tokio::process::Command::new("tmux")
+            // Two separate tmux calls: text first, then Enter.
+            let _ = tokio::process::Command::new("tmux")
                 .args(&["send-keys", "-t", &target, "-l", text])
                 .output()
                 .await;
+            let result = tokio::process::Command::new("tmux")
+                .args(&["send-keys", "-t", &target, "Enter"])
+                .output()
+                .await;
 
-            if result.is_ok() {
-                let _ = tokio::process::Command::new("tmux")
-                    .args(&["send-keys", "-t", &target, "C-m"])
-                    .output()
-                    .await;
-                info!("Sent webhook message to tmux: {:?}", text);
-            } else {
-                error!("Failed to send webhook message to tmux session {}", target);
+            match result {
+                Ok(output) if output.status.success() => {
+                    info!("Sent chat message to tmux: {:?}", text);
+                }
+                Ok(output) => {
+                    error!("tmux send-keys failed for {}: {}", target, output.status);
+                }
+                Err(e) => {
+                    error!("Failed to send chat message to tmux session {}: {}", target, e);
+                }
             }
         }
         // ACP message handlers
@@ -2234,46 +2259,6 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                 send_message(&state.message_tx, response).await?;
             }
         }
-        WebSocketMessage::AcpResumeSession { session_id, cwd } => {
-            info!("ACP resume session: {} in {}", session_id, cwd);
-            let response = ServerMessage::AcpError {
-                message: "ACP not yet implemented".to_string(),
-            };
-            send_message(&state.message_tx, response).await?;
-        }
-        WebSocketMessage::AcpForkSession { session_id, cwd } => {
-            info!("ACP fork session: {} in {}", session_id, cwd);
-            let response = ServerMessage::AcpError {
-                message: "ACP not yet implemented".to_string(),
-            };
-            send_message(&state.message_tx, response).await?;
-        }
-        WebSocketMessage::AcpListSessions => {
-            info!("ACP list sessions");
-            let response = ServerMessage::AcpError {
-                message: "ACP not yet implemented".to_string(),
-            };
-            send_message(&state.message_tx, response).await?;
-        }
-        WebSocketMessage::AcpSendPrompt { session_id, message } => {
-            info!("ACP send prompt to {}: {}", session_id, message);
-            let response = ServerMessage::AcpError {
-                message: "ACP not yet implemented".to_string(),
-            };
-            send_message(&state.message_tx, response).await?;
-        }
-        WebSocketMessage::AcpCancelPrompt { session_id } => {
-            info!("ACP cancel prompt: {}", session_id);
-        }
-        WebSocketMessage::AcpSetModel { session_id, model_id } => {
-            info!("ACP set model: {} -> {}", session_id, model_id);
-        }
-        WebSocketMessage::AcpSetMode { session_id, mode_id } => {
-            info!("ACP set mode: {} -> {}", session_id, mode_id);
-        }
-        WebSocketMessage::AcpRespondPermission { request_id, option_id } => {
-            info!("ACP permission response: {} -> {}", request_id, option_id);
-        }
         WebSocketMessage::AcpLoadHistory { session_id, offset, limit } => {
             tracing::debug!("ACP load history: {} offset={:?} limit={:?}", session_id, offset, limit);
 
@@ -2546,8 +2531,11 @@ async fn attach_to_session(
                     consecutive_errors = 0;
                     let (text, _) = utf8_decoder.decode_chunk(&buffer[..n]);
                     if !text.is_empty() {
-                        pending_output.push_str(&text);
-                        bytes_since_pause += text.len();
+                        let filtered = crate::terminal_buffer::filter_control_sequences(&text);
+                        if !filtered.is_empty() {
+                            pending_output.push_str(&filtered);
+                            bytes_since_pause += filtered.len();
+                        }
 
                         let should_send = pending_output.len() > 1024
                             || last_send.elapsed() > std::time::Duration::from_millis(10)

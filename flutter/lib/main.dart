@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,6 +8,7 @@ import 'core/config/app_config.dart';
 import 'core/config/build_config.dart';
 import 'core/providers.dart';
 import 'core/services/background_service.dart';
+import 'features/auth/screens/login_screen.dart';
 import 'features/debug/screens/debug_screen.dart';
 import 'features/home/screens/home_screen.dart';
 
@@ -27,13 +29,24 @@ void main() async {
   runApp(
     ProviderScope(
       overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
-      child: const AgentShellApp(),
+      child: AgentShellApp(prefs: prefs),
     ),
   );
 }
 
 class AgentShellApp extends ConsumerWidget {
-  const AgentShellApp({super.key});
+  final SharedPreferences prefs;
+  const AgentShellApp({super.key, required this.prefs});
+
+  Widget _getStartScreen() {
+    if (kIsWeb) {
+      final storedToken = prefs.getString(AppConfig.keyWebAuthToken);
+      if (storedToken == null || storedToken.isEmpty) {
+        return const LoginScreen();
+      }
+    }
+    return const HomeScreen(showDebug: true);
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -43,7 +56,7 @@ class AgentShellApp extends ConsumerWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.dark,
-      home: const HomeScreen(showDebug: true),
+      home: _getStartScreen(),
     );
   }
 }

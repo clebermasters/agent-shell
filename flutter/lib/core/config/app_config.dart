@@ -42,6 +42,7 @@ class AppConfig {
   static const String keyVoiceAutoEnter = 'voice_auto_enter';
   static const String keyShowThinking = 'show_thinking';
   static const String keyShowToolCalls = 'show_tool_calls';
+  static const String keyWebAuthToken = 'web_auth_token';
 
   // Build-time defaults
   static String get defaultServerList => BuildConfig.defaultServerList;

@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/config/app_config.dart';
+import '../../../core/providers.dart';
 import '../../../data/models/tmux_session.dart';
 import '../../../data/models/acp_session.dart';
 import '../../../data/services/websocket_service.dart';
@@ -7,18 +10,28 @@ import '../../hosts/providers/hosts_provider.dart';
 
 final sharedWebSocketServiceProvider = Provider<WebSocketService>((ref) {
   final service = WebSocketService();
+  final prefs = ref.read(sharedPreferencesProvider);
+  final runtimeToken = kIsWeb
+      ? (prefs.getString(AppConfig.keyWebAuthToken) ?? '')
+      : '';
 
   // Listen to host changes and reconnect when needed
   ref.listen<HostsState>(hostsProvider, (previous, next) {
     if (next.selectedHost != null && !service.isConnected) {
-      service.connect('${next.selectedHost!.wsUrl}/ws');
+      service.connect(
+        '${next.selectedHost!.wsUrl}/ws',
+        runtimeToken: runtimeToken,
+      );
     }
   });
 
   // Initial connection if host already selected
   final hostsState = ref.watch(hostsProvider);
   if (hostsState.selectedHost != null) {
-    service.connect('${hostsState.selectedHost!.wsUrl}/ws');
+    service.connect(
+      '${hostsState.selectedHost!.wsUrl}/ws',
+      runtimeToken: runtimeToken,
+    );
   }
 
   ref.onDispose(() => service.dispose());

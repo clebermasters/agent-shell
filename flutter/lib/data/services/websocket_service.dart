@@ -35,7 +35,7 @@ class WebSocketService {
     _logController.add('[$timestamp] $message');
   }
 
-  Future<void> connect(String url) async {
+  Future<void> connect(String url, {String runtimeToken = ''}) async {
     // On web (HTTPS), upgrade ws:// to wss:// to avoid mixed content errors
     if (kIsWeb && url.startsWith('ws://')) {
       url = 'wss://${url.substring(5)}';
@@ -44,9 +44,13 @@ class WebSocketService {
     url = url.replaceFirst(RegExp(r':443(/|$)'), r'$1');
 
     // Append auth token as query parameter (works on all platforms including web)
-    if (BuildConfig.authToken.isNotEmpty) {
+    // BuildConfig.authToken takes priority; fall back to runtimeToken (web login flow)
+    final effectiveToken = BuildConfig.authToken.isNotEmpty
+        ? BuildConfig.authToken
+        : runtimeToken;
+    if (effectiveToken.isNotEmpty) {
       final separator = url.contains('?') ? '&' : '?';
-      url = '$url${separator}token=${Uri.encodeComponent(BuildConfig.authToken)}';
+      url = '$url${separator}token=${Uri.encodeComponent(effectiveToken)}';
     }
 
     _currentUrl = url;

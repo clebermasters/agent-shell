@@ -66,7 +66,7 @@ Subsystems:
 
 | # | Severity | Description | File |
 |---|----------|-------------|------|
-| A1 | 🟠 High | `websocket/mod.rs` is 2,850 lines — monolithic God file handling 60+ message types, PTY I/O, bootstrapping, broadcasting all in one place | `websocket/mod.rs` |
+| A1 | ~~🟠 High~~ | ~~`websocket/mod.rs` is 2,850 lines — monolithic God file handling 60+ message types, PTY I/O, bootstrapping, broadcasting all in one place~~ — **FIXED: Split into 10 domain modules. `mod.rs` reduced from 2,840 to 310 lines (89% reduction). Modules: `types.rs`, `client_manager.rs`, `terminal_cmds.rs`, `session_cmds.rs`, `chat_cmds.rs`, `acp_cmds.rs`, `cron_cmds.rs`, `dotfiles_cmds.rs`, `system_cmds.rs`.** | `websocket/` |
 | A2 | 🟠 High | No tests anywhere in backend-rust | — |
 | A3 | 🟠 High | No input validation: session names, window indices, file paths accepted as-is from client | `websocket/mod.rs` |
 | A4 | 🟡 Medium | No rate limiting per client — spam possible | `auth.rs` / routes |
@@ -193,7 +193,7 @@ chat/providers/
 | F13 | Remove hardcoded 300ms/500ms delays; use proper async coordination | ⬜ TODO |
 | F14 | Make terminal size responsive (read actual widget dimensions before attach) | ⬜ TODO |
 | F15 | Persist cron jobs and dotfile history to SQLite | ⬜ TODO |
-| F16 | Split `websocket/mod.rs` into domain modules | ⬜ TODO |
+| F16 | Split `websocket/mod.rs` into domain modules | ✅ DONE |
 | F17 | Split `chat_provider.dart` into focused providers | ⬜ TODO |
 | F18 | Remove unused packages: `dio`, `hive`, `hive_flutter` | ⬜ TODO |
 | F19 | Remove dead code: `session_repository.dart`, `HostSelectionScreen` | ⬜ TODO |

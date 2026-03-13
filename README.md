@@ -12,16 +12,19 @@
 
 AgentShell is a **high-performance, Rust-powered terminal session manager** that gives you complete control over your development agents—anywhere, anytime.
 
-Built with Rust for maximum speed and reliability, AgentShell lets you manage TMUX sessions and AI-powered development workflows from your Android device or web browser. Whether you're monitoring autonomous coding agents, controlling remote development sessions via OpenCode, or simply need mobile access to your terminal workflows, AgentShell delivers a seamless, real-time experience.
+Built with Rust for maximum speed and reliability, AgentShell lets you manage TMUX sessions and AI-powered development workflows from your Android device or web browser. Whether you're monitoring autonomous coding agents, controlling remote development sessions via Claude Code or OpenCode, or simply need mobile access to your terminal workflows, AgentShell delivers a seamless, real-time experience.
 
 **Control your AI agents. Control your development. From anywhere.**
 
-> 🚀 **Now with ACP (Agent Control Protocol) support for OpenCode!** - Control AI-powered development sessions directly from your devices.
+> 🚀 **Remote Claude Code**: Run Claude Code in a TMUX session and control it remotely from your phone or browser — send prompts, view output, and supervise your AI coding agent in real-time.
+
+> 🚀 **OpenCode via ACP + TMUX**: Full OpenCode support — either through the native ACP (Agent Control Protocol) integration for structured AI sessions, or by running OpenCode directly in a TMUX session for classic terminal control.
 
 ## Features
 
+- **Remote Claude Code**: Run Claude Code in a TMUX session and control it from anywhere — send input, read output, and supervise your AI coding agent remotely
+- **Remote OpenCode**: Control OpenCode via native ACP integration or directly through a TMUX session
 - **Agent Control**: Monitor and control AI coding agents running in TMUX sessions
-- **Remote OpenCode Sessions**: Start, monitor, and interact with OpenCode AI development sessions remotely
 - **TMUX Session Management**: Create, attach, rename, and kill TMUX sessions
 - **Window Management**: Create, switch, rename, and kill windows within sessions
 - **Real-time Communication**: WebSocket-based architecture for live terminal I/O
@@ -35,13 +38,29 @@ Built with Rust for maximum speed and reliability, AgentShell lets you manage TM
 - **Network Accessible**: Access via local network or Tailscale IPs from anywhere
 - **Session Isolation**: Alternative session manager to avoid attachment conflicts
 
-## ACP with OpenCode
+## AI Agent Integrations
 
-AgentShell supports **ACP (Agent Control Protocol)** - enabling seamless integration with [OpenCode](https://opencode.ai), a powerful AI coding assistant. This feature brings AI-driven development directly to your terminal sessions.
+### Claude Code (via TMUX)
 
-### What is ACP?
+AgentShell lets you run **Claude Code** inside a TMUX session and control it remotely from your Android device or web browser. No special protocol needed — just launch Claude Code in a session and attach from anywhere:
 
-ACP is a protocol that allows AI agents to interact with your development environment through AgentShell. When you connect OpenCode to AgentShell, you get:
+```bash
+# On your server: start Claude Code in a named TMUX session
+tmux new-session -s claude -d "claude"
+```
+
+Then open AgentShell, attach to the `claude` session, and you have full keyboard control — send prompts, approve actions, view streaming output, all from your phone or browser.
+
+### OpenCode (ACP + TMUX)
+
+AgentShell supports OpenCode in two ways:
+
+- **Native ACP integration** (recommended): Structured AI sessions with real-time streaming, tool call visibility, and permission control — managed through the Chat interface.
+- **TMUX mode**: Run `opencode` directly in a TMUX session for classic terminal interaction, same as any other CLI tool.
+
+#### What is ACP?
+
+ACP (Agent Control Protocol) is a protocol that allows AI agents to interact with your development environment through AgentShell. When you connect OpenCode to AgentShell via ACP, you get:
 
 - **AI-Powered Sessions**: Create and control development sessions powered by AI agents
 - **Real-time Interaction**: Watch as the AI agent executes commands, makes edits, and interacts with your codebase
@@ -49,7 +68,7 @@ ACP is a protocol that allows AI agents to interact with your development enviro
 - **Permission Control**: Approve or deny tool execution requests from AI agents
 - **Session Persistence**: Resume AI-powered sessions anytime
 
-### Getting Started with OpenCode
+#### Getting Started with ACP
 
 1. **Start AgentShell backend**:
    ```bash
@@ -66,7 +85,7 @@ ACP is a protocol that allows AI agents to interact with your development enviro
 
 4. **Watch the AI in action**: OpenCode will connect and begin interacting with your development environment in real-time!
 
-### ACP Features
+#### ACP Features
 
 - **Session Management**: Create, resume, fork, and list ACP sessions
 - **Message Streaming**: Real-time streaming of AI thoughts and responses
@@ -74,7 +93,7 @@ ACP is a protocol that allows AI agents to interact with your development enviro
 - **Permission System**: Review and approve/deny tool execution requests
 - **Event History**: All session events are persisted for later review
 
-### Architecture
+#### Architecture
 
 ```
 ┌─────────────┐    WebSocket    ┌─────────────┐    ACP    ┌─────────────┐

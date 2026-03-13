@@ -233,6 +233,7 @@ impl CronManager {
                                 // Active job
                                 lines[i]
                             } else {
+                                i += 1;
                                 continue;
                             };
 

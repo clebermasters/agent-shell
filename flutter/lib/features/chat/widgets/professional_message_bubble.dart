@@ -52,7 +52,6 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _bufferedPositionSubscription;
 
-  String? _playingBlockId;
   String? _audioErrorBlockId;
   Duration _audioPosition = Duration.zero;
   Duration _audioBufferedPosition = Duration.zero;
@@ -558,7 +557,8 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
     final audioUrl = widget.baseUrl != null && block.id != null
         ? '${widget.baseUrl}/api/chat/files/${block.id}'
         : null;
-    final isActiveBlock = blockId != null && _playingBlockId == blockId;
+    final playingBlockId = ref.watch(activeAudioBlockIdProvider);
+    final isActiveBlock = blockId != null && playingBlockId == blockId;
     final fallbackDuration = _durationFromSeconds(block.durationSeconds);
     final effectiveDuration = isActiveBlock
         ? (_audioDuration ?? fallbackDuration)
@@ -608,7 +608,7 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
       final player = ref.read(globalAudioPlayerProvider);
       if (_isAudioLoading) return;
 
-      if (_playingBlockId != blockId) {
+      if (ref.read(activeAudioBlockIdProvider) != blockId) {
         await _loadAudioSource(blockId, url);
         await player.play();
         return;
@@ -672,6 +672,8 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
       try {
         duration = await player.setUrl(audioUrl);
       } catch (streamError) {
+        // On web there's no local file system fallback — rethrow
+        if (kIsWeb) rethrow;
         debugPrint(
           'Streaming audio failed, trying local fallback: $streamError',
         );
@@ -681,7 +683,7 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
 
       if (!mounted) return;
       setState(() {
-        _playingBlockId = blockId;
+        ref.read(activeAudioBlockIdProvider.notifier).state = blockId;
         _audioDuration = duration ?? player.duration;
         _audioErrorMessage = null;
         _audioErrorBlockId = null;
@@ -710,7 +712,7 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
   }
 
   Future<void> _skipAudioBy(Duration delta) async {
-    if (_playingBlockId == null || _audioDuration == null) return;
+    if (ref.read(activeAudioBlockIdProvider) == null || _audioDuration == null) return;
     await _seekAudio(_audioPosition + delta);
   }
 

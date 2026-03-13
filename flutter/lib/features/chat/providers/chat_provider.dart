@@ -1167,10 +1167,10 @@ final filteredChatMessagesProvider = Provider<List<ChatMessage>>((ref) {
 // Global audio player - never disposed, persists across scrolls
 final globalAudioPlayerProvider = Provider<AudioPlayer>((ref) {
   final player = AudioPlayer();
-  ref.onDispose(() {
-    // Note: We don't dispose the player here because it's truly global
-    // and may be in use even if the provider is being garbage collected.
-    // Player will be disposed when the app closes.
-  });
+  ref.onDispose(() {});
   return player;
 });
+
+// Tracks which audio block is currently loaded in the global player.
+// Survives widget disposal/recreation during ListView scrolling.
+final activeAudioBlockIdProvider = StateProvider<String?>((ref) => null);

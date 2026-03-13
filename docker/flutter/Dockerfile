@@ -13,9 +13,19 @@ ARG AUTH_TOKEN=""
 WORKDIR /app
 COPY flutter/ ./
 
-# Copy debug keystore to default location
+# Set up debug keystore — use the committed one if present, otherwise generate a fresh one.
+# debug.keystore is gitignored so CI always generates one; local builds may copy an existing one.
 RUN mkdir -p /root/.android && \
-    cp /app/android/debug.keystore /root/.android/debug.keystore
+    if [ -f /app/android/debug.keystore ]; then \
+      cp /app/android/debug.keystore /root/.android/debug.keystore; \
+    else \
+      keytool -genkeypair -v \
+        -keystore /root/.android/debug.keystore \
+        -alias androiddebugkey \
+        -keyalg RSA -keysize 2048 -validity 10000 \
+        -storepass android -keypass android \
+        -dname "CN=Android Debug,O=Android,C=US"; \
+    fi
 
 # Generate build config (always, to embed BUILD_TIMESTAMP and bust the SW cache hash)
 RUN echo "Generating build config..."; \

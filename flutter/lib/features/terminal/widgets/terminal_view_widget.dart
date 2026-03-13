@@ -1,6 +1,6 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'dart:io' show Platform;
 import 'dart:ui';
 import 'package:xterm/xterm.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -45,7 +45,6 @@ class TerminalViewWidget extends StatefulWidget {
 class _TerminalViewWidgetState extends State<TerminalViewWidget>
     with WidgetsBindingObserver {
   late double _fontSize;
-  bool _initialized = false;
   int _lastCols = 0;
   int _lastRows = 0;
 
@@ -87,10 +86,19 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     WidgetsBinding.instance.addObserver(this);
     _wrapperFocusNode = FocusNode(debugLabel: 'TerminalWrapper');
     _inputController = TextEditingController();
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!kIsWeb) {
       VolumeKeyBoard.instance.addListener(_handleVolumeKey);
     }
     widget.terminal.addListener(_onTerminalChange);
+    // Use xterm's own resize callback (based on actual font metrics)
+    // to notify the backend of the correct terminal dimensions.
+    widget.terminal.onResize = (cols, rows, pixelWidth, pixelHeight) {
+      if (cols != _lastCols || rows != _lastRows) {
+        _lastCols = cols;
+        _lastRows = rows;
+        widget.onResize(cols, rows);
+      }
+    };
     _fontSize =
         widget.prefs.getDouble(AppConfig.keyTerminalFontSize) ??
         AppConfig.terminalFontSize;
@@ -109,7 +117,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   void dispose() {
     _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!kIsWeb) {
       VolumeKeyBoard.instance.removeListener();
     }
     widget.terminal.removeListener(_onTerminalChange);
@@ -144,18 +152,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
 
   @override
   void didChangeMetrics() {
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) {
-        _forceResizeCheck();
-      }
-    });
-  }
-
-  void _forceResizeCheck() {
-    final renderBox = context.findRenderObject() as RenderBox?;
-    if (renderBox != null && renderBox.hasSize) {
-      _updateTerminalSize(renderBox.size);
-    }
+    // xterm's autoResize handles recalculating dimensions on layout changes.
+    // The onResize callback will fire if cols/rows change.
   }
 
   void _handleVolumeKey(VolumeKey event) {
@@ -429,42 +427,18 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   }
 
   void _sendResize() {
-    if (_lastCols > 0 && _lastRows > 0) {
-      widget.terminal.resize(_lastCols, _lastRows);
-      widget.onResize(_lastCols, _lastRows);
-    }
+    // After font size change, xterm will relayout and fire onResize
+    // with the correct new dimensions automatically.
+    // We just need to trigger a rebuild so TerminalView picks up the new fontSize.
+    setState(() {});
   }
 
-  void _updateTerminalSize(Size size) {
-    if (size.width <= 0 || size.height <= 0) return;
-
-    final charWidth = _fontSize * 0.6;
-    final charHeight = _fontSize * 1.2;
-
-    final cols = (size.width / charWidth).floor().clamp(10, 200);
-    final rows = (size.height / charHeight).floor().clamp(5, 100);
-
-    if (cols != _lastCols || rows != _lastRows) {
-      _lastCols = cols;
-      _lastRows = rows;
-      widget.terminal.resize(cols, rows);
-      widget.onResize(cols, rows);
-    }
-  }
+  // Terminal sizing is handled by xterm's autoResize + Terminal.onResize callback.
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final size = Size(constraints.maxWidth, constraints.maxHeight);
-
-        if (!_initialized) {
-          _initialized = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _updateTerminalSize(size);
-          });
-        }
-
         return Focus(
           focusNode: _wrapperFocusNode,
           onKey: (node, event) {

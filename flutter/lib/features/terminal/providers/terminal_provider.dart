@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
 import 'package:flutter_background_service/flutter_background_service.dart'
@@ -121,7 +121,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     );
 
     // Start background service to keep socket alive (Android/iOS only)
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!kIsWeb) {
       final service = FlutterBackgroundService();
       var isRunning = await service.isRunning();
       if (!isRunning) {
@@ -143,7 +143,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   void disconnect() {
     _activeSessionName = null;
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!kIsWeb) {
       FlutterBackgroundService().invoke('stopService');
     }
   }

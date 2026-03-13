@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:xterm/xterm.dart';
 import 'websocket_service.dart';
 
@@ -119,11 +118,9 @@ class TerminalService {
   }
 
   void resizeTerminal(String sessionName, int cols, int rows) {
-    final terminal = _terminals[sessionName];
-    if (terminal != null) {
-      terminal.resize(cols, rows);
-      _wsService.resizeTerminal(sessionName, cols, rows);
-    }
+    // Just notify the backend — the Terminal object is already resized
+    // by xterm's autoResize or the caller.
+    _wsService.resizeTerminal(sessionName, cols, rows);
   }
 
   void writeToTerminal(String sessionName, String data) {

@@ -310,7 +310,7 @@ cp .env.example .env   # if available, or create manually
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `AUTH_TOKEN` | Shared secret that protects all API and WebSocket endpoints. When set, every request must include this token or it will be rejected with HTTP 401. If empty or not set, the backend remains fully open (no authentication). | Recommended |
+| `AUTH_TOKEN` | Shared secret that protects all API and WebSocket endpoints. When set, every request must include this token or it will be rejected with HTTP 401. On **web**, this token is also the password entered on the login page — it is never baked into the JS bundle. If empty or not set, the backend remains fully open (no authentication). | Recommended |
 | `SERVER_LIST` | Comma-separated list of backend servers for the Flutter app. Format: `host:port,LABEL\|host:port,LABEL`. Example: `192.168.0.10:4010,HOME\|myserver.com:443,CLOUD` | Yes |
 | `OPENAI_API_KEY` | OpenAI API key used by AI-powered features. | Optional |
 | `SHOW_THINKING` | Show AI thinking/reasoning in chat UI (`true`/`false`). Default: `true`. | Optional |
@@ -369,6 +369,56 @@ The token can be provided via:
 - **Header**: `X-Auth-Token: your-token` (alternative for HTTP API calls)
 
 Static files (the web frontend) are served without authentication.
+
+### Web Login Page
+
+When accessing AgentShell from a **browser**, the Flutter web app always shows a login screen before granting access — regardless of how the app was built.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  Browser (Web)                      │
+│                                                     │
+│  Open URL                                           │
+│      │                                              │
+│      ▼                                              │
+│  web_auth_token in localStorage?                    │
+│      │                                              │
+│      ├── No ──► LoginScreen                         │
+│      │              │                               │
+│      │          Enter password                      │
+│      │              │                               │
+│      │          Validate: GET /api/clients?token=   │
+│      │              │                               │
+│      │          200 OK ──► save to localStorage     │
+│      │              │              │                │
+│      │           401/err       HomeScreen           │
+│      │              │                               │
+│      │          Show error                          │
+│      │                                              │
+│      └── Yes ──► HomeScreen (skip login)            │
+└─────────────────────────────────────────────────────┘
+```
+
+**The password is your `AUTH_TOKEN`.** The web app validates the entered password against the backend's `/api/clients` endpoint. On success, the token is stored in the browser's `localStorage` so the user does not need to log in again on subsequent visits.
+
+**To configure:**
+
+1. Set `AUTH_TOKEN` in your `.env` file:
+   ```env
+   AUTH_TOKEN=your-strong-secret-here
+   ```
+2. Rebuild and redeploy the web app:
+   ```bash
+   cd flutter && ./build.sh web
+   ./scripts/deploy-web.sh
+   ```
+3. Open the web app in your browser — you will be prompted for the password.
+
+> **Note:** Unlike Android/Linux builds (where the token is embedded in the binary), the web build intentionally **does not** bake `AUTH_TOKEN` into the compiled JavaScript. This prevents the secret from being visible in browser developer tools or the page source. Instead, the user enters it at login time and the browser stores it locally.
+
+**Session persistence:** The token is kept in `localStorage` indefinitely. To end a session, use the **Log Out** button in **Settings** — this clears the stored token and returns to the login screen.
+
+**Android and Linux** apps bypass the login screen entirely and connect directly using the token embedded at build time.
 
 ### Backwards compatibility
 

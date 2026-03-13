@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/app_config.dart';
-import '../../../core/providers.dart';
 import '../../../core/config/build_config.dart';
+import '../../../core/providers.dart';
+import '../../auth/screens/login_screen.dart';
 import '../../chat/providers/chat_provider.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -316,6 +318,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
           ),
+          if (kIsWeb) ...[
+            const SizedBox(height: 24),
+            _buildSectionHeader('Session'),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.logout),
+                label: const Text('Log Out'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                  side: const BorderSide(color: Colors.red),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: () async {
+                  final prefs = ref.read(sharedPreferencesProvider);
+                  await prefs.remove(AppConfig.keyWebAuthToken);
+                  if (context.mounted) {
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(
+                        builder: (_) => const LoginScreen(),
+                      ),
+                      (_) => false,
+                    );
+                  }
+                },
+              ),
+            ),
+          ],
         ],
       ),
     );

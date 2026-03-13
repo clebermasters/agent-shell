@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../../../data/models/chat_message.dart';
@@ -1161,4 +1162,15 @@ final filteredChatMessagesProvider = Provider<List<ChatMessage>>((ref) {
       })
       .whereType<ChatMessage>()
       .toList();
+});
+
+// Global audio player - never disposed, persists across scrolls
+final globalAudioPlayerProvider = Provider<AudioPlayer>((ref) {
+  final player = AudioPlayer();
+  ref.onDispose(() {
+    // Note: We don't dispose the player here because it's truly global
+    // and may be in use even if the provider is being garbage collected.
+    // Player will be disposed when the app closes.
+  });
+  return player;
 });

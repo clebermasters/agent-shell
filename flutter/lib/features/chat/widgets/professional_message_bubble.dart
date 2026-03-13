@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
@@ -18,9 +19,10 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../data/models/chat_message.dart';
 import '../../../core/utils/gal_helper.dart';
 import '../../../core/config/build_config.dart';
+import '../providers/chat_provider.dart';
 import 'chat_audio_tile.dart';
 
-class ProfessionalMessageBubble extends StatefulWidget {
+class ProfessionalMessageBubble extends ConsumerStatefulWidget {
   final ChatMessage message;
   final bool showTimestamp;
   final bool isDarkMode;
@@ -35,16 +37,15 @@ class ProfessionalMessageBubble extends StatefulWidget {
   });
 
   @override
-  State<ProfessionalMessageBubble> createState() =>
+  ConsumerState<ProfessionalMessageBubble> createState() =>
       _ProfessionalMessageBubbleState();
 }
 
-class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
+class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageBubble>
     with SingleTickerProviderStateMixin {
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
-  final AudioPlayer _audioPlayer = AudioPlayer();
   final Map<String, String> _audioCachePaths = {};
   StreamSubscription<PlayerState>? _playerStateSubscription;
   StreamSubscription<Duration?>? _durationSubscription;
@@ -82,7 +83,10 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         );
     _animationController.forward();
 
-    _playerStateSubscription = _audioPlayer.playerStateStream.listen((state) {
+    // Subscribe to global audio player streams
+    final player = ref.read(globalAudioPlayerProvider);
+
+    _playerStateSubscription = player.playerStateStream.listen((state) {
       if (!mounted) return;
       setState(() {
         _isAudioPlaying = state.playing;
@@ -100,21 +104,21 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
       });
     });
 
-    _durationSubscription = _audioPlayer.durationStream.listen((duration) {
+    _durationSubscription = player.durationStream.listen((duration) {
       if (!mounted || duration == null) return;
       setState(() {
         _audioDuration = duration;
       });
     });
 
-    _positionSubscription = _audioPlayer.positionStream.listen((position) {
+    _positionSubscription = player.positionStream.listen((position) {
       if (!mounted) return;
       setState(() {
         _audioPosition = position;
       });
     });
 
-    _bufferedPositionSubscription = _audioPlayer.bufferedPositionStream.listen((
+    _bufferedPositionSubscription = player.bufferedPositionStream.listen((
       buffered,
     ) {
       if (!mounted) return;
@@ -131,7 +135,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
     _durationSubscription?.cancel();
     _positionSubscription?.cancel();
     _bufferedPositionSubscription?.cancel();
-    _audioPlayer.dispose();
+    // Don't dispose the global audio player - it's shared and may be used elsewhere
     super.dispose();
   }
 
@@ -601,21 +605,22 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
   Future<void> _onAudioButtonPressed(String blockId, String url) async {
     try {
+      final player = ref.read(globalAudioPlayerProvider);
       if (_isAudioLoading) return;
 
       if (_playingBlockId != blockId) {
         await _loadAudioSource(blockId, url);
-        await _audioPlayer.play();
+        await player.play();
         return;
       }
 
       if (_isAudioPlaying) {
-        await _audioPlayer.pause();
+        await player.pause();
         return;
       }
 
       if (_isAudioCompleted) {
-        await _audioPlayer.seek(Duration.zero);
+        await player.seek(Duration.zero);
         if (mounted) {
           setState(() {
             _audioPosition = Duration.zero;
@@ -624,7 +629,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         }
       }
 
-      await _audioPlayer.play();
+      await player.play();
     } catch (e) {
       debugPrint('Audio error: $e');
       if (mounted) {
@@ -640,6 +645,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   }
 
   Future<void> _loadAudioSource(String blockId, String url) async {
+    final player = ref.read(globalAudioPlayerProvider);
     if (mounted) {
       setState(() {
         _isAudioLoading = true;
@@ -664,19 +670,19 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
       debugPrint('Audio URL: $audioUrl');
       try {
-        duration = await _audioPlayer.setUrl(audioUrl);
+        duration = await player.setUrl(audioUrl);
       } catch (streamError) {
         debugPrint(
           'Streaming audio failed, trying local fallback: $streamError',
         );
         final localPath = await _downloadAudioToTemp(blockId, audioUrl);
-        duration = await _audioPlayer.setFilePath(localPath);
+        duration = await player.setFilePath(localPath);
       }
 
       if (!mounted) return;
       setState(() {
         _playingBlockId = blockId;
-        _audioDuration = duration ?? _audioPlayer.duration;
+        _audioDuration = duration ?? player.duration;
         _audioErrorMessage = null;
         _audioErrorBlockId = null;
       });
@@ -690,9 +696,10 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
   }
 
   Future<void> _seekAudio(Duration position) async {
+    final player = ref.read(globalAudioPlayerProvider);
     final totalDuration = _audioDuration;
     final safePosition = _clampDuration(position, totalDuration);
-    await _audioPlayer.seek(safePosition);
+    await player.seek(safePosition);
     if (!mounted) return;
     setState(() {
       _audioPosition = safePosition;

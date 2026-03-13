@@ -545,6 +545,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           )[index];
                           final hostsState = ref.watch(hostsProvider);
                           return ProfessionalMessageBubble(
+                            key: ValueKey(message.id),
                             message: message,
                             showTimestamp: true,
                             isDarkMode: isDarkMode,

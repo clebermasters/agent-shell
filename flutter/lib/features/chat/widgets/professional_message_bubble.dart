@@ -17,6 +17,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../data/models/chat_message.dart';
 import '../../../core/utils/gal_helper.dart';
+import '../../../core/config/build_config.dart';
 import 'chat_audio_tile.dart';
 
 class ProfessionalMessageBubble extends StatefulWidget {
@@ -823,8 +824,9 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
         final separator = url.contains('?') ? '&' : '?';
         url = '$url${separator}token=${Uri.encodeComponent(BuildConfig.authToken)}';
       }
-      if (await canLaunchUrl(Uri.parse(url))) {
-        await launchUrl(url);
+      final uri = Uri.parse(url);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
       }
       return;
     }

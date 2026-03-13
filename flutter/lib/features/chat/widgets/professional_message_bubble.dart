@@ -324,7 +324,7 @@ class _ProfessionalMessageBubbleState extends State<ProfessionalMessageBubble>
 
     return MarkdownBody(
       data: text,
-      selectable: false,
+      selectable: true,
       onTapLink: (text, href, title) async {
         if (href != null) {
           final uri = Uri.tryParse(href);

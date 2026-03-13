@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
@@ -665,29 +666,40 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             : const Color(0xFFEDF2F7),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: TextField(
-                        controller: _controller,
-                        maxLines: 4,
-                        minLines: 1,
-                        textInputAction: TextInputAction.newline,
-                        keyboardType: TextInputType.multiline,
-                        decoration: InputDecoration(
-                          hintText: isRecording ? 'Recording...' : 'Message',
-                          hintStyle: TextStyle(
-                            color: isDarkMode
-                                ? Colors.grey.shade500
-                                : const Color(0xFFA0AEC0),
-                            fontSize: 16,
+                      child: RawKeyboardListener(
+                        focusNode: FocusNode(),
+                        onKey: (event) {
+                          // Control+Enter sends the message
+                          if (event.isKeyPressed(LogicalKeyboardKey.enter) &&
+                              event.isControlPressed) {
+                            _sendMessage();
+                          }
+                        },
+                        child: TextField(
+                          controller: _controller,
+                          maxLines: 4,
+                          minLines: 1,
+                          textInputAction: TextInputAction.newline,
+                          keyboardType: TextInputType.multiline,
+                          decoration: InputDecoration(
+                            hintText: isRecording
+                                ? 'Recording...'
+                                : 'Message (Ctrl+Enter to send)',
+                            hintStyle: TextStyle(
+                              color: isDarkMode
+                                  ? Colors.grey.shade500
+                                  : const Color(0xFFA0AEC0),
+                              fontSize: 16,
+                            ),
+                            border: InputBorder.none,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 10,
+                            ),
                           ),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
-                          ),
+                          style: TextStyle(fontSize: 16, color: textPrimary),
+                          onChanged: (_) => setState(() {}),
                         ),
-                        style: TextStyle(fontSize: 16, color: textPrimary),
-                        onChanged: (_) => setState(() {}),
-                        onSubmitted: (_) => _sendMessage(),
                       ),
                     ),
                   ),

@@ -348,6 +348,10 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
                     .args(&["send-keys", "-t", &target, "-l", text])
                     .output()
                     .await;
+                // Small delay so the TUI (e.g. OpenCode) finishes processing the
+                // typed characters before Enter arrives.  Without this, Enter can
+                // be consumed by an in-progress redraw and the message is dropped.
+                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
                 let send_enter = tokio::process::Command::new("tmux")
                     .args(&["send-keys", "-t", &target, "Enter"])
                     .output()
@@ -355,18 +359,17 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
 
                 match (send_text, send_enter) {
                     (Ok(t), Ok(e)) if t.status.success() && e.status.success() => {
-                        debug!("Sent text+Enter to tmux target {}: {:?}", target, text);
+                        info!("InputViaTmux: OK sent {:?} to target {}", text, target);
                     }
-                    (Ok(t), _) if !t.status.success() => {
-                        error!("tmux send-keys (text) returned non-zero exit for {}: {}", target, t.status);
-                    }
-                    (_, Ok(e)) if !e.status.success() => {
-                        error!("tmux send-keys (Enter) returned non-zero exit for {}: {}", target, e.status);
+                    (Ok(t), Ok(e)) => {
+                        error!("InputViaTmux: tmux send-keys FAILED for {} — text_exit={}, enter_exit={}, text_stderr={:?}, enter_stderr={:?}",
+                            target, t.status, e.status,
+                            String::from_utf8_lossy(&t.stderr),
+                            String::from_utf8_lossy(&e.stderr));
                     }
                     (Err(e), _) | (_, Err(e)) => {
-                        error!("Failed to send keys via tmux to {}: {}", target, e);
+                        error!("InputViaTmux: failed to spawn tmux for {}: {}", target, e);
                     }
-                    _ => {}
                 }
             } else {
                 warn!("No session/window available. Message: {:?}, session: {:?}, window: {:?}", data, session, idx);
@@ -2454,13 +2457,37 @@ async fn attach_to_session(
     // Small delay to ensure cleanup is complete
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-    // Create new PTY session
-    debug!("Creating new PTY session for: {}", session_name);
+    // Create new PTY session.
+    // IMPORTANT: use the *current* tmux window dimensions (or whatever the caller
+    // requested, whichever is larger) so that attaching never shrinks the window.
+    // Shrinking causes a SIGWINCH to running TUIs (e.g. OpenCode) and a brief
+    // redraw window during which 'tmux send-keys Enter' can be consumed by the
+    // resize handler rather than the message-submission handler.
+    let (effective_cols, effective_rows) = {
+        let size_out = tokio::process::Command::new("tmux")
+            .args(&["display-message", "-t", session_name, "-p", "#{window_width} #{window_height}"])
+            .output()
+            .await;
+        if let Ok(out) = size_out {
+            let s = String::from_utf8_lossy(&out.stdout);
+            let parts: Vec<u16> = s.split_whitespace()
+                .filter_map(|x| x.parse().ok())
+                .collect();
+            if parts.len() == 2 {
+                (parts[0].max(cols), parts[1].max(rows))
+            } else {
+                (cols, rows)
+            }
+        } else {
+            (cols, rows)
+        }
+    };
+    info!("PTY size: requested {}x{}, effective {}x{} (window size)", cols, rows, effective_cols, effective_rows);
 
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
-        rows,
-        cols,
+        rows: effective_rows,
+        cols: effective_cols,
         pixel_width: 0,
         pixel_height: 0,
     })?;

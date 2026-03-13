@@ -51,14 +51,16 @@ Subsystems:
 |---|----------|-------------|------|------|
 | B1 | ~~🔴 Critical~~ | ~~`panic!()` in `claude_parser`~~ — **FALSE: these are inside `#[cfg(test)]`, not production code** | `chat_log/claude_parser.rs` | — |
 | B2 | ~~🔴 Critical~~ | ~~`panic!()` in `codex_parser`~~ — **FALSE: test-only** | `chat_log/codex_parser.rs` | — |
-| B3 | 🔴 Critical | ENTER key not sent: `";"` passed as literal arg to `send-keys`, not tmux command separator | `websocket/mod.rs` | ~340, ~1513 |
-| B4 | 🟠 High | Duplicate unreachable match arms for ACP handlers (lines ~2259–2298) shadow working implementations | `websocket/mod.rs` | ~2259 |
+| B3 | ~~🔴 Critical~~ | ~~ENTER key not sent~~ — **FIXED: see B3a + B3b below** | `websocket/mod.rs` | — |
+| B3a | ~~🔴 Critical~~ | ~~`WatchChatLog` (Flutter `watchChatLog`) called `attachSession(cols:80, rows:24)` on every invocation, shrinking the tmux window from its real size (e.g. 211×56) to 80×23, sending SIGWINCH to OpenCode. OpenCode's redraw during transitional states (post-streaming, post-resize) consumed Enter keystrokes, silently dropping subsequent messages.~~ — **FIXED: `attach_to_session()` now queries the actual tmux window dimensions and uses `max(requested, actual)` for the PTY size, preventing any shrink.** | `websocket/mod.rs` (`attach_to_session`) | — |
+| B3b | ~~🟠 High~~ | ~~Enter keystroke arriving while TUI is transitioning (post-streaming, post-SIGWINCH) was consumed by redraw handler instead of message-submission handler.~~ — **FIXED: Added 80 ms delay between text send-keys and Enter send-keys in `InputViaTmux` handler, giving the TUI time to finish processing typed characters before Enter arrives.** | `websocket/mod.rs` (`InputViaTmux`) | — |
+| B4 | ~~🟠 High~~ | ~~Duplicate unreachable match arms for ACP handlers (lines ~2259–2298) shadow working implementations~~ — **FIXED** | `websocket/mod.rs` | — |
 | B5 | ~~🟠 High~~ | ~~`WatchChatLog` race~~ — **FALSE: already aborts previous watcher at line 891** | `websocket/mod.rs` | — |
 | B6 | 🟠 High | ACP polling loop (`WatchAcpChatLog`) never exits on client disconnect — infinite goroutine leak | `websocket/mod.rs` | ~1110 |
 | B7 | 🟡 Medium | SQLite opens new connection per operation — no pooling | `chat_event_store.rs` | all methods |
 | B8 | 🟡 Medium | `capture_history_above_viewport` uses unsafe `.unwrap_or(0)` on tmux output parse | `tmux/mod.rs` | ~64 |
 | B9 | 🟡 Medium | PTY reader exits silently after 5 retries — client gets no disconnect message | `websocket/mod.rs` | ~2635 |
-| B10 | 🔵 Low | Debug `print!()` / timing measurements left in production paths | `websocket/mod.rs` | various |
+| B10 | ~~🔵 Low~~ | ~~Debug `print!()` / timing measurements left in production paths~~ — **FIXED** | `websocket/mod.rs` | — |
 
 ### Architecture Problems
 
@@ -166,6 +168,7 @@ chat/providers/
 | # | Fix | Status |
 |---|-----|--------|
 | F1 | Fix ENTER key: two separate `tmux` calls in `websocket/mod.rs`; remove `\n` from `chat_provider.dart:846` | ✅ DONE |
+| F1b | Fix Enter key drop on second+ message: `watchChatLog` was calling `attachSession(80×24)`, shrinking window → SIGWINCH → OpenCode redraw consumed Enter. Fixed in `attach_to_session()`: query real tmux window size and use `max(requested, actual)`. Also added 80 ms delay between text and Enter in `InputViaTmux` handler. | ✅ DONE |
 | F2 | Replace `panic!()` in `claude_parser.rs` and `codex_parser.rs` with error returns | N/A — these are test-only |
 | F3 | Remove duplicate unreachable ACP match arms in `websocket/mod.rs` (~2259–2298) | ✅ DONE |
 

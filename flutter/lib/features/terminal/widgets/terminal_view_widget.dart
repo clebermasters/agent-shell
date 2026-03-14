@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -47,6 +49,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   late double _fontSize;
   int _lastCols = 0;
   int _lastRows = 0;
+  Timer? _resizeDebounce;
 
   late FocusNode _wrapperFocusNode;
   late TextEditingController _inputController;
@@ -115,6 +118,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
 
   @override
   void dispose() {
+    _resizeDebounce?.cancel();
     _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     if (!kIsWeb) {
@@ -152,8 +156,18 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
 
   @override
   void didChangeMetrics() {
-    // xterm's autoResize handles recalculating dimensions on layout changes.
-    // The onResize callback will fire if cols/rows change.
+    if (!mounted) return;
+    // Debounce to avoid rapid-fire resizes during browser zoom animation.
+    // Resetting _lastCols/_lastRows ensures xterm's onResize callback always
+    // propagates to the backend even if the computed integer cols/rows are the
+    // same as before (can happen due to rounding at certain zoom levels).
+    _resizeDebounce?.cancel();
+    _resizeDebounce = Timer(const Duration(milliseconds: 150), () {
+      if (!mounted) return;
+      _lastCols = 0;
+      _lastRows = 0;
+      setState(() {});
+    });
   }
 
   void _handleVolumeKey(VolumeKey event) {
@@ -411,29 +425,21 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   }
 
   void _zoomIn() {
-    setState(() {
-      _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0);
-    });
+    // Reset last known dims BEFORE setState so that when xterm fires onResize
+    // after the rebuild (even with the same integer cols/rows due to rounding),
+    // the change guard passes and the backend is always notified.
+    _lastCols = 0;
+    _lastRows = 0;
+    setState(() => _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0));
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
-    _sendResize();
   }
 
   void _zoomOut() {
-    setState(() {
-      _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0);
-    });
+    _lastCols = 0;
+    _lastRows = 0;
+    setState(() => _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0));
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
-    _sendResize();
   }
-
-  void _sendResize() {
-    // After font size change, xterm will relayout and fire onResize
-    // with the correct new dimensions automatically.
-    // We just need to trigger a rebuild so TerminalView picks up the new fontSize.
-    setState(() {});
-  }
-
-  // Terminal sizing is handled by xterm's autoResize + Terminal.onResize callback.
 
   @override
   Widget build(BuildContext context) {

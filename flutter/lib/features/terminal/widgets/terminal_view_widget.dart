@@ -87,6 +87,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   bool _isDragging = false;
   double _dragStartPixels = 0;
 
+  /// Current font size, readable by parent widgets (e.g. selection overlay).
+  double get fontSize => _fontSize;
+
   @override
   void initState() {
     super.initState();
@@ -113,11 +116,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     _fontSize =
         widget.prefs.getDouble(AppConfig.keyTerminalFontSize) ??
         AppConfig.terminalFontSize;
-  }
-
-  @override
-  void didUpdateWidget(TerminalViewWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
   }
 
   @override
@@ -450,8 +448,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
 
   /// Debounce zoom resize: wait until the user stops pressing volume keys
   /// (500ms of inactivity) before sending ONE resize to the backend.
-  /// This prevents rapid SIGWINCH signals to tmux that interfere with
-  /// Enter key handling and cause escape sequence responses to leak.
   void _scheduleZoomResize() {
     _zoomResizeDebounce?.cancel();
     _zoomResizeDebounce = Timer(const Duration(milliseconds: 500), () {
@@ -515,9 +511,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
                   ),
                 ),
 
-                // Layer 2: TERMINAL VIEW — Positioned.fill forces tight constraints
-                // so TerminalView always fills the full available area regardless
-                // of how Stack distributes loose constraints to non-positioned children.
+                // Layer 2: TERMINAL VIEW
                 Positioned.fill(
                   child: Listener(
                     onPointerDown: (e) {
@@ -612,29 +606,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
                               child: Text(
                                 '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
                                 style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        if (widget.isSelectionMode)
-                          Positioned(
-                            top: 8,
-                            left: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.orange.withOpacity(0.8),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Text(
-                                'SELECTION MODE',
-                                style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 10,
                                   fontWeight: FontWeight.bold,

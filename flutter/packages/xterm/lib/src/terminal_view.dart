@@ -227,7 +227,7 @@ class TerminalViewState extends State<TerminalView> {
           terminal: widget.terminal,
           controller: _controller,
           offset: offset,
-          padding: MediaQuery.of(context).padding,
+          padding: widget.padding ?? EdgeInsets.zero,
           autoResize: widget.autoResize,
           textStyle: widget.textStyle,
           textScaler: widget.textScaler ?? MediaQuery.textScalerOf(context),
@@ -341,7 +341,8 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _onTapUp(TapUpDetails details) {
-    final offset = renderTerminal.getCellOffset(details.localPosition);
+    final local = renderTerminal.globalToLocal(details.globalPosition);
+    final offset = renderTerminal.getCellOffset(local);
     widget.onTapUp?.call(details, offset);
   }
 
@@ -358,12 +359,14 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _onSecondaryTapDown(TapDownDetails details) {
-    final offset = renderTerminal.getCellOffset(details.localPosition);
+    final local = renderTerminal.globalToLocal(details.globalPosition);
+    final offset = renderTerminal.getCellOffset(local);
     widget.onSecondaryTapDown?.call(details, offset);
   }
 
   void _onSecondaryTapUp(TapUpDetails details) {
-    final offset = renderTerminal.getCellOffset(details.localPosition);
+    final local = renderTerminal.globalToLocal(details.globalPosition);
+    final offset = renderTerminal.getCellOffset(local);
     widget.onSecondaryTapUp?.call(details, offset);
   }
 

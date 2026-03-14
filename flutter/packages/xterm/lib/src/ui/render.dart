@@ -151,6 +151,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   final TerminalPainter _painter;
 
+
   var _stickToBottom = true;
 
   void _onScroll() {
@@ -447,6 +448,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     _paintHighlights(
       canvas,
+      offset,
       _controller.highlights,
       effectFirstLine,
       effectLastLine,
@@ -455,6 +457,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (_controller.selection != null) {
       _paintSelection(
         canvas,
+        offset,
         _controller.selection!,
         effectFirstLine,
         effectLastLine,
@@ -495,6 +498,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   void _paintSelection(
     Canvas canvas,
+    Offset paintOffset,
     BufferRange selection,
     int firstLine,
     int lastLine,
@@ -512,12 +516,13 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         break;
       }
 
-      _paintSegment(canvas, segment, _painter.theme.selection);
+      _paintSegment(canvas, paintOffset, segment, _painter.theme.selection);
     }
   }
 
   void _paintHighlights(
     Canvas canvas,
+    Offset paintOffset,
     List<TerminalHighlight> highlights,
     int firstLine,
     int lastLine,
@@ -540,20 +545,22 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
           break;
         }
 
-        _paintSegment(canvas, segment, highlight.color);
+        _paintSegment(canvas, paintOffset, segment, highlight.color);
       }
     }
   }
 
   @pragma('vm:prefer-inline')
-  void _paintSegment(Canvas canvas, BufferSegment segment, Color color) {
+  void _paintSegment(
+      Canvas canvas, Offset paintOffset, BufferSegment segment, Color color) {
     final start = segment.start ?? 0;
     final end = segment.end ?? _terminal.viewWidth;
 
-    final startOffset = Offset(
-      start * _painter.cellSize.width,
-      segment.line * _painter.cellSize.height + _lineOffset,
-    );
+    final startOffset = paintOffset +
+        Offset(
+          start * _painter.cellSize.width,
+          segment.line * _painter.cellSize.height + _lineOffset,
+        );
 
     _painter.paintHighlight(canvas, startOffset, end - start, color);
   }

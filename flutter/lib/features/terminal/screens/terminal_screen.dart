@@ -5,10 +5,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/terminal_provider.dart';
 import '../widgets/terminal_view_widget.dart';
+import '../widgets/terminal_selection_overlay.dart';
 import '../widgets/mobile_keyboard.dart';
 import '../widgets/terminal_accessory_bar.dart';
 import '../widgets/floating_voice_button.dart';
 import '../../../core/providers.dart';
+import '../../../core/config/app_config.dart';
 import '../../chat/screens/chat_screen.dart';
 
 class TerminalScreen extends ConsumerStatefulWidget {
@@ -36,7 +38,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
   // Selection Mode state
   bool _isSelectionMode = false;
-  bool _hasSelection = false;
 
   // Modifier states for accessory bar + native keyboard
   bool _ctrlActive = false;
@@ -85,10 +86,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       // CRITICAL: Register custom input processor to handle sticky modifiers
       terminalNotifier.terminalService.setInputProcessor(_processInput);
 
-      // Listen for selection changes via the controller in state
-      final terminalState = ref.read(terminalProvider);
-      terminalState.controller?.addListener(_onSelectionChange);
-
       _persistActiveSession();
 
       Future.delayed(const Duration(seconds: 3), () {
@@ -104,24 +101,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     });
   }
 
-  void _onSelectionChange() {
-    final controller = ref.read(terminalProvider).controller;
-    if (controller != null) {
-      final hasSelection = controller.selection != null;
-      if (hasSelection != _hasSelection) {
-        setState(() {
-          _hasSelection = hasSelection;
-        });
-      }
-    }
-  }
-
   void _onFocusChange() {}
 
   @override
   void dispose() {
     _focusNode.removeListener(_onFocusChange);
-    ref.read(terminalProvider).controller?.removeListener(_onSelectionChange);
     WidgetsBinding.instance.removeObserver(this);
     _clearActiveSession();
     ref.read(terminalProvider.notifier).disconnect();
@@ -250,31 +234,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       } else {
         _focusNode.requestFocus();
         SystemChannels.textInput.invokeMethod('TextInput.show');
-        ref.read(terminalProvider).controller?.clearSelection();
       }
     });
-  }
-
-  void _handleCopy() async {
-    final terminalState = ref.read(terminalProvider);
-    final controller = terminalState.controller;
-    final terminal = terminalState.terminal;
-
-    if (controller != null &&
-        terminal != null &&
-        controller.selection != null) {
-      final text = terminal.buffer.getText(controller.selection!);
-      await Clipboard.setData(ClipboardData(text: text));
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Copied to clipboard'),
-            duration: Duration(seconds: 1),
-          ),
-        );
-      }
-    }
   }
 
   void _handlePaste() async {
@@ -282,6 +243,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     if (data?.text != null) {
       _handleInput(data!.text!);
     }
+  }
+
+  double _getTerminalFontSize() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    return prefs.getDouble(AppConfig.keyTerminalFontSize) ??
+        AppConfig.terminalFontSize;
   }
 
   Future<void> _handleVoiceButton(TerminalState terminalState) async {
@@ -375,12 +342,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                   },
                   tooltip: 'Switch to Chat',
                 ),
-                if (_isSelectionMode)
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 20),
-                    onPressed: _toggleSelectionMode,
-                    tooltip: 'Exit Selection',
-                  ),
                 IconButton(
                   icon: Icon(
                     _isSelectionMode ? Icons.select_all : Icons.ads_click,
@@ -388,14 +349,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                   ),
                   onPressed: _toggleSelectionMode,
                   color: _isSelectionMode ? Colors.orange : null,
-                  tooltip: 'Selection Mode',
+                  tooltip: _isSelectionMode
+                      ? 'Exit Selection'
+                      : 'Selection Mode',
                 ),
-                if (_hasSelection)
-                  IconButton(
-                    icon: const Icon(Icons.copy, size: 20),
-                    onPressed: _handleCopy,
-                    tooltip: 'Copy',
-                  ),
                 IconButton(
                   icon: const Icon(Icons.paste, size: 20),
                   onPressed: _handlePaste,
@@ -467,68 +424,88 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                       : const SizedBox.shrink(),
                 ),
 
-                // Terminal view
+                // Terminal view / Selection overlay
                 Expanded(
                   child: terminalState.terminal != null
-                      ? TerminalViewWidget(
-                          terminal: terminalState.terminal!,
-                          controller: terminalState.controller,
-                          onResize: _handleResize,
-                          onInput: _handleInput,
-                          focusNode: _focusNode,
-                          ctrlActive: _ctrlActive,
-                          altActive: _altActive,
-                          shiftActive: _shiftActive,
-                          prefs: ref.watch(sharedPreferencesProvider),
-                          onTap: () {
-                            if (!_showCustomKeyboard && !_isSelectionMode) {
-                              final isKeyboardVisible =
-                                  MediaQuery.of(context).viewInsets.bottom > 0;
+                      ? Stack(
+                          children: [
+                            // Terminal always in tree (receives data)
+                            TerminalViewWidget(
+                              terminal: terminalState.terminal!,
+                              controller: terminalState.controller,
+                              onResize: _handleResize,
+                              onInput: _handleInput,
+                              focusNode: _focusNode,
+                              ctrlActive: _ctrlActive,
+                              altActive: _altActive,
+                              shiftActive: _shiftActive,
+                              isSelectionMode: _isSelectionMode,
+                              prefs: ref.watch(sharedPreferencesProvider),
+                              onTap: () {
+                                if (!_showCustomKeyboard &&
+                                    !_isSelectionMode) {
+                                  final isKeyboardVisible =
+                                      MediaQuery.of(context)
+                                          .viewInsets
+                                          .bottom >
+                                      0;
 
-                              if (!isKeyboardVisible) {
-                                if (_focusNode.hasFocus) {
-                                  _focusNode.unfocus();
-                                  Future.delayed(
-                                    const Duration(milliseconds: 50),
-                                    () {
-                                      if (mounted) {
-                                        _focusNode.requestFocus();
-                                        SystemChannels.textInput.invokeMethod(
-                                          'TextInput.show',
-                                        );
-                                      }
-                                    },
-                                  );
-                                } else {
-                                  _focusNode.requestFocus();
-                                  SystemChannels.textInput.invokeMethod(
-                                    'TextInput.show',
-                                  );
+                                  if (!isKeyboardVisible) {
+                                    if (_focusNode.hasFocus) {
+                                      _focusNode.unfocus();
+                                      Future.delayed(
+                                        const Duration(milliseconds: 50),
+                                        () {
+                                          if (mounted) {
+                                            _focusNode.requestFocus();
+                                            SystemChannels.textInput
+                                                .invokeMethod(
+                                              'TextInput.show',
+                                            );
+                                          }
+                                        },
+                                      );
+                                    } else {
+                                      _focusNode.requestFocus();
+                                      SystemChannels.textInput.invokeMethod(
+                                        'TextInput.show',
+                                      );
+                                    }
+                                  } else {
+                                    if (!_focusNode.hasFocus) {
+                                      _focusNode.requestFocus();
+                                    }
+                                    SystemChannels.textInput.invokeMethod(
+                                      'TextInput.show',
+                                    );
+                                  }
                                 }
-                              } else {
-                                if (!_focusNode.hasFocus) {
-                                  _focusNode.requestFocus();
-                                }
-                                SystemChannels.textInput.invokeMethod(
-                                  'TextInput.show',
-                                );
-                              }
-                            }
-                          },
-                          onModifiersReset: () {
-                            setState(() {
-                              _ctrlActive = false;
-                              _altActive = false;
-                              _shiftActive = false;
-                            });
-                          },
+                              },
+                              onModifiersReset: () {
+                                setState(() {
+                                  _ctrlActive = false;
+                                  _altActive = false;
+                                  _shiftActive = false;
+                                });
+                              },
+                            ),
+
+                            // Selection overlay on top
+                            if (_isSelectionMode)
+                              Positioned.fill(
+                                child: TerminalSelectionOverlay(
+                                  terminal: terminalState.terminal!,
+                                  fontSize: _getTerminalFontSize(),
+                                  onClose: _toggleSelectionMode,
+                                ),
+                              ),
+                          ],
                         )
                       : const Center(child: CircularProgressIndicator()),
                 ),
 
                 // Accessory Bar (for native keyboard)
-                if (!_showCustomKeyboard &&
-                    (isNativeKeyboardVisible || _isSelectionMode))
+                if (!_showCustomKeyboard && isNativeKeyboardVisible)
                   TerminalAccessoryBar(
                     onKeyPressed: _handleInput,
                     onToggleKeyboard: () {

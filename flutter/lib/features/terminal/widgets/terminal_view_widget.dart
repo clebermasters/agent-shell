@@ -49,6 +49,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   late double _fontSize;
   int _lastCols = 0;
   int _lastRows = 0;
+  double _lastWidth = 0;
+  double _lastHeight = 0;
   Timer? _resizeDebounce;
 
   late FocusNode _wrapperFocusNode;
@@ -445,22 +447,32 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
+        // When the available space changes (browser zoom, window resize, keyboard),
+        // reset the dimension guard so xterm's onResize always reaches the backend.
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        if (w != _lastWidth || h != _lastHeight) {
+          _lastWidth = w;
+          _lastHeight = h;
+          _lastCols = 0;
+          _lastRows = 0;
+        }
+
         return Focus(
           focusNode: _wrapperFocusNode,
           onKey: (node, event) {
             _onKey(event);
             return KeyEventResult.ignored;
           },
-          child: Container(
-            color: Colors.black,
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
+          child: SizedBox(
+            width: w,
+            height: h,
             child: Stack(
+              fit: StackFit.expand,
               children: [
-                // Layer 1: GHOST INPUT (Underneath, captures keyboard only)
-                // We keep it focused but invisible and non-interactable via gestures
+                // Layer 1: GHOST INPUT — off-screen, captures keyboard only
                 Positioned(
-                  left: -100, // Off-screen but active
+                  left: -100,
                   top: 0,
                   width: 1,
                   height: 1,
@@ -480,144 +492,135 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
                   ),
                 ),
 
-                // Layer 2: TERMINAL VIEW (On top, captures gestures without competing in arena)
-                Listener(
-                  onPointerDown: (e) {
-                    _pointerDownPos = e.position;
-                    _isDragging = false;
-                    _dragStartPixels = 0.0;
-                  },
-                  onPointerMove: (e) {
-                    if (_pointerDownPos == null) return;
+                // Layer 2: TERMINAL VIEW — Positioned.fill forces tight constraints
+                // so TerminalView always fills the full available area regardless
+                // of how Stack distributes loose constraints to non-positioned children.
+                Positioned.fill(
+                  child: Listener(
+                    onPointerDown: (e) {
+                      _pointerDownPos = e.position;
+                      _isDragging = false;
+                      _dragStartPixels = 0.0;
+                    },
+                    onPointerMove: (e) {
+                      if (_pointerDownPos == null) return;
 
-                    final dy = e.position.dy - _pointerDownPos!.dy;
+                      final dy = e.position.dy - _pointerDownPos!.dy;
 
-                    // Activate drag if moved more than 18 logical pixels vertically
-                    if (!_isDragging && dy.abs() > 18) {
-                      _isDragging = true;
-                      _dragStartPixels = e.position.dy;
-                    }
-
-                    if (_isDragging) {
-                      // Calculate how many "ticks" of the scroll wheel this drag represents.
-                      // Standard line height is usually around 15-20 pixels.
-                      // Let's trigger a scroll event every 20 pixels of physical drag.
-                      final dragDelta = e.position.dy - _dragStartPixels;
-
-                      if (dragDelta.abs() > 20) {
-                        // Reset the anchor point so we wait for another 20 pixels
+                      if (!_isDragging && dy.abs() > 18) {
+                        _isDragging = true;
                         _dragStartPixels = e.position.dy;
-
-                        // Terminal mouse reporting uses 1 for middle, 2 for right, 0 for left
-                        // 64 is wheel up, 65 is wheel down (X11 convention)
-                        // In SGR mode format: \e[<button;x;yM
-
-                        // If dy > 0, we are dragging DOWN (which means we want to see UP into history)
-                        // Therefore sending Mouse Wheel UP (64)
-                        final button = dragDelta > 0 ? 64 : 65;
-
-                        // Fake coordinates since it's a global swipe
-                        final x = 1;
-                        final y = 1;
-
-                        final sequence = '\x1b[<$button;$x;${y}M';
-                        widget.terminal.onOutput?.call(sequence);
                       }
-                    }
-                  },
-                  onPointerUp: (e) {
-                    if (_pointerDownPos != null && !_isDragging) {
-                      final distance = (e.position - _pointerDownPos!).distance;
-                      // If NOT dragging and pointer moved less than 10 pixels, treat it as a tap
-                      if (distance < 10) {
-                        if (widget.onTap != null) widget.onTap!();
+
+                      if (_isDragging) {
+                        final dragDelta = e.position.dy - _dragStartPixels;
+
+                        if (dragDelta.abs() > 20) {
+                          _dragStartPixels = e.position.dy;
+
+                          final button = dragDelta > 0 ? 64 : 65;
+                          const x = 1;
+                          const y = 1;
+
+                          final sequence = '\x1b[<$button;$x;${y}M';
+                          widget.terminal.onOutput?.call(sequence);
+                        }
                       }
-                    }
-                    _pointerDownPos = null;
-                    _isDragging = false;
-                  },
-                  behavior: HitTestBehavior.translucent,
-                  child: ScrollConfiguration(
-                    behavior: ScrollConfiguration.of(context).copyWith(
-                      physics: const ClampingScrollPhysics(),
-                      dragDevices: {
-                        PointerDeviceKind.touch,
-                        PointerDeviceKind.mouse,
-                        PointerDeviceKind.trackpad,
-                      },
-                    ),
-                    child: TerminalView(
-                      widget.terminal,
-                      scrollController: _scrollController,
-                      controller: widget.controller,
-                      readOnly:
-                          true, // Crucial: xterm.dart shouldn't try to handle focus itself
-                      cursorType: TerminalCursorType.block,
-                      alwaysShowCursor: true,
-                      textStyle: TerminalStyle(
-                        fontSize: _fontSize,
-                        fontFamily: 'JetBrains Mono',
+                    },
+                    onPointerUp: (e) {
+                      if (_pointerDownPos != null && !_isDragging) {
+                        final distance =
+                            (e.position - _pointerDownPos!).distance;
+                        if (distance < 10) {
+                          if (widget.onTap != null) widget.onTap!();
+                        }
+                      }
+                      _pointerDownPos = null;
+                      _isDragging = false;
+                    },
+                    behavior: HitTestBehavior.translucent,
+                    child: ScrollConfiguration(
+                      behavior: ScrollConfiguration.of(context).copyWith(
+                        physics: const ClampingScrollPhysics(),
+                        dragDevices: {
+                          PointerDeviceKind.touch,
+                          PointerDeviceKind.mouse,
+                          PointerDeviceKind.trackpad,
+                        },
                       ),
-                      // theme: theme, // Assuming 'theme' is defined elsewhere or needs to be added
-                      onSecondaryTapDown: (details, offset) {},
-                      padding: EdgeInsets.zero,
+                      child: TerminalView(
+                        widget.terminal,
+                        scrollController: _scrollController,
+                        controller: widget.controller,
+                        readOnly: true,
+                        cursorType: TerminalCursorType.block,
+                        alwaysShowCursor: true,
+                        textStyle: TerminalStyle(
+                          fontSize: _fontSize,
+                          fontFamily: 'JetBrains Mono',
+                        ),
+                        onSecondaryTapDown: (details, offset) {},
+                        padding: EdgeInsets.zero,
+                      ),
                     ),
                   ),
                 ),
 
                 // Layer 3: Visual Indicators (Overlay)
-                IgnorePointer(
-                  child: Stack(
-                    children: [
-                      if (widget.ctrlActive ||
-                          widget.altActive ||
-                          widget.shiftActive)
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.red.withOpacity(0.8),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Stack(
+                      children: [
+                        if (widget.ctrlActive ||
+                            widget.altActive ||
+                            widget.shiftActive)
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withOpacity(0.8),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                '${widget.ctrlActive ? "CTRL " : ""}${widget.altActive ? "ALT " : ""}${widget.shiftActive ? "SHIFT" : ""}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      if (widget.isSelectionMode)
-                        Positioned(
-                          top: 8,
-                          left: 8,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.8),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              'SELECTION MODE',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
+                        if (widget.isSelectionMode)
+                          Positioned(
+                            top: 8,
+                            left: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.orange.withOpacity(0.8),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'SELECTION MODE',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ],

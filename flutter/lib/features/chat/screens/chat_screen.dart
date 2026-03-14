@@ -1,10 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
-import 'dart:convert';
-import 'dart:io';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
 import '../../../data/services/websocket_service.dart';
@@ -13,6 +14,8 @@ import '../widgets/professional_message_bubble.dart';
 import '../../hosts/providers/hosts_provider.dart';
 import '../../sessions/providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
+import '../../file_browser/providers/file_browser_provider.dart';
+import '../../file_browser/screens/file_browser_screen.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String sessionName;
@@ -198,6 +201,35 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _autoScroll = true;
       _showScrollButton = false;
     });
+  }
+
+  void _openFileBrowser() {
+    if (widget.isAcp && widget.cwd.isNotEmpty) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => FileBrowserScreen(initialPath: widget.cwd),
+        ),
+      );
+    } else {
+      final ws = ref.read(sharedWebSocketServiceProvider);
+      final notifier = ref.read(fileBrowserProvider.notifier);
+      late final StreamSubscription<Map<String, dynamic>> sub;
+      sub = ws.messages.listen((msg) {
+        if (msg['type'] == 'session-cwd') {
+          final cwd = msg['cwd'] as String? ?? '';
+          sub.cancel();
+          if (mounted && cwd.isNotEmpty) {
+            notifier.listFiles(cwd);
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => FileBrowserScreen(initialPath: cwd),
+              ),
+            );
+          }
+        }
+      });
+      ws.getSessionCwd(widget.sessionName);
+    }
   }
 
   void _scrollToBottomAndEnable() {
@@ -458,6 +490,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: Icon(Icons.folder_open, size: 20, color: textSecondary),
+            tooltip: 'Browse Files',
+            onPressed: _openFileBrowser,
+          ),
           IconButton(
             icon: Icon(Icons.terminal, color: textSecondary),
             onPressed: () {

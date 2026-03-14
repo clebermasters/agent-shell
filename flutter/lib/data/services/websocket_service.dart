@@ -470,6 +470,14 @@ class WebSocketService {
     });
   }
 
+  void listFiles(String path) {
+    send({'type': 'list-files', 'path': path});
+  }
+
+  void getSessionCwd(String sessionName) {
+    send({'type': 'get-session-cwd', 'sessionName': sessionName});
+  }
+
   void acpRespondPermission(String requestId, String optionId) {
     send({
       'type': 'acp-respond-permission',

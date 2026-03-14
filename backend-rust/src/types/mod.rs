@@ -341,6 +341,14 @@ pub enum WebSocketMessage {
         prompt: Option<String>,
         cwd: Option<String>,
     },
+    // File browser
+    ListFiles {
+        path: String,
+    },
+    GetSessionCwd {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,6 +356,16 @@ pub enum WebSocketMessage {
 pub enum AudioAction {
     Start,
     Stop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_directory: bool,
+    pub size: u64,
+    pub modified: Option<String>, // ISO 8601
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,5 +699,15 @@ pub enum ServerMessage {
         session_id: String,
         success: bool,
         error: Option<String>,
+    },
+    // File browser responses
+    FilesList {
+        path: String,
+        entries: Vec<FileEntry>,
+    },
+    SessionCwd {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        cwd: String,
     },
 }

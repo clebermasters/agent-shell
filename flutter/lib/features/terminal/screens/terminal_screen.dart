@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,9 +10,13 @@ import '../widgets/terminal_selection_overlay.dart';
 import '../widgets/mobile_keyboard.dart';
 import '../widgets/terminal_accessory_bar.dart';
 import '../widgets/floating_voice_button.dart';
+import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
 import '../../../core/config/app_config.dart';
 import '../../chat/screens/chat_screen.dart';
+import '../../sessions/providers/sessions_provider.dart';
+import '../../file_browser/providers/file_browser_provider.dart';
+import '../../file_browser/screens/file_browser_screen.dart';
 
 class TerminalScreen extends ConsumerStatefulWidget {
   final String sessionName;
@@ -213,6 +218,27 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     ref.read(terminalProvider.notifier).sendData(widget.sessionName, data);
   }
 
+  void _openFileBrowser() {
+    final ws = ref.read(sharedWebSocketServiceProvider);
+    final notifier = ref.read(fileBrowserProvider.notifier);
+    late final StreamSubscription<Map<String, dynamic>> sub;
+    sub = ws.messages.listen((msg) {
+      if (msg['type'] == 'session-cwd') {
+        final cwd = msg['cwd'] as String? ?? '';
+        sub.cancel();
+        if (mounted && cwd.isNotEmpty) {
+          notifier.listFiles(cwd);
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => FileBrowserScreen(initialPath: cwd),
+            ),
+          );
+        }
+      }
+    });
+    ws.getSessionCwd(widget.sessionName);
+  }
+
   void _toggleVoiceButton() {
     final next = !_showVoiceButton;
     setState(() => _showVoiceButton = next);
@@ -382,6 +408,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
                 const VerticalDivider(width: 8),
 
+                IconButton(
+                  icon: const Icon(Icons.folder_open, size: 20),
+                  onPressed: _openFileBrowser,
+                  tooltip: 'Browse Files',
+                ),
                 IconButton(
                   icon: Icon(
                     _showVoiceButton ? Icons.mic : Icons.mic_off,

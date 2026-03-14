@@ -140,7 +140,8 @@ impl AcpClient {
         tokio::spawn(async move {
             let mut last_event_time: Option<std::time::Instant> = None;
             while let Ok(Some(line)) = lines.next_line().await {
-                tracing::debug!("ACP received: {}", line);                if let Some(msg) = parse_jsonrpc_message(&line) {
+                tracing::debug!("ACP received: {}", line);
+                if let Some(msg) = parse_jsonrpc_message(&line) {
                     match msg {
                         JsonRpcMessage::Response(resp) => {
                             if let Some(id) = resp.id.as_u64().map(|id| id as usize) {

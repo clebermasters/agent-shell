@@ -191,40 +191,16 @@ pub(crate) async fn attach_to_session(
     // Small delay to ensure cleanup is complete
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-    // Create new PTY session.
-    // IMPORTANT: use the *current* tmux window dimensions (or whatever the caller
-    // requested, whichever is larger) so that attaching never shrinks the window.
-    // Shrinking causes a SIGWINCH to running TUIs (e.g. OpenCode) and a brief
-    // redraw window during which 'tmux send-keys Enter' can be consumed by the
-    // resize handler rather than the message-submission handler.
-    let (effective_cols, effective_rows) = {
-        let size_out = tokio::process::Command::new("tmux")
-            .args(&[
-                "display-message",
-                "-t",
-                session_name,
-                "-p",
-                "#{window_width} #{window_height}",
-            ])
-            .output()
-            .await;
-        if let Ok(out) = size_out {
-            let s = String::from_utf8_lossy(&out.stdout);
-            let parts: Vec<u16> = s
-                .split_whitespace()
-                .filter_map(|x| x.parse().ok())
-                .collect();
-            if parts.len() == 2 {
-                (parts[0].max(cols), parts[1].max(rows))
-            } else {
-                (cols, rows)
-            }
-        } else {
-            (cols, rows)
-        }
-    };
+    // Create new PTY session with the exact dimensions requested by the client.
+    // Previously we used max(tmux_window, requested) to avoid shrinking, but that
+    // created a PTY larger than the client terminal.  When the client later resized
+    // the PTY *down*, tmux's cursor positioning during the shrink transition was
+    // unreliable — the cursor would land one row below the prompt.  Using the exact
+    // requested size means the subsequent autoResize from xterm is a *grow* (24→N),
+    // which tmux handles correctly.
+    let (effective_cols, effective_rows) = (cols, rows);
     info!(
-        "PTY size: requested {}x{}, effective {}x{} (window size)",
+        "PTY size: requested {}x{}, effective {}x{}",
         cols, rows, effective_cols, effective_rows
     );
 
@@ -311,10 +287,14 @@ pub(crate) async fn attach_to_session(
                             bytes_since_pause += filtered.len();
                         }
 
-                        let should_send = pending_output.len() > 1024
-                            || last_send.elapsed()
-                                > std::time::Duration::from_millis(10)
-                            || pending_output.contains('\n');
+                        // Always flush pending output after each read.
+                        // Previously we batched (>1KB || >10ms || has \n) for
+                        // throughput, but that caused prompts without a trailing
+                        // newline to stay buffered: the next read() blocks
+                        // because the shell is waiting for input, so the 10ms
+                        // deadline is never re-checked and the prompt never
+                        // reaches the client until the user types.
+                        let should_send = !pending_output.is_empty();
 
                         if should_send && !pending_output.is_empty() {
                             if bootstrap_done_reader.load(Ordering::Relaxed) {

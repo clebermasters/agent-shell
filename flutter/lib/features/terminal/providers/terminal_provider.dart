@@ -80,8 +80,12 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     _wsService.connectionState.listen((connected) {
       if (connected && _activeSessionName != null && !state.isConnected) {
         // We just reconnected, so we need to re-attach to the terminal session
-        // to resume receiving terminal data.
-        _wsService.attachSession(_activeSessionName!, cols: 80, rows: 24);
+        // to resume receiving terminal data.  Use actual terminal dimensions
+        // if available to avoid size mismatch with tmux.
+        final terminal = state.terminal;
+        final cols = (terminal?.viewWidth ?? 0) > 0 ? terminal!.viewWidth : 80;
+        final rows = (terminal?.viewHeight ?? 0) > 0 ? terminal!.viewHeight : 24;
+        _wsService.attachSession(_activeSessionName!, cols: cols, rows: rows);
       }
       state = state.copyWith(isConnected: connected);
     });
@@ -128,6 +132,22 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
         service.startService();
       }
     }
+
+    // Force a resize after the initial attach settles.  The backend's
+    // attach_to_session uses max(tmux_window_size, requested) which can
+    // create a PTY larger than our terminal.  During the attach, multiple
+    // resize events fire as xterm's layout stabilizes, but tmux may still
+    // hold a stale size.  Sending the definitive resize after everything
+    // settles ensures tmux has the exact dimensions of our terminal.
+    Future.delayed(const Duration(seconds: 2), () {
+      if (_activeSessionName == sessionName) {
+        final cols = terminal.viewWidth;
+        final rows = terminal.viewHeight;
+        if (cols > 0 && rows > 0) {
+          terminalService.resizeTerminal(sessionName, cols, rows);
+        }
+      }
+    });
   }
 
   void checkConnection() {

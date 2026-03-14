@@ -12,9 +12,10 @@ class TerminalService {
   final WebSocketService _wsService;
   final Map<String, Terminal> _terminals = {};
   final Map<String, Pty> _ptys = {};
+  final Map<String, StreamSubscription> _subscriptions = {};
   final StreamController<String> _outputController =
       StreamController<String>.broadcast();
-  
+
   // Custom input processor to handle modifiers globally
   Function(String session, String data)? _inputProcessor;
 
@@ -31,6 +32,9 @@ class TerminalService {
   }
 
   Terminal createTerminal(String sessionName, {int cols = 80, int rows = 24}) {
+    // Cancel any previous listener for this session to prevent duplicates.
+    _subscriptions[sessionName]?.cancel();
+
     // 50,000 lines so streamed tmux history is not trimmed
     final terminal = Terminal(maxLines: 50000);
 
@@ -53,14 +57,15 @@ class TerminalService {
       }
     };
 
-    // Listen for incoming data from WebSocket
-    _wsService.messages.listen((message) {
+    // Listen for incoming data from WebSocket.
+    // Store the subscription so we can cancel it on re-create or close.
+    _subscriptions[sessionName] = _wsService.messages.listen((message) {
       final type = message['type'] as String?;
-      final msgSession = message['sessionName'] as String?;
+      final msgSession = message['sessionName'] as String?
+          ?? message['session'] as String?;
 
       // ── History bootstrap protocol ──────────────────────────────────────
       if (type == 'terminal-history-start') {
-        // Only handle if it's for this terminal's session
         if (msgSession == null || msgSession == sessionName) {
           _hydrating[sessionName] = true;
           _hydrationQueue[sessionName] = [];
@@ -97,23 +102,14 @@ class TerminalService {
       }
 
       // ── Live output ──────────────────────────────────────────────────────
-      if (type == 'output') {
+      // Filter by session: only write data intended for this terminal.
+      if (type == 'output' || type == 'terminal_data') {
+        if (msgSession != null && msgSession != sessionName) return;
         final data = message['data'] as String?;
         if (data != null) {
           if (_hydrating[sessionName] == true) {
-            // Queue until history streaming is complete
             _hydrationQueue[sessionName]?.add(data);
           } else {
-            terminal.write(data);
-          }
-        }
-      }
-      
-      if (type == 'terminal_data') {
-        final tSession = message['session'] as String? ?? message['sessionName'] as String?;
-        if (tSession == sessionName) {
-          final data = message['data'] as String?;
-          if (data != null) {
             terminal.write(data);
           }
         }
@@ -148,6 +144,8 @@ class TerminalService {
   }
 
   void closeTerminal(String sessionName) {
+    _subscriptions[sessionName]?.cancel();
+    _subscriptions.remove(sessionName);
     _terminals.remove(sessionName);
     _hydrating.remove(sessionName);
     _hydrationQueue.remove(sessionName);
@@ -156,6 +154,10 @@ class TerminalService {
   }
 
   void dispose() {
+    for (final sub in _subscriptions.values) {
+      sub.cancel();
+    }
+    _subscriptions.clear();
     for (final pty in _ptys.values) {
       pty.kill();
     }

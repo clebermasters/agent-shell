@@ -53,6 +53,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   double _lastHeight = 0;
   Timer? _resizeDebounce;
   Timer? _zoomResizeDebounce;
+  int _lastEnterMs = 0; // dedup Enter from onKey + onChanged
 
   late FocusNode _wrapperFocusNode;
   late TextEditingController _inputController;
@@ -95,7 +96,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     if (!kIsWeb) {
       VolumeKeyBoard.instance.addListener(_handleVolumeKey);
     }
-    widget.terminal.addListener(_onTerminalChange);
     // Use xterm's own resize callback (based on actual font metrics)
     // to notify the backend of the correct terminal dimensions.
     widget.terminal.onResize = (cols, rows, pixelWidth, pixelHeight) {
@@ -118,10 +118,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   @override
   void didUpdateWidget(TerminalViewWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.terminal != widget.terminal) {
-      oldWidget.terminal.removeListener(_onTerminalChange);
-      widget.terminal.addListener(_onTerminalChange);
-    }
   }
 
   @override
@@ -133,16 +129,9 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     if (!kIsWeb) {
       VolumeKeyBoard.instance.removeListener();
     }
-    widget.terminal.removeListener(_onTerminalChange);
     _wrapperFocusNode.dispose();
     _inputController.dispose();
     super.dispose();
-  }
-
-  void _onTerminalChange() {
-    if (mounted) {
-      setState(() {});
-    }
   }
 
   @override
@@ -193,6 +182,10 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     for (int i = 0; i < value.length; i++) {
       String char = value[i];
       if (char == '\n') {
+        // Deduplicate: _onKey may have already sent '\r' for Enter.
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastEnterMs < 100) continue;
+        _lastEnterMs = now;
         _processInputChar('\r');
       } else {
         _processInputChar(char);
@@ -386,8 +379,14 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
       sequence = '\x1b[6~';
     else if (key == LogicalKeyboardKey.delete)
       sequence = '\x1b[3~';
-    else if (key == LogicalKeyboardKey.enter)
+    else if (key == LogicalKeyboardKey.enter) {
+      // Deduplicate: on Android the soft keyboard fires both a RawKeyEvent
+      // AND an onChanged('\n').  Only send the first within 100ms.
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastEnterMs < 100) return;
+      _lastEnterMs = now;
       sequence = '\r';
+    }
     else if (key == LogicalKeyboardKey.f1)
       sequence = '\x1bOP';
     else if (key == LogicalKeyboardKey.f2)

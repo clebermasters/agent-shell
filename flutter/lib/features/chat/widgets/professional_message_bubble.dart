@@ -733,7 +733,7 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
     // Add auth token to the request headers
     final dio = Dio();
     if (BuildConfig.authToken.isNotEmpty) {
-      dio.options.headers['Authorization'] = 'Bearer ${BuildConfig.authToken}';
+      dio.options.headers['X-Auth-Token'] = BuildConfig.authToken;
     }
     await dio.download(url, filePath, deleteOnError: true);
     _audioCachePaths[blockId] = filePath;
@@ -848,7 +848,7 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
 
       final dio = Dio();
       if (BuildConfig.authToken.isNotEmpty) {
-        dio.options.headers['Authorization'] = 'Bearer ${BuildConfig.authToken}';
+        dio.options.headers['X-Auth-Token'] = BuildConfig.authToken;
       }
       final cacheDir = await getTemporaryDirectory();
       final downloadsDir = Directory('${cacheDir.path}/chat_downloads');

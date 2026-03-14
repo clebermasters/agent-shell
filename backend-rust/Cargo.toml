@@ -54,6 +54,7 @@ subtle = "2.6"
 
 # Lazy static for global state
 lazy_static = "1.4"
+cron = "0.12"
 
 # Directory utilities
 dirs = "5.0"

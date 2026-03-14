@@ -258,7 +258,7 @@ pub(crate) async fn handle(
                                 info!("[TIMING] poll fetch_new_messages({} new) took {:?}", new_messages.len(), elapsed);
                             }
                             for msg in new_messages {
-                                let _ = send_message(
+                                if send_message(
                                     &message_tx,
                                     ServerMessage::ChatEvent {
                                         session_name: session_key.clone(),
@@ -266,7 +266,10 @@ pub(crate) async fn handle(
                                         message: msg,
                                         source: Some("acp".to_string()),
                                     },
-                                ).await;
+                                ).await.is_err() {
+                                    tracing::debug!("ACP poll: client disconnected, stopping watcher");
+                                    return;
+                                }
                             }
                         }
                         Err(e) => tracing::debug!("ACP poll error: {}", e),

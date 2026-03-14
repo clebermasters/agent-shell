@@ -800,7 +800,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _ws!.watchAcpChatLog(sessionName, limit: 500);
   }
 
-  void watchChatLog(String sessionName, int windowIndex, {int? limit}) async {
+  void watchChatLog(String sessionName, int windowIndex, {int? limit}) {
     state = state.copyWith(
       messages: [],
       isLoading: true,
@@ -810,11 +810,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
       hasMoreMessages: false,
       totalMessageCount: null,
     );
-
-    // Give a small delay to ensure WebSocket is connected if it was just switched
-    if (_ws == null || !_ws!.isConnected) {
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
 
     // First attach to the session's PTY so we can send input
     _ws?.attachSession(

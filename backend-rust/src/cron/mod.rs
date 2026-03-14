@@ -367,7 +367,9 @@ impl CronManager {
     }
 
     fn validate_cron_expression(&self, expression: &str) -> Result<()> {
-        // Basic validation - check if it has 5 fields
+        use cron::Schedule;
+        use std::str::FromStr;
+
         let parts: Vec<&str> = expression.split_whitespace().collect();
         if parts.len() != 5 {
             return Err(anyhow::anyhow!(
@@ -376,16 +378,26 @@ impl CronManager {
             ));
         }
 
-        // TODO: Add more sophisticated validation
-        // For now, we'll trust the user input and let cron validate it
+        // Validate by attempting to parse with the cron crate
+        let extended = format!("0 {} *", expression);
+        Schedule::from_str(&extended)
+            .map_err(|e| anyhow::anyhow!("Invalid cron expression '{}': {}", expression, e))?;
 
         Ok(())
     }
 
-    fn calculate_next_run(&self, _schedule: &str) -> Result<Option<DateTime<Utc>>> {
-        // TODO: Implement proper cron expression parsing and next run calculation
-        // For now, return None
-        Ok(None)
+    fn calculate_next_run(&self, schedule: &str) -> Result<Option<DateTime<Utc>>> {
+        use cron::Schedule;
+        use std::str::FromStr;
+
+        // Standard cron uses 5 fields: min hour dom month dow
+        // The `cron` crate expects 7 fields: sec min hour dom month dow year
+        let extended = format!("0 {} *", schedule);
+
+        let sched = Schedule::from_str(&extended)
+            .map_err(|e| anyhow::anyhow!("Invalid cron expression '{}': {}", schedule, e))?;
+
+        Ok(sched.upcoming(Utc).next())
     }
 }
 

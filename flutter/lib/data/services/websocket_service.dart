@@ -18,6 +18,7 @@ class WebSocketService {
 
   bool _isConnected = false;
   String? _currentUrl;
+  final List<Map<String, dynamic>> _pendingQueue = [];
 
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
@@ -87,6 +88,7 @@ class WebSocketService {
       // ignore: avoid_print
       print('[CONN] Flutter→Backend CONNECTED to ${_sanitizeUrl(_currentUrl!)}');
       _connectionController.add(true);
+      _flushPendingQueue();
       _startPingTimer();
     } catch (e) {
       // ignore: avoid_print
@@ -181,10 +183,21 @@ class WebSocketService {
       _log('Sending: $message');
       _channel!.sink.add(jsonEncode(message));
     } else {
-      _log('Cannot send - not connected');
+      _log('Queuing message (not connected): ${message['type']}');
+      _pendingQueue.add(message);
       if (_reconnectTimer == null || !_reconnectTimer!.isActive) {
         _scheduleReconnect();
       }
+    }
+  }
+
+  void _flushPendingQueue() {
+    if (_pendingQueue.isEmpty) return;
+    final messages = List<Map<String, dynamic>>.from(_pendingQueue);
+    _pendingQueue.clear();
+    _log('Flushing ${messages.length} queued message(s) after reconnect');
+    for (final msg in messages) {
+      _channel!.sink.add(jsonEncode(msg));
     }
   }
 

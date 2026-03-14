@@ -32,6 +32,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   bool _fullscreen = false;
   bool _showStatus = true;
   bool _wasKeyboardVisible = false;
+  bool _lastKeyboardVisible = false;
 
   // Selection Mode state
   bool _isSelectionMode = false;
@@ -335,6 +336,23 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     final terminalState = ref.watch(terminalProvider);
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final isNativeKeyboardVisible = bottomInset > 0;
+
+    // When the keyboard hides, the terminal gets more vertical space.
+    // Schedule a resize so the backend/tmux learns about the new row count.
+    if (_lastKeyboardVisible && !isNativeKeyboardVisible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final terminal = ref.read(terminalProvider).terminal;
+        if (terminal != null) {
+          final cols = terminal.viewWidth;
+          final rows = terminal.viewHeight;
+          if (cols > 0 && rows > 0) {
+            _handleResize(cols, rows);
+          }
+        }
+      });
+    }
+    _lastKeyboardVisible = isNativeKeyboardVisible;
 
     return Scaffold(
       resizeToAvoidBottomInset: true,

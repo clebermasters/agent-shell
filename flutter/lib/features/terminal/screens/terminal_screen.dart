@@ -522,6 +522,13 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                         if (mod == 'SHIFT') _shiftActive = !_shiftActive;
                       });
                     },
+                    onModifiersReset: () {
+                      setState(() {
+                        _ctrlActive = false;
+                        _altActive = false;
+                        _shiftActive = false;
+                      });
+                    },
                   ),
 
                 // Custom virtual keyboard

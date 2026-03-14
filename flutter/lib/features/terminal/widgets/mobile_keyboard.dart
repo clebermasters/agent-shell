@@ -37,7 +37,8 @@ class _MobileKeyboardState extends State<MobileKeyboard> {
     if (key == 'ENTER') {
       data = '\r';
     } else if (key == 'TAB') {
-      data = '\t';
+      // Respect SHIFT modifier for reverse-tab
+      data = (_shiftActive || _shiftLocked) ? '\x1b[Z' : '\t';
     } else if (key == 'ESC') {
       data = '\x1b';
     } else if (key == 'SPACE') {

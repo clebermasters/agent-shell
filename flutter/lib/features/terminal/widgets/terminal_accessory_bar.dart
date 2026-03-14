@@ -7,6 +7,7 @@ class TerminalAccessoryBar extends StatefulWidget {
   final bool isAltActive;
   final bool isShiftActive;
   final Function(String mod) onModifierTap;
+  final VoidCallback? onModifiersReset;
 
   const TerminalAccessoryBar({
     super.key,
@@ -16,6 +17,7 @@ class TerminalAccessoryBar extends StatefulWidget {
     required this.isAltActive,
     required this.isShiftActive,
     required this.onModifierTap,
+    this.onModifiersReset,
   });
 
   @override
@@ -27,7 +29,12 @@ class _TerminalAccessoryBarState extends State<TerminalAccessoryBar> {
     if (key == 'ESC') {
       widget.onKeyPressed('\x1b');
     } else if (key == 'TAB') {
-      widget.onKeyPressed('	');
+      // Respect the sticky SHIFT modifier: Shift+Tab = reverse-tab (\x1b[Z)
+      if (widget.isShiftActive) {
+        widget.onKeyPressed('\x1b[Z');
+      } else {
+        widget.onKeyPressed('\t');
+      }
     } else if (key == 'UP') {
       widget.onKeyPressed('\x1b[A');
     } else if (key == 'DOWN') {
@@ -57,6 +64,10 @@ class _TerminalAccessoryBarState extends State<TerminalAccessoryBar> {
       widget.onKeyPressed(fMap[key] ?? '');
     } else {
       widget.onKeyPressed(key);
+    }
+    // After any non-modifier key, reset sticky modifiers
+    if (widget.isCtrlActive || widget.isAltActive || widget.isShiftActive) {
+      widget.onModifiersReset?.call();
     }
   }
 

@@ -229,10 +229,13 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     }
   }
 
-  void _onKey(RawKeyEvent event) {
-    if (event is! RawKeyDownEvent) return;
+  /// Returns true if the event was handled (consumed) so the Focus widget can
+  /// report KeyEventResult.handled and prevent Flutter's focus traversal from
+  /// stealing focus away from the terminal on Tab / Shift+Tab / arrow keys.
+  bool _onKey(RawKeyEvent event) {
+    if (event is! RawKeyDownEvent) return false;
 
-    if (widget.isSelectionMode) return;
+    if (widget.isSelectionMode) return false;
 
     final key = event.logicalKey;
     String? sequence;
@@ -250,12 +253,12 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
         if (code >= 65 && code <= 90) {
           finalData = String.fromCharCode(code - 64);
           widget.onInput(finalData);
-          return;
+          return true;
         }
         // CTRL+Space = \x00
         if (key == LogicalKeyboardKey.space) {
           widget.onInput('\x00');
-          return;
+          return true;
         }
         // CTRL+\ = \x1c (FS)
         // CTRL+] = \x1d (GS)
@@ -263,7 +266,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
         // CTRL+_ = \x1f (US)
         if (key == LogicalKeyboardKey.backslash) {
           widget.onInput('\x1c');
-          return;
+          return true;
         }
         if (key == LogicalKeyboardKey.bracketRight) {
           if (event.isShiftPressed) {
@@ -271,40 +274,40 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
           } else {
             widget.onInput('\x1d'); // CTRL+]
           }
-          return;
+          return true;
         }
         if (key == LogicalKeyboardKey.minus && event.isShiftPressed) {
           widget.onInput('\x1f'); // CTRL+_
-          return;
+          return true;
         }
         // For other CTRL+key combinations, try to extract the character
         if (code >= 97 && code <= 122) {
           // a-z
           finalData = String.fromCharCode(code - 96);
           widget.onInput(finalData);
-          return;
+          return true;
         }
       }
       // Handle other special keys with CTRL
       if (key == LogicalKeyboardKey.backspace) {
         widget.onInput('\x7f'); // CTRL+?
-        return;
+        return true;
       }
       if (key == LogicalKeyboardKey.escape) {
         widget.onInput('\x1b'); // CTRL+[
-        return;
+        return true;
       }
       if (key == LogicalKeyboardKey.enter) {
         widget.onInput('\x0d'); // CTRL+M
-        return;
+        return true;
       }
       if (key == LogicalKeyboardKey.tab) {
         widget.onInput('\x09'); // CTRL+I
-        return;
+        return true;
       }
       if (key == LogicalKeyboardKey.delete) {
         widget.onInput('\x1b[3~'); // CTRL+Delete - send as escape sequence
-        return;
+        return true;
       }
     }
 
@@ -341,14 +344,14 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
         if (keyLabel.isNotEmpty && keyLabel.length == 1) {
           finalData = '\x1b${keyLabel}';
           widget.onInput(finalData);
-          return;
+          return true;
         }
       }
 
       if (sequence != null) {
         finalData = '\x1b$sequence';
         widget.onInput(finalData);
-        return;
+        return true;
       }
     }
 
@@ -381,7 +384,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
       // Deduplicate: on Android the soft keyboard fires both a RawKeyEvent
       // AND an onChanged('\n').  Only send the first within 100ms.
       final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - _lastEnterMs < 100) return;
+      if (now - _lastEnterMs < 100) return false;
       _lastEnterMs = now;
       sequence = '\r';
     }
@@ -427,7 +430,10 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     if (sequence != null) {
       widget.onInput(sequence);
       if (wasModified) widget.onModifiersReset();
+      return true;
     }
+
+    return false;
   }
 
   void _zoomIn() {
@@ -480,8 +486,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
         return Focus(
           focusNode: _wrapperFocusNode,
           onKey: (node, event) {
-            _onKey(event);
-            return KeyEventResult.ignored;
+            final handled = _onKey(event);
+            return handled ? KeyEventResult.handled : KeyEventResult.ignored;
           },
           child: SizedBox(
             width: w,

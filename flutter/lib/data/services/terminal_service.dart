@@ -38,12 +38,18 @@ class TerminalService {
     _hydrating[sessionName] = false;
     _hydrationQueue[sessionName] = [];
 
-    // Set up terminal callbacks
+    // Set up terminal callbacks.
+    // Filter out terminal query responses (Device Attributes, cursor position
+    // reports, etc.) that xterm generates internally.  These escape sequences
+    // must NOT be forwarded to the backend because the backend echoes them as
+    // visible text (the ">0;0;0c" artefacts).
     terminal.onOutput = (data) {
+      final filtered = _filterTerminalResponses(data);
+      if (filtered.isEmpty) return;
       if (_inputProcessor != null) {
-        _inputProcessor!(sessionName, data);
+        _inputProcessor!(sessionName, filtered);
       } else {
-        _wsService.sendTerminalData(sessionName, data);
+        _wsService.sendTerminalData(sessionName, filtered);
       }
     };
 
@@ -115,6 +121,19 @@ class TerminalService {
     });
 
     return terminal;
+  }
+
+  /// Strip terminal query responses (DA1, DA2, DSR, etc.) so they are
+  /// never forwarded to the backend.  Patterns:
+  ///   ESC [ ? ... c     (DA1 response)
+  ///   ESC [ > ... c     (DA2 response)
+  ///   ESC [ ... R       (Cursor Position Report)
+  ///   ESC [ ... n       (Device Status Report)
+  static final _termResponseRe = RegExp(
+    r'\x1b\[\??[>]?[\d;]*[cRn]',
+  );
+  static String _filterTerminalResponses(String data) {
+    return data.replaceAll(_termResponseRe, '');
   }
 
   void resizeTerminal(String sessionName, int cols, int rows) {

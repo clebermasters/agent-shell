@@ -52,6 +52,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   double _lastWidth = 0;
   double _lastHeight = 0;
   Timer? _resizeDebounce;
+  Timer? _zoomResizeDebounce;
 
   late FocusNode _wrapperFocusNode;
   late TextEditingController _inputController;
@@ -101,7 +102,12 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
       if (cols != _lastCols || rows != _lastRows) {
         _lastCols = cols;
         _lastRows = rows;
-        widget.onResize(cols, rows);
+        // During zoom the debounce timer handles sending; only send here
+        // when the resize was NOT triggered by a zoom (e.g. keyboard show/hide,
+        // orientation change).
+        if (_zoomResizeDebounce == null || !_zoomResizeDebounce!.isActive) {
+          widget.onResize(cols, rows);
+        }
       }
     };
     _fontSize =
@@ -121,6 +127,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   @override
   void dispose() {
     _resizeDebounce?.cancel();
+    _zoomResizeDebounce?.cancel();
     _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     if (!kIsWeb) {
@@ -169,7 +176,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
       _lastCols = 0;
       _lastRows = 0;
       setState(() {});
-      _forceResizeAfterLayout();
     });
   }
 
@@ -432,7 +438,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     _lastRows = 0;
     setState(() => _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0));
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
-    _forceResizeAfterLayout();
+    _scheduleZoomResize();
   }
 
   void _zoomOut() {
@@ -440,15 +446,16 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     _lastRows = 0;
     setState(() => _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0));
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
-    _forceResizeAfterLayout();
+    _scheduleZoomResize();
   }
 
-  /// After a font-size change, wait for xterm to finish its layout (which
-  /// recalculates cols/rows from the new cell size) and then explicitly send
-  /// a resize to the backend.  This guarantees the PTY dimensions stay in
-  /// sync even if xterm's internal onResize callback didn't propagate.
-  void _forceResizeAfterLayout() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+  /// Debounce zoom resize: wait until the user stops pressing volume keys
+  /// (500ms of inactivity) before sending ONE resize to the backend.
+  /// This prevents rapid SIGWINCH signals to tmux that interfere with
+  /// Enter key handling and cause escape sequence responses to leak.
+  void _scheduleZoomResize() {
+    _zoomResizeDebounce?.cancel();
+    _zoomResizeDebounce = Timer(const Duration(milliseconds: 500), () {
       if (!mounted) return;
       final cols = widget.terminal.viewWidth;
       final rows = widget.terminal.viewHeight;

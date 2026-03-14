@@ -169,6 +169,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
       _lastCols = 0;
       _lastRows = 0;
       setState(() {});
+      _forceResizeAfterLayout();
     });
   }
 
@@ -427,13 +428,11 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   }
 
   void _zoomIn() {
-    // Reset last known dims BEFORE setState so that when xterm fires onResize
-    // after the rebuild (even with the same integer cols/rows due to rounding),
-    // the change guard passes and the backend is always notified.
     _lastCols = 0;
     _lastRows = 0;
     setState(() => _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0));
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
+    _forceResizeAfterLayout();
   }
 
   void _zoomOut() {
@@ -441,6 +440,24 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     _lastRows = 0;
     setState(() => _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0));
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
+    _forceResizeAfterLayout();
+  }
+
+  /// After a font-size change, wait for xterm to finish its layout (which
+  /// recalculates cols/rows from the new cell size) and then explicitly send
+  /// a resize to the backend.  This guarantees the PTY dimensions stay in
+  /// sync even if xterm's internal onResize callback didn't propagate.
+  void _forceResizeAfterLayout() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final cols = widget.terminal.viewWidth;
+      final rows = widget.terminal.viewHeight;
+      if (cols > 0 && rows > 0) {
+        _lastCols = cols;
+        _lastRows = rows;
+        widget.onResize(cols, rows);
+      }
+    });
   }
 
   @override

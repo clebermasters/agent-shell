@@ -39,6 +39,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   // Selection Mode state
   bool _isSelectionMode = false;
 
+  // Voice button visibility (persisted)
+  bool _showVoiceButton = true;
+
   // Modifier states for accessory bar + native keyboard
   bool _ctrlActive = false;
   bool _altActive = false;
@@ -74,6 +77,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     WidgetsBinding.instance.addObserver(this);
 
     _focusNode.addListener(_onFocusChange);
+
+    // Load voice button visibility preference
+    SharedPreferences.getInstance().then((prefs) {
+      if (mounted) {
+        setState(() {
+          _showVoiceButton =
+              prefs.getBool(AppConfig.keyShowVoiceButton) ?? true;
+        });
+      }
+    });
 
     // Connect to the terminal session
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -198,6 +211,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
   void _handleInput(String data) {
     ref.read(terminalProvider.notifier).sendData(widget.sessionName, data);
+  }
+
+  void _toggleVoiceButton() {
+    final next = !_showVoiceButton;
+    setState(() => _showVoiceButton = next);
+    SharedPreferences.getInstance().then(
+      (prefs) => prefs.setBool(AppConfig.keyShowVoiceButton, next),
+    );
   }
 
   void _toggleFullscreen() {
@@ -361,6 +382,17 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
                 const VerticalDivider(width: 8),
 
+                IconButton(
+                  icon: Icon(
+                    _showVoiceButton ? Icons.mic : Icons.mic_off,
+                    size: 20,
+                  ),
+                  onPressed: _toggleVoiceButton,
+                  color: _showVoiceButton ? null : Colors.grey,
+                  tooltip: _showVoiceButton
+                      ? 'Hide Voice Button'
+                      : 'Show Voice Button',
+                ),
                 IconButton(
                   icon: Icon(
                     _showCustomKeyboard
@@ -544,20 +576,21 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               ],
             ),
 
-            // Floating Voice Button
-            FutureBuilder<SharedPreferences>(
-              future: SharedPreferences.getInstance(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const SizedBox.shrink();
-                return FloatingVoiceButton(
-                  prefs: snapshot.data!,
-                  isRecording: terminalState.isRecording,
-                  isTranscribing: terminalState.isTranscribing,
-                  recordingDuration: terminalState.recordingDuration,
-                  onPressed: () => _handleVoiceButton(terminalState),
-                );
-              },
-            ),
+            // Floating Voice Button (only when enabled by user)
+            if (_showVoiceButton)
+              FutureBuilder<SharedPreferences>(
+                future: SharedPreferences.getInstance(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) return const SizedBox.shrink();
+                  return FloatingVoiceButton(
+                    prefs: snapshot.data!,
+                    isRecording: terminalState.isRecording,
+                    isTranscribing: terminalState.isTranscribing,
+                    recordingDuration: terminalState.recordingDuration,
+                    onPressed: () => _handleVoiceButton(terminalState),
+                  );
+                },
+              ),
           ],
         ),
       ),

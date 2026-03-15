@@ -17,6 +17,8 @@ class ChatAudioTile extends StatefulWidget {
   final ValueChanged<Duration>? onSeek;
   final VoidCallback? onSkipBackward;
   final VoidCallback? onSkipForward;
+  final double volume;
+  final ValueChanged<double>? onVolumeChanged;
 
   const ChatAudioTile({
     super.key,
@@ -36,6 +38,8 @@ class ChatAudioTile extends StatefulWidget {
     this.onSeek,
     this.onSkipBackward,
     this.onSkipForward,
+    this.volume = 1.0,
+    this.onVolumeChanged,
   });
 
   @override
@@ -264,6 +268,26 @@ class _ChatAudioTileState extends State<ChatAudioTile> {
                       ),
                       padding: EdgeInsets.zero,
                     ),
+                    const SizedBox(width: 4),
+                    Builder(
+                      builder: (ctx) => IconButton(
+                        icon: Icon(
+                          _volumeIcon(widget.volume),
+                          size: 16,
+                          color: widget.textColor.withValues(alpha: 0.8),
+                        ),
+                        onPressed: widget.onVolumeChanged != null
+                            ? () => _showVolumePopup(ctx)
+                            : null,
+                        visualDensity: VisualDensity.compact,
+                        constraints: const BoxConstraints(
+                          minWidth: 26,
+                          minHeight: 26,
+                        ),
+                        padding: EdgeInsets.zero,
+                        tooltip: 'Volume',
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -271,6 +295,50 @@ class _ChatAudioTileState extends State<ChatAudioTile> {
           ),
         ],
       ),
+    );
+  }
+
+  IconData _volumeIcon(double v) {
+    if (v == 0.0) return Icons.volume_off;
+    if (v < 0.4) return Icons.volume_down;
+    return Icons.volume_up;
+  }
+
+  void _showVolumePopup(BuildContext context) {
+    final RenderBox button = context.findRenderObject()! as RenderBox;
+    final RenderBox overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(
+          button.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final accentColor = widget.isDark
+        ? const Color(0xFF6EE7B7)
+        : const Color(0xFF047857);
+    showMenu<void>(
+      context: context,
+      position: position,
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      color: widget.isDark ? const Color(0xFF1E293B) : Colors.white,
+      items: [
+        PopupMenuItem<void>(
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: _VolumeSliderPopupContent(
+            initialVolume: widget.volume,
+            isDark: widget.isDark,
+            accentColor: accentColor,
+            onVolumeChanged: widget.onVolumeChanged,
+          ),
+        ),
+      ],
     );
   }
 
@@ -335,5 +403,80 @@ class _ChatAudioTileState extends State<ChatAudioTile> {
     final mins = totalSeconds ~/ 60;
     final secs = totalSeconds % 60;
     return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+}
+
+class _VolumeSliderPopupContent extends StatefulWidget {
+  final double initialVolume;
+  final bool isDark;
+  final Color accentColor;
+  final ValueChanged<double>? onVolumeChanged;
+
+  const _VolumeSliderPopupContent({
+    required this.initialVolume,
+    required this.isDark,
+    required this.accentColor,
+    this.onVolumeChanged,
+  });
+
+  @override
+  State<_VolumeSliderPopupContent> createState() =>
+      _VolumeSliderPopupContentState();
+}
+
+class _VolumeSliderPopupContentState extends State<_VolumeSliderPopupContent> {
+  late double _local;
+
+  @override
+  void initState() {
+    super.initState();
+    _local = widget.initialVolume;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final iconColor = widget.isDark
+        ? Colors.grey.shade400
+        : Colors.grey.shade600;
+    return SizedBox(
+      width: 200,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Icon(
+              _local == 0 ? Icons.volume_off : Icons.volume_down,
+              size: 16,
+              color: iconColor,
+            ),
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 3,
+                  activeTrackColor: widget.accentColor,
+                  inactiveTrackColor:
+                      widget.accentColor.withValues(alpha: 0.25),
+                  thumbColor: widget.accentColor,
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 7),
+                  overlayShape:
+                      const RoundSliderOverlayShape(overlayRadius: 14),
+                ),
+                child: Slider(
+                  value: _local,
+                  min: 0.0,
+                  max: 1.0,
+                  onChanged: (v) {
+                    setState(() => _local = v);
+                    widget.onVolumeChanged?.call(v);
+                  },
+                ),
+              ),
+            ),
+            Icon(Icons.volume_up, size: 16, color: iconColor),
+          ],
+        ),
+      ),
+    );
   }
 }

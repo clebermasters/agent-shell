@@ -18,6 +18,7 @@ class _FileMediaViewerScreenState extends ConsumerState<FileMediaViewerScreen> {
   AudioPlayer? _player;
   Uint8List? _loadedBytes;
   bool _playerReady = false;
+  double _audioVolume = 1.0;
 
   @override
   void dispose() {
@@ -30,6 +31,7 @@ class _FileMediaViewerScreenState extends ConsumerState<FileMediaViewerScreen> {
     _loadedBytes = bytes;
     _player?.dispose();
     _player = AudioPlayer();
+    await _player!.setVolume(_audioVolume);
     try {
       await _player!.setAudioSource(_BytesAudioSource(bytes, mimeType));
       if (mounted) setState(() => _playerReady = true);
@@ -240,6 +242,11 @@ class _FileMediaViewerScreenState extends ConsumerState<FileMediaViewerScreen> {
                             player.seek(
                               target > duration ? duration : target,
                             );
+                          },
+                          volume: _audioVolume,
+                          onVolumeChanged: (v) {
+                            setState(() => _audioVolume = v);
+                            _player?.setVolume(v);
                           },
                         );
                       },

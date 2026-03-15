@@ -290,8 +290,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
           .map((msg) => _parseMessage(msg as Map<String, dynamic>))
           .toList();
 
-      // Append new messages to existing list
-      final allMessages = [...state.messages, ...newMessages];
+      // Prepend older messages at the beginning of the list
+      final allMessages = [...newMessages, ...state.messages];
 
       state = state.copyWith(
         messages: allMessages,

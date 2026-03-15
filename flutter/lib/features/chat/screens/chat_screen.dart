@@ -45,6 +45,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   static const double _bottomThreshold = 80.0;
   PlatformFile? _selectedFile;
   bool _isUploading = false;
+  // Scroll anchor: saved before a load-more chunk is prepended
+  double? _prependAnchorExtent;
 
   bool get isDarkMode {
     return Theme.of(context).brightness == Brightness.dark;
@@ -111,6 +113,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (chatState.hasMoreMessages &&
           !chatState.isLoadingMore &&
           !chatState.isLoading) {
+        // Save current maxScrollExtent so we can restore position after prepend
+        if (_scrollController.hasClients) {
+          _prependAnchorExtent = _scrollController.position.maxScrollExtent;
+        }
         ref.read(chatProvider.notifier).loadMoreMessages();
       }
     }
@@ -448,6 +454,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       (prev, next) {
         if ((next ?? 0) > (prev ?? 0) && _autoScroll) {
           _scrollToBottom();
+        }
+      },
+    );
+
+    // After load-more chunk is prepended, restore scroll position so the
+    // user stays anchored to what they were already reading.
+    ref.listen(
+      chatProvider.select((s) => s.isLoadingMore),
+      (wasLoading, isLoading) {
+        if (wasLoading == true && isLoading == false) {
+          final anchor = _prependAnchorExtent;
+          _prependAnchorExtent = null;
+          if (anchor != null && _scrollController.hasClients) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted || !_scrollController.hasClients) return;
+              final newExtent = _scrollController.position.maxScrollExtent;
+              final added = newExtent - anchor;
+              if (added > 0) {
+                _isProgrammaticScroll = true;
+                _scrollController.jumpTo(
+                  _scrollController.position.pixels + added,
+                );
+                _isProgrammaticScroll = false;
+              }
+            });
+          }
         }
       },
     );

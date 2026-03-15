@@ -282,6 +282,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         // Chat handlers — delegated to chat_cmds
         WebSocketMessage::WatchChatLog { .. }
         | WebSocketMessage::WatchAcpChatLog { .. }
+        | WebSocketMessage::LoadMoreChatHistory { .. }
         | WebSocketMessage::UnwatchChatLog
         | WebSocketMessage::ClearChatLog { .. }
         | WebSocketMessage::SendFileToChat { .. }

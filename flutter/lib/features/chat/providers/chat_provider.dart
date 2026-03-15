@@ -132,7 +132,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _connectionSubscription = ws.connectionState.listen((connected) {
       if (connected && state.isAcp && state.sessionName != null) {
         final rawId = state.sessionName!.replaceFirst('acp_', '');
-        _ws!.watchAcpChatLog(rawId, limit: 500);
+        _ws!.watchAcpChatLog(rawId, limit: 30);
       }
     });
   }
@@ -797,7 +797,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       windowIndex: 0,
       isAcp: true,
     );
-    _ws!.watchAcpChatLog(sessionName, limit: 500);
+    _ws!.watchAcpChatLog(sessionName, limit: 30);
   }
 
   void watchChatLog(String sessionName, int windowIndex, {int? limit}) {

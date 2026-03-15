@@ -13,6 +13,7 @@ pub(crate) async fn handle(
         WebSocketMessage::WatchChatLog {
             session_name,
             window_index,
+            limit,
         } => {
             info!(
                 "Starting chat log watch for {}:{}",
@@ -56,7 +57,7 @@ pub(crate) async fn handle(
                         // RecommendedWatcher must be kept alive for as long
                         // as we want notifications.
                         let _watcher =
-                            match crate::chat_log::watcher::watch_log_file(&path, tool, event_tx, cleared_at)
+                            match crate::chat_log::watcher::watch_log_file(&path, tool, event_tx, cleared_at, limit)
                                 .await
                             {
                                 Ok(w) => w,
@@ -77,7 +78,7 @@ pub(crate) async fn handle(
                         let session_name_owned = session_name.clone();
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
-                                crate::chat_log::ChatLogEvent::History { messages, tool } => {
+                                crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count } => {
                                     let persisted_messages = match chat_event_store
                                         .list_messages(&session_name_owned, window_index)
                                     {
@@ -103,6 +104,8 @@ pub(crate) async fn handle(
                                         window_index,
                                         messages: merged_messages,
                                         tool: Some(tool),
+                                        has_more,
+                                        total_count,
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::NewMessage { message } => {
@@ -145,7 +148,7 @@ pub(crate) async fn handle(
                 *handle_guard = Some(handle);
             }
         }
-        WebSocketMessage::WatchAcpChatLog { session_id, window_index } => {
+        WebSocketMessage::WatchAcpChatLog { session_id, window_index, limit } => {
             let window_index = window_index.unwrap_or(0);
             let session_key = format!("acp_{}", session_id);
 
@@ -220,9 +223,19 @@ pub(crate) async fn handle(
                     .chain(overlay)
                     .collect();
                 combined.sort_by_key(|(t, _)| *t);
-                let messages: Vec<crate::chat_log::ChatMessage> = combined.into_iter().map(|(_, m)| m).collect();
+                let all_messages: Vec<crate::chat_log::ChatMessage> = combined.into_iter().map(|(_, m)| m).collect();
 
-                // 6. Send history
+                // 6. Apply pagination limit
+                let limit_n = limit.unwrap_or(30);
+                let total_count = all_messages.len();
+                let has_more = total_count > limit_n;
+                let messages = if has_more {
+                    all_messages[total_count - limit_n..].to_vec()
+                } else {
+                    all_messages
+                };
+
+                // 7. Send history
                 let _ = send_message(
                     &message_tx,
                     ServerMessage::ChatHistory {
@@ -233,6 +246,8 @@ pub(crate) async fn handle(
                             cwd: std::path::PathBuf::from("/"),
                             pid: 0,
                         }),
+                        has_more,
+                        total_count,
                     },
                 ).await;
 
@@ -278,6 +293,89 @@ pub(crate) async fn handle(
             });
 
             *chat_log_handle.lock().await = Some(handle);
+        }
+        WebSocketMessage::LoadMoreChatHistory {
+            session_name,
+            window_index,
+            offset,
+            limit,
+        } => {
+            let message_tx = state.message_tx.clone();
+            let chat_clear_store = state.chat_clear_store.clone();
+
+            if session_name.starts_with("acp_") {
+                // ACP session: re-fetch full history and slice the requested page
+                let session_id = session_name[4..].to_string();
+                let session_key = session_name.clone();
+
+                tokio::spawn(async move {
+                    let db_path = match crate::chat_log::watcher::find_opencode_db() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let _ = send_message(&message_tx, ServerMessage::ChatLogError {
+                                error: format!("OpenCode DB not found: {}", e),
+                            }).await;
+                            return;
+                        }
+                    };
+
+                    let cleared_at = chat_clear_store.get_cleared_at(&session_key, window_index).await;
+
+                    let (opencode_messages, _) = tokio::task::spawn_blocking(move || {
+                        crate::chat_log::opencode_parser::fetch_all_messages(&db_path, &session_id, cleared_at)
+                    }).await.unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {}", e)))
+                        .unwrap_or_else(|e| { tracing::warn!("Failed to read OpenCode history: {}", e); (vec![], 0) });
+
+                    let total_count = opencode_messages.len();
+                    let start = total_count.saturating_sub(offset + limit);
+                    let end = total_count.saturating_sub(offset);
+                    let chunk: Vec<_> = opencode_messages[start..end].to_vec();
+                    let has_more = start > 0;
+
+                    let _ = send_message(&message_tx, ServerMessage::ChatHistoryChunk {
+                        session_name: session_key,
+                        window_index,
+                        messages: chunk,
+                        has_more,
+                    }).await;
+                });
+            } else {
+                // Claude Code session: re-parse log file and slice the requested page
+                let session_name_owned = session_name.clone();
+                tokio::spawn(async move {
+                    let cleared_at = chat_clear_store.get_cleared_at(&session_name_owned, window_index).await;
+
+                    let (path, tool) = match crate::chat_log::watcher::detect_log_file(&session_name_owned, window_index).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let _ = send_message(&message_tx, ServerMessage::ChatLogError {
+                                error: format!("Failed to detect log file: {}", e),
+                            }).await;
+                            return;
+                        }
+                    };
+
+                    // Spawn a one-shot channel to collect the initial History event.
+                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                    if crate::chat_log::watcher::watch_log_file(&path, tool, tx, cleared_at, None).await.is_err() {
+                        return;
+                    }
+                    if let Some(crate::chat_log::ChatLogEvent::History { messages, .. }) = rx.recv().await {
+                        let total_count = messages.len();
+                        let start = total_count.saturating_sub(offset + limit);
+                        let end = total_count.saturating_sub(offset);
+                        let chunk: Vec<_> = messages[start..end].to_vec();
+                        let has_more = start > 0;
+
+                        let _ = send_message(&message_tx, ServerMessage::ChatHistoryChunk {
+                            session_name: session_name_owned,
+                            window_index,
+                            messages: chunk,
+                            has_more,
+                        }).await;
+                    }
+                });
+            }
         }
         WebSocketMessage::UnwatchChatLog => {
             info!("Stopping chat log watch");
@@ -369,6 +467,7 @@ pub(crate) async fn handle(
                             tool.clone(),
                             event_tx,
                             cleared_at,
+                            None,
                         )
                         .await
                         {
@@ -389,7 +488,7 @@ pub(crate) async fn handle(
                         // Forward events to WebSocket
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
-                                crate::chat_log::ChatLogEvent::History { messages, tool } => {
+                                crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count } => {
                                     let persisted_messages = match chat_event_store
                                         .list_messages(&session_name_owned, window_index_owned)
                                     {
@@ -414,6 +513,8 @@ pub(crate) async fn handle(
                                         window_index: window_index_owned,
                                         messages: merged_messages,
                                         tool: Some(tool),
+                                        has_more,
+                                        total_count,
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::NewMessage { message } => {

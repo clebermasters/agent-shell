@@ -238,6 +238,7 @@ pub enum WebSocketMessage {
         session_name: String,
         #[serde(rename = "windowIndex")]
         window_index: u32,
+        limit: Option<usize>,
     },
     // ACP chat log watching (direct by session ID)
     WatchAcpChatLog {
@@ -245,6 +246,16 @@ pub enum WebSocketMessage {
         session_id: String,
         #[serde(rename = "windowIndex")]
         window_index: Option<u32>,
+        limit: Option<usize>,
+    },
+    // Load more chat history (pagination)
+    LoadMoreChatHistory {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        offset: usize,
+        limit: usize,
     },
     UnwatchChatLog,
     // Clear chat history for a session
@@ -512,6 +523,19 @@ pub enum ServerMessage {
         window_index: u32,
         messages: Vec<crate::chat_log::ChatMessage>,
         tool: Option<crate::chat_log::AiTool>,
+        #[serde(rename = "hasMore")]
+        has_more: bool,
+        #[serde(rename = "totalCount")]
+        total_count: usize,
+    },
+    ChatHistoryChunk {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        messages: Vec<crate::chat_log::ChatMessage>,
+        #[serde(rename = "hasMore")]
+        has_more: bool,
     },
     ChatEvent {
         #[serde(rename = "sessionName")]

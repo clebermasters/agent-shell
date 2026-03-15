@@ -4,6 +4,72 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/dotfile.dart';
 import '../providers/dotfiles_provider.dart';
 
+class _HighlightingController extends TextEditingController {
+  List<int> matches = [];
+  int activeIndex = -1;
+  int queryLength = 0;
+
+  void updateHighlights({
+    required List<int> matches,
+    required int activeIndex,
+    required int queryLength,
+  }) {
+    this.matches = matches;
+    this.activeIndex = activeIndex;
+    this.queryLength = queryLength;
+    notifyListeners();
+  }
+
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    if (matches.isEmpty || queryLength == 0) {
+      return TextSpan(text: text, style: style);
+    }
+
+    final spans = <TextSpan>[];
+    int cursor = 0;
+
+    for (int i = 0; i < matches.length; i++) {
+      final start = matches[i];
+      final end = start + queryLength;
+
+      if (start > cursor) {
+        spans.add(TextSpan(
+          text: text.substring(cursor, start),
+          style: style,
+        ));
+      }
+
+      final isActive = i == activeIndex;
+      spans.add(TextSpan(
+        text: text.substring(start, end),
+        style: style?.copyWith(
+          backgroundColor: isActive
+              ? Colors.orange[600]!.withValues(alpha: 0.9)
+              : Colors.amber[300]!.withValues(alpha: 0.35),
+          color: isActive ? Colors.white : null,
+          fontWeight: isActive ? FontWeight.bold : null,
+        ),
+      ));
+
+      cursor = end;
+    }
+
+    if (cursor < text.length) {
+      spans.add(TextSpan(
+        text: text.substring(cursor),
+        style: style,
+      ));
+    }
+
+    return TextSpan(children: spans);
+  }
+}
+
 class DotfileEditorScreen extends ConsumerStatefulWidget {
   const DotfileEditorScreen({super.key});
 
@@ -13,7 +79,7 @@ class DotfileEditorScreen extends ConsumerStatefulWidget {
 }
 
 class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
-  final TextEditingController _controller = TextEditingController();
+  final _HighlightingController _controller = _HighlightingController();
   final FocusNode _focusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
   final ScrollController _hScrollController = ScrollController();
@@ -23,6 +89,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
   final TextEditingController _searchController = TextEditingController();
   int _searchIndex = 0;
   List<int> _searchMatches = [];
+  bool _caseSensitive = false;
 
   double _fontSize = 14.0;
   double _scaleStartFontSize = 14.0;
@@ -66,12 +133,14 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
   }
 
   void _findMatches() {
-    final query = _searchController.text.toLowerCase();
-    if (query.isEmpty) {
+    final rawQuery = _searchController.text;
+    if (rawQuery.isEmpty) {
       _searchMatches = [];
+      _controller.updateHighlights(matches: [], activeIndex: -1, queryLength: 0);
       return;
     }
-    final content = _controller.text.toLowerCase();
+    final query = _caseSensitive ? rawQuery : rawQuery.toLowerCase();
+    final content = _caseSensitive ? _controller.text : _controller.text.toLowerCase();
     final matches = <int>[];
     int index = 0;
     while (true) {
@@ -82,6 +151,11 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     }
     _searchMatches = matches;
     _searchIndex = 0;
+    _controller.updateHighlights(
+      matches: _searchMatches,
+      activeIndex: _searchMatches.isEmpty ? -1 : _searchIndex,
+      queryLength: rawQuery.length,
+    );
   }
 
   void _jumpToNextMatch() {
@@ -89,6 +163,11 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     setState(() {
       _searchIndex = (_searchIndex + 1) % _searchMatches.length;
     });
+    _controller.updateHighlights(
+      matches: _searchMatches,
+      activeIndex: _searchIndex,
+      queryLength: _searchController.text.length,
+    );
     _highlightMatch();
   }
 
@@ -98,6 +177,11 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
       _searchIndex =
           (_searchIndex - 1 + _searchMatches.length) % _searchMatches.length;
     });
+    _controller.updateHighlights(
+      matches: _searchMatches,
+      activeIndex: _searchIndex,
+      queryLength: _searchController.text.length,
+    );
     _highlightMatch();
   }
 
@@ -263,6 +347,12 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                       _showSearch = !_showSearch;
                       if (!_showSearch) {
                         _searchController.clear();
+                        _searchMatches = [];
+                        _controller.updateHighlights(
+                          matches: [],
+                          activeIndex: -1,
+                          queryLength: 0,
+                        );
                       }
                     });
                   },
@@ -511,6 +601,43 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
             style: TextStyle(
               fontSize: 12,
               color: isDark ? Colors.grey[400] : Colors.grey[600],
+            ),
+          ),
+          const SizedBox(width: 4),
+          Tooltip(
+            message: 'Case sensitive',
+            child: GestureDetector(
+              onTap: () {
+                setState(() => _caseSensitive = !_caseSensitive);
+                _findMatches();
+              },
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: _caseSensitive
+                      ? const Color(0xFF6366F1).withValues(alpha: 0.25)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: _caseSensitive
+                        ? const Color(0xFF6366F1)
+                        : Colors.transparent,
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    'Aa',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: _caseSensitive
+                          ? const Color(0xFF6366F1)
+                          : (isDark ? Colors.grey[400] : Colors.grey[600]),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 4),

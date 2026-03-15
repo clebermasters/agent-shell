@@ -5,6 +5,7 @@ import '../../../data/models/dotfile.dart';
 import '../../../data/models/file_entry.dart';
 import '../../dotfiles/providers/dotfiles_provider.dart';
 import '../../dotfiles/screens/dotfile_editor_screen.dart';
+import '../../dotfiles/screens/file_media_viewer_screen.dart';
 import '../providers/file_browser_provider.dart';
 
 class FileBrowserScreen extends ConsumerStatefulWidget {
@@ -48,20 +49,38 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen> {
   Color get textSecondary =>
       isDarkMode ? Colors.grey.shade400 : const Color(0xFF64748B);
 
+  static const _imageExts = {
+    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp',
+  };
+  static const _audioExts = {
+    'mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac',
+  };
+
+  String _ext(String name) =>
+      name.contains('.') ? name.split('.').last.toLowerCase() : '';
+
   void _openFile(FileEntry entry) {
-    final dotFile = DotFile(
-      path: entry.path,
-      name: entry.name,
-      isDirectory: false,
-      size: entry.size,
-      modified: entry.modified,
-      exists: true,
-      writable: true,
-    );
-    ref.read(dotfilesProvider.notifier).selectFile(dotFile);
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const DotfileEditorScreen()),
-    );
+    final ext = _ext(entry.name);
+    if (_imageExts.contains(ext) || _audioExts.contains(ext)) {
+      ref.read(dotfilesProvider.notifier).selectBinaryFile(entry);
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const FileMediaViewerScreen()),
+      );
+    } else {
+      final dotFile = DotFile(
+        path: entry.path,
+        name: entry.name,
+        isDirectory: false,
+        size: entry.size,
+        modified: entry.modified,
+        exists: true,
+        writable: true,
+      );
+      ref.read(dotfilesProvider.notifier).selectFile(dotFile);
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const DotfileEditorScreen()),
+      );
+    }
   }
 
   void _navigateUp(String currentPath) {
@@ -467,8 +486,17 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen> {
       case 'jpeg':
       case 'png':
       case 'gif':
+      case 'webp':
+      case 'bmp':
       case 'svg':
         return Icons.image;
+      case 'mp3':
+      case 'wav':
+      case 'ogg':
+      case 'm4a':
+      case 'aac':
+      case 'flac':
+        return Icons.audiotrack;
       default:
         return Icons.insert_drive_file;
     }
@@ -503,8 +531,17 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen> {
       case 'jpeg':
       case 'png':
       case 'gif':
+      case 'webp':
+      case 'bmp':
       case 'svg':
         return Colors.green.shade400;
+      case 'mp3':
+      case 'wav':
+      case 'ogg':
+      case 'm4a':
+      case 'aac':
+      case 'flac':
+        return Colors.purple.shade400;
       default:
         return textSecondary;
     }

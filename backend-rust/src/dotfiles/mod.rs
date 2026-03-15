@@ -329,6 +329,38 @@ impl DotFilesManager {
         format!("{:x}", hasher.finish())
     }
 
+    /// Read a file's raw bytes (for images, audio, etc.)
+    pub async fn read_binary_file(&self, path: &str) -> Result<(Vec<u8>, &'static str)> {
+        let file_path = self.validate_and_resolve_path(path)?;
+
+        if !self.is_readable(&file_path) {
+            return Err(anyhow::anyhow!("File is not readable: {}", path));
+        }
+
+        let bytes = fs::read(&file_path)
+            .with_context(|| format!("Failed to read file: {}", path))?;
+        let mime = Self::detect_mime_type(&file_path);
+
+        info!("Read binary file: {} ({} bytes, {})", path, bytes.len(), mime);
+        Ok((bytes, mime))
+    }
+
+    fn detect_mime_type(path: &Path) -> &'static str {
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("jpg") | Some("jpeg") => "image/jpeg",
+            Some("png") => "image/png",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            Some("bmp") => "image/bmp",
+            Some("mp3") => "audio/mpeg",
+            Some("wav") => "audio/wav",
+            Some("ogg") => "audio/ogg",
+            Some("m4a") | Some("aac") => "audio/aac",
+            Some("flac") => "audio/flac",
+            _ => "application/octet-stream",
+        }
+    }
+
     /// Get default templates for common config files
     pub fn get_templates(&self) -> Vec<DotFileTemplate> {
         vec![

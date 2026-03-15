@@ -117,6 +117,32 @@ pub(crate) async fn handle(
             send_message(tx, response).await?;
         }
 
+        WebSocketMessage::ReadBinaryFile { path } => {
+            match crate::dotfiles::DOTFILES_MANAGER.read_binary_file(&path).await {
+                Ok((bytes, mime_type)) => {
+                    use base64::Engine;
+                    let content_base64 =
+                        base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    let response = ServerMessage::BinaryFileContent {
+                        path,
+                        content_base64,
+                        mime_type: mime_type.to_string(),
+                        error: None,
+                    };
+                    send_message(tx, response).await?;
+                }
+                Err(e) => {
+                    let response = ServerMessage::BinaryFileContent {
+                        path,
+                        content_base64: String::new(),
+                        mime_type: String::new(),
+                        error: Some(format!("{}", e)),
+                    };
+                    send_message(tx, response).await?;
+                }
+            }
+        }
+
         _ => {
             error!("dotfiles_cmds::handle called with non-dotfiles message");
         }

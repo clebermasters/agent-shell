@@ -349,6 +349,10 @@ pub enum WebSocketMessage {
         #[serde(rename = "sessionName")]
         session_name: String,
     },
+    // Binary file reading (images, audio, etc.)
+    ReadBinaryFile {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -709,5 +713,15 @@ pub enum ServerMessage {
         #[serde(rename = "sessionName")]
         session_name: String,
         cwd: String,
+    },
+    // Binary file content response
+    BinaryFileContent {
+        path: String,
+        #[serde(rename = "contentBase64")]
+        content_base64: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
 }

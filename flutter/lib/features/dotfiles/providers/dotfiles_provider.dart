@@ -1,5 +1,8 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/dotfile.dart';
+import '../../../data/models/file_entry.dart';
 import '../../../data/services/websocket_service.dart';
 import '../../sessions/providers/sessions_provider.dart';
 
@@ -11,6 +14,8 @@ class DotfilesState {
   final String? error;
   final List<DotFileVersion> versions;
   final List<DotFileTemplate> templates;
+  final Uint8List? binaryContent;
+  final String? fileMimeType;
 
   const DotfilesState({
     this.files = const [],
@@ -20,6 +25,8 @@ class DotfilesState {
     this.error,
     this.versions = const [],
     this.templates = const [],
+    this.binaryContent,
+    this.fileMimeType,
   });
 
   DotfilesState copyWith({
@@ -30,6 +37,8 @@ class DotfilesState {
     String? error,
     List<DotFileVersion>? versions,
     List<DotFileTemplate>? templates,
+    Uint8List? binaryContent,
+    String? fileMimeType,
   }) {
     return DotfilesState(
       files: files ?? this.files,
@@ -39,6 +48,8 @@ class DotfilesState {
       error: error,
       versions: versions ?? this.versions,
       templates: templates ?? this.templates,
+      binaryContent: binaryContent,
+      fileMimeType: fileMimeType,
     );
   }
 }
@@ -106,6 +117,25 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
               [];
           state = state.copyWith(templates: templates, isLoading: false);
           break;
+        case 'binary-file-content':
+          final b64 = message['contentBase64'] as String? ?? '';
+          final mimeType = message['mimeType'] as String?;
+          final binaryError = message['error'] as String?;
+          if (binaryError != null) {
+            state = state.copyWith(
+              error: binaryError,
+              isLoading: false,
+              binaryContent: null,
+              fileMimeType: null,
+            );
+          } else {
+            state = state.copyWith(
+              binaryContent: b64.isEmpty ? null : base64Decode(b64),
+              fileMimeType: mimeType,
+              isLoading: false,
+            );
+          }
+          break;
         case 'error':
           state = state.copyWith(
             error: message['message'] as String?,
@@ -137,6 +167,26 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
       versions: [],
     );
     _wsService.requestDotfileContent(file.path);
+  }
+
+  void selectBinaryFile(FileEntry entry) {
+    final dotFile = DotFile(
+      path: entry.path,
+      name: entry.name,
+      isDirectory: false,
+      size: entry.size,
+      modified: entry.modified,
+      exists: true,
+      writable: false,
+    );
+    state = DotfilesState(
+      files: state.files,
+      selectedFile: dotFile,
+      isLoading: true,
+      binaryContent: null,
+      fileMimeType: null,
+    );
+    _wsService.requestBinaryFileContent(entry.path);
   }
 
   void browseFile(String path) {

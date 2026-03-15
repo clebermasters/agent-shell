@@ -310,6 +310,10 @@ class WebSocketService {
     send({'type': 'read-dotfile', 'path': path});
   }
 
+  void requestBinaryFileContent(String path) {
+    send({'type': 'read-binary-file', 'path': path});
+  }
+
   void saveDotfile(String path, String content) {
     send({'type': 'write-dotfile', 'path': path, 'content': content});
   }

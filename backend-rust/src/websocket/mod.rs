@@ -274,7 +274,8 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         | WebSocketMessage::WriteDotfile { .. }
         | WebSocketMessage::GetDotfileHistory { .. }
         | WebSocketMessage::RestoreDotfileVersion { .. }
-        | WebSocketMessage::GetDotfileTemplates => {
+        | WebSocketMessage::GetDotfileTemplates
+        | WebSocketMessage::ReadBinaryFile { .. } => {
             dotfiles_cmds::handle(msg, &state.message_tx).await?;
         }
 

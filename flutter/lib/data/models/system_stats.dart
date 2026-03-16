@@ -41,6 +41,9 @@ class SystemStats extends Equatable {
       final stats = json['stats'] as Map<String, dynamic>;
       final cpu = stats['cpu'] as Map<String, dynamic>?;
       final memory = stats['memory'] as Map<String, dynamic>?;
+      final disk = stats['disk'] as Map<String, dynamic>?;
+      final diskTotal = (disk?['total'] as num?)?.toInt() ?? 0;
+      final diskUsed = (disk?['used'] as num?)?.toInt() ?? 0;
 
       return SystemStats(
         cpuUsage: (cpu?['usage'] as num?)?.toDouble() ?? 0.0,
@@ -50,9 +53,9 @@ class SystemStats extends Equatable {
             : 0.0,
         memoryTotal: (memory?['total'] as num?)?.toInt() ?? 0,
         memoryUsed: (memory?['used'] as num?)?.toInt() ?? 0,
-        diskUsage: 0.0,
-        diskTotal: 0,
-        diskUsed: 0,
+        diskUsage: diskTotal > 0 ? (diskUsed / diskTotal * 100).toDouble() : 0.0,
+        diskTotal: diskTotal,
+        diskUsed: diskUsed,
         uptime: _formatUptime(stats['uptime'] as int? ?? 0),
         timestamp: DateTime.now(),
       );

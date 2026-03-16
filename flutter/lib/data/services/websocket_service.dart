@@ -501,6 +501,14 @@ class WebSocketService {
     send({'type': 'get-session-cwd', 'sessionName': sessionName});
   }
 
+  void deleteFiles(List<String> paths, {bool recursive = false}) {
+    send({'type': 'delete-files', 'paths': paths, 'recursive': recursive});
+  }
+
+  void renameFile(String path, String newName) {
+    send({'type': 'rename-file', 'path': path, 'newName': newName});
+  }
+
   void acpRespondPermission(String requestId, String optionId) {
     send({
       'type': 'acp-respond-permission',

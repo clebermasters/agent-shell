@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/config/app_config.dart';
+import '../../../core/providers.dart';
 import '../../../data/models/file_entry.dart';
 import '../../../data/services/websocket_service.dart';
 import '../../sessions/providers/sessions_provider.dart';
@@ -14,6 +17,8 @@ class FileBrowserState {
   final String? resolvedCwd;
   final SortMode sortMode;
   final bool showHidden;
+  final Set<String> selectedPaths;
+  final bool isSelectionMode;
 
   const FileBrowserState({
     this.currentPath = '',
@@ -23,6 +28,8 @@ class FileBrowserState {
     this.resolvedCwd,
     this.sortMode = SortMode.nameAsc,
     this.showHidden = false,
+    this.selectedPaths = const {},
+    this.isSelectionMode = false,
   });
 
   FileBrowserState copyWith({
@@ -33,6 +40,8 @@ class FileBrowserState {
     String? resolvedCwd,
     SortMode? sortMode,
     bool? showHidden,
+    Set<String>? selectedPaths,
+    bool? isSelectionMode,
   }) {
     return FileBrowserState(
       currentPath: currentPath ?? this.currentPath,
@@ -42,6 +51,8 @@ class FileBrowserState {
       resolvedCwd: resolvedCwd ?? this.resolvedCwd,
       sortMode: sortMode ?? this.sortMode,
       showHidden: showHidden ?? this.showHidden,
+      selectedPaths: selectedPaths ?? this.selectedPaths,
+      isSelectionMode: isSelectionMode ?? this.isSelectionMode,
     );
   }
 
@@ -86,9 +97,16 @@ class FileBrowserState {
 
 class FileBrowserNotifier extends StateNotifier<FileBrowserState> {
   final WebSocketService _wsService;
+  final SharedPreferences _prefs;
   StreamSubscription? _sub;
 
-  FileBrowserNotifier(this._wsService) : super(const FileBrowserState()) {
+  FileBrowserNotifier(this._wsService, this._prefs)
+      : super(FileBrowserState(
+          sortMode: SortMode.values[
+              _prefs.getInt(AppConfig.keyFileSortMode) ?? 0],
+          showHidden:
+              _prefs.getBool(AppConfig.keyFileShowHidden) ?? false,
+        )) {
     _sub = _wsService.messages.listen(_onMessage);
   }
 
@@ -115,6 +133,13 @@ class FileBrowserNotifier extends StateNotifier<FileBrowserState> {
           listFiles(cwd);
         }
         break;
+      case 'files-deleted':
+        clearSelection();
+        listFiles(state.currentPath);
+        break;
+      case 'file-renamed':
+        listFiles(state.currentPath);
+        break;
     }
   }
 
@@ -138,10 +163,60 @@ class FileBrowserNotifier extends StateNotifier<FileBrowserState> {
 
   void setSortMode(SortMode mode) {
     state = state.copyWith(sortMode: mode);
+    _prefs.setInt(AppConfig.keyFileSortMode, mode.index);
   }
 
   void toggleHidden() {
-    state = state.copyWith(showHidden: !state.showHidden);
+    final next = !state.showHidden;
+    state = state.copyWith(showHidden: next);
+    _prefs.setBool(AppConfig.keyFileShowHidden, next);
+  }
+
+  void toggleSelection(String path) {
+    final updated = Set<String>.from(state.selectedPaths);
+    if (updated.contains(path)) {
+      updated.remove(path);
+    } else {
+      updated.add(path);
+    }
+    state = state.copyWith(
+      selectedPaths: updated,
+      isSelectionMode: updated.isNotEmpty,
+    );
+  }
+
+  void selectAll() {
+    final allPaths = state.sortedEntries.map((e) => e.path).toSet();
+    state = state.copyWith(
+      selectedPaths: allPaths,
+      isSelectionMode: allPaths.isNotEmpty,
+    );
+  }
+
+  void clearSelection() {
+    state = state.copyWith(
+      selectedPaths: const {},
+      isSelectionMode: false,
+    );
+  }
+
+  void deleteSelected() {
+    if (state.selectedPaths.isEmpty) return;
+    final hasDirectories = state.entries
+        .where((e) => state.selectedPaths.contains(e.path))
+        .any((e) => e.isDirectory);
+    _wsService.deleteFiles(
+      state.selectedPaths.toList(),
+      recursive: hasDirectories,
+    );
+  }
+
+  void deleteSingle(String path, {bool recursive = false}) {
+    _wsService.deleteFiles([path], recursive: recursive);
+  }
+
+  void renameFile(String path, String newName) {
+    _wsService.renameFile(path, newName);
   }
 
   @override
@@ -155,6 +230,7 @@ final fileBrowserProvider =
     StateNotifierProvider.autoDispose<FileBrowserNotifier, FileBrowserState>(
   (ref) {
     final ws = ref.watch(sharedWebSocketServiceProvider);
-    return FileBrowserNotifier(ws);
+    final prefs = ref.watch(sharedPreferencesProvider);
+    return FileBrowserNotifier(ws, prefs);
   },
 );

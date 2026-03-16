@@ -160,11 +160,11 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
   }
 
   void selectFile(DotFile file) {
-    state = state.copyWith(
+    state = DotfilesState(
+      files: state.files,
       selectedFile: file,
-      fileContent: null,
       isLoading: true,
-      versions: [],
+      templates: state.templates,
     );
     _wsService.requestDotfileContent(file.path);
   }

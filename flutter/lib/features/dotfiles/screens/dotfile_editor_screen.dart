@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/config/app_config.dart';
+import '../../../core/providers.dart';
 import '../../../data/models/dotfile.dart';
 import '../providers/dotfiles_provider.dart';
+import '../widgets/file_preview_pane.dart';
 
 class _HighlightingController extends TextEditingController {
   List<int> matches = [];
@@ -86,6 +89,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
   bool _hasChanges = false;
   String _originalContent = '';
   bool _showSearch = false;
+  bool _showPreview = false;
   final TextEditingController _searchController = TextEditingController();
   int _searchIndex = 0;
   List<int> _searchMatches = [];
@@ -93,6 +97,17 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
 
   double _fontSize = 14.0;
   double _scaleStartFontSize = 14.0;
+
+  String _fileExt(DotFile? file) {
+    if (file == null) return '';
+    final name = file.name;
+    return name.contains('.') ? name.split('.').last.toLowerCase() : '';
+  }
+
+  bool _isPreviewable(DotFile? file) {
+    final ext = _fileExt(file);
+    return {'md', 'markdown', 'html', 'htm'}.contains(ext);
+  }
 
   int get _currentLine {
     if (!_controller.selection.isValid) return 1;
@@ -115,6 +130,10 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     _focusNode.addListener(_handleKeyPress);
     _searchController.addListener(_onSearchChanged);
     _controller.addListener(() => setState(() {}));
+    final prefs = ref.read(sharedPreferencesProvider);
+    final saved = prefs.getDouble(AppConfig.keyFileEditorFontSize);
+    if (saved != null) _fontSize = saved.clamp(10.0, 26.0);
+    _scaleStartFontSize = _fontSize;
   }
 
   void _handleKeyPress() {
@@ -304,16 +323,36 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                       foregroundColor: const Color(0xFF6366F1),
                     ),
                   ),
+                if (_isPreviewable(selectedFile))
+                  IconButton(
+                    icon: Icon(
+                      _showPreview ? Icons.edit : Icons.visibility,
+                      color: _showPreview
+                          ? const Color(0xFF6366F1)
+                          : (isDark ? Colors.grey[300] : Colors.grey[700]),
+                      size: 20,
+                    ),
+                    onPressed: () => setState(() => _showPreview = !_showPreview),
+                    tooltip: _showPreview ? 'Edit' : 'Preview',
+                  ),
                 IconButton(
                   icon: const Icon(Icons.zoom_in, size: 20),
-                  onPressed:
-                      _fontSize < 26 ? () => setState(() => _fontSize += 1) : null,
+                  onPressed: _fontSize < 26
+                      ? () {
+                          setState(() => _fontSize += 1);
+                          ref.read(sharedPreferencesProvider).setDouble(AppConfig.keyFileEditorFontSize, _fontSize);
+                        }
+                      : null,
                   tooltip: 'Zoom in',
                 ),
                 IconButton(
                   icon: const Icon(Icons.zoom_out, size: 20),
-                  onPressed:
-                      _fontSize > 10 ? () => setState(() => _fontSize -= 1) : null,
+                  onPressed: _fontSize > 10
+                      ? () {
+                          setState(() => _fontSize -= 1);
+                          ref.read(sharedPreferencesProvider).setDouble(AppConfig.keyFileEditorFontSize, _fontSize);
+                        }
+                      : null,
                   tooltip: 'Zoom out',
                 ),
                 IconButton(
@@ -386,20 +425,25 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
             ),
             body: dotfilesState.isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : Column(
-                    children: [
-                      if (_showSearch) _buildSearchBar(isDark),
-                      Expanded(
-                        child: Container(
-                          color: isDark
-                              ? const Color(0xFF1E1E1E)
-                              : Colors.white,
-                          child: _buildEditorWithLineNumbers(isDark),
-                        ),
+                : _showPreview && _isPreviewable(selectedFile)
+                    ? FilePreviewPane(
+                        content: _controller.text,
+                        extension: _fileExt(selectedFile),
+                      )
+                    : Column(
+                        children: [
+                          if (_showSearch) _buildSearchBar(isDark),
+                          Expanded(
+                            child: Container(
+                              color: isDark
+                                  ? const Color(0xFF1E1E1E)
+                                  : Colors.white,
+                              child: _buildEditorWithLineNumbers(isDark),
+                            ),
+                          ),
+                          _buildStatusBar(isDark),
+                        ],
                       ),
-                      _buildStatusBar(isDark),
-                    ],
-                  ),
           ),
         ),
       ),
@@ -417,6 +461,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
       onScaleStart: (_) => _scaleStartFontSize = _fontSize,
       onScaleUpdate: (d) => setState(
           () => _fontSize = (_scaleStartFontSize * d.scale).clamp(10.0, 26.0)),
+      onScaleEnd: (_) => ref.read(sharedPreferencesProvider).setDouble(AppConfig.keyFileEditorFontSize, _fontSize),
       child: SingleChildScrollView(
         controller: _scrollController,
         child: Row(

@@ -292,7 +292,9 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
 
         // File browser — delegated to file_cmds
         WebSocketMessage::ListFiles { .. }
-        | WebSocketMessage::GetSessionCwd { .. } => {
+        | WebSocketMessage::GetSessionCwd { .. }
+        | WebSocketMessage::DeleteFiles { .. }
+        | WebSocketMessage::RenameFile { .. } => {
             file_cmds::handle(msg, &state.message_tx).await?;
         }
 

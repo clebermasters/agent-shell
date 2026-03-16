@@ -374,6 +374,16 @@ pub enum WebSocketMessage {
     ReadBinaryFile {
         path: String,
     },
+    // File management
+    DeleteFiles {
+        paths: Vec<String>,
+        recursive: bool,
+    },
+    RenameFile {
+        path: String,
+        #[serde(rename = "newName")]
+        new_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -747,6 +757,18 @@ pub enum ServerMessage {
         #[serde(rename = "sessionName")]
         session_name: String,
         cwd: String,
+    },
+    // File management responses
+    FilesDeleted {
+        success: bool,
+        paths: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    FileRenamed {
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     // Binary file content response
     BinaryFileContent {

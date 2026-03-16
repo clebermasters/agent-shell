@@ -45,6 +45,9 @@ class AppConfig {
   static const String keyShowToolCalls = 'show_tool_calls';
   static const String keyWebAuthToken = 'web_auth_token';
   static const String chatDraftKeyPrefix = 'chat_draft_';
+  static const String keyFileSortMode = 'file_sort_mode';
+  static const String keyFileShowHidden = 'file_show_hidden';
+  static const String keyFileEditorFontSize = 'file_editor_font_size';
 
   // Build-time defaults
   static String get defaultServerList => BuildConfig.defaultServerList;

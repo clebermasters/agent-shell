@@ -22,6 +22,7 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
   late TextEditingController _tmuxController;
   bool _logOutput = false;
   bool _showAdvanced = false;
+  List<MapEntry<TextEditingController, TextEditingController>> _envEntries = [];
 
   bool get isEditing => widget.job != null;
 
@@ -63,6 +64,13 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
       text: widget.job?.tmuxSession ?? '',
     );
     _logOutput = widget.job?.logOutput ?? false;
+    final env = widget.job?.environment ?? {};
+    _envEntries = env.entries
+        .map((e) => MapEntry(
+              TextEditingController(text: e.key),
+              TextEditingController(text: e.value),
+            ))
+        .toList();
   }
 
   @override
@@ -72,6 +80,10 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
     _commandController.dispose();
     _emailController.dispose();
     _tmuxController.dispose();
+    for (final entry in _envEntries) {
+      entry.key.dispose();
+      entry.value.dispose();
+    }
     super.dispose();
   }
 
@@ -105,6 +117,7 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
       tmuxSession: _tmuxController.text.trim().isEmpty
           ? null
           : _tmuxController.text.trim(),
+      environment: _buildEnvironmentMap(),
     );
 
     if (isEditing) {
@@ -119,6 +132,33 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
   void _testCommand() {
     if (_commandController.text.trim().isEmpty) return;
     ref.read(cronProvider.notifier).testCommand(_commandController.text.trim());
+  }
+
+  Map<String, String>? _buildEnvironmentMap() {
+    final map = <String, String>{};
+    for (final entry in _envEntries) {
+      final key = entry.key.text.trim();
+      final value = entry.value.text.trim();
+      if (key.isNotEmpty) map[key] = value;
+    }
+    return map.isEmpty ? null : map;
+  }
+
+  void _addEnvEntry({String key = '', String value = ''}) {
+    setState(() {
+      _envEntries.add(MapEntry(
+        TextEditingController(text: key),
+        TextEditingController(text: value),
+      ));
+    });
+  }
+
+  void _removeEnvEntry(int index) {
+    setState(() {
+      _envEntries[index].key.dispose();
+      _envEntries[index].value.dispose();
+      _envEntries.removeAt(index);
+    });
   }
 
   @override
@@ -277,6 +317,68 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
                   hintText: 'session-name',
                   border: OutlineInputBorder(),
                 ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Environment Variables',
+                style: TextStyle(fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 6,
+                children: [
+                  for (final preset in ['PATH', 'HOME', 'TZ', 'LANG'])
+                    ActionChip(
+                      label: Text(preset),
+                      onPressed: () => _addEnvEntry(key: preset),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ..._envEntries.asMap().entries.map((entry) {
+                final i = entry.key;
+                final e = entry.value;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 2,
+                        child: TextField(
+                          controller: e.key,
+                          decoration: const InputDecoration(
+                            labelText: 'Key',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          style: const TextStyle(fontFamily: 'monospace'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 3,
+                        child: TextField(
+                          controller: e.value,
+                          decoration: const InputDecoration(
+                            labelText: 'Value',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                          style: const TextStyle(fontFamily: 'monospace'),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                        onPressed: () => _removeEnvEntry(i),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              TextButton.icon(
+                onPressed: _addEnvEntry,
+                icon: const Icon(Icons.add),
+                label: const Text('Add Variable'),
               ),
             ],
           ],

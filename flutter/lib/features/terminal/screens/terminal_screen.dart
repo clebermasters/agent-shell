@@ -46,6 +46,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   // Swipe-between-sessions state
   double _swipeDx = 0;
   String? _swipeHintName;
+  bool _showDots = false;
 
   // Voice button visibility (persisted)
   bool _showVoiceButton = true;
@@ -395,6 +396,32 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     );
   }
 
+  Widget _buildDotIndicator() {
+    final sessions = ref.read(sessionsProvider).sessions;
+    final currentIndex = sessions.indexWhere((s) => s.name == widget.sessionName);
+    if (sessions.length < 2 || currentIndex == -1) return const SizedBox.shrink();
+
+    return Center(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(sessions.length, (i) {
+          final active = i == currentIndex;
+          return Container(
+            width: active ? 8 : 6,
+            height: active ? 8 : 6,
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: active
+                  ? Colors.white.withOpacity(0.9)
+                  : Colors.white.withOpacity(0.35),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final terminalState = ref.watch(terminalProvider);
@@ -512,17 +539,25 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                   final sessions = ref.read(sessionsProvider).sessions;
                   if (sessions.length < 2) return;
                   setState(() {
-                    _swipeDx += details.delta.dx;
+                    _showDots = true;
                     final idx = sessions.indexWhere((s) => s.name == widget.sessionName);
                     if (idx == -1) return;
-                    if (_swipeDx < -60) {
-                      final next = sessions[(idx + 1) % sessions.length].name;
-                      _swipeHintName = '→ $next';
-                    } else if (_swipeDx > 60) {
-                      final prev = sessions[(idx - 1 + sessions.length) % sessions.length].name;
-                      _swipeHintName = '← $prev';
+                    final atStart = idx == 0;
+                    final atEnd = idx == sessions.length - 1;
+                    if ((atStart && details.delta.dx > 0) || (atEnd && details.delta.dx < 0)) {
+                      _swipeDx += details.delta.dx * 0.25;
+                      _swipeHintName = atStart ? '⟵ (start)' : '(end) ⟶';
                     } else {
-                      _swipeHintName = null;
+                      _swipeDx += details.delta.dx;
+                      if (_swipeDx < -60) {
+                        final next = sessions[(idx + 1) % sessions.length].name;
+                        _swipeHintName = '→ $next';
+                      } else if (_swipeDx > 60) {
+                        final prev = sessions[(idx - 1 + sessions.length) % sessions.length].name;
+                        _swipeHintName = '← $prev';
+                      } else {
+                        _swipeHintName = null;
+                      }
                     }
                   });
                 },
@@ -530,15 +565,28 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               ? null
               : (details) {
                   final dx = _swipeDx;
+                  final sessions = ref.read(sessionsProvider).sessions;
+                  final currentIndex = sessions.indexWhere((s) => s.name == widget.sessionName);
+                  final atStart = currentIndex == 0 && dx > 0;
+                  final atEnd = currentIndex == sessions.length - 1 && dx < 0;
                   setState(() {
                     _swipeDx = 0;
                     _swipeHintName = null;
                   });
+                  if (atStart || atEnd) {
+                    Future.delayed(const Duration(milliseconds: 600), () {
+                      if (mounted) setState(() => _showDots = false);
+                    });
+                    return;
+                  }
                   if (dx < -120) {
                     _switchToAdjacentSession(1);
                   } else if (dx > 120) {
                     _switchToAdjacentSession(-1);
                   }
+                  Future.delayed(const Duration(milliseconds: 600), () {
+                    if (mounted) setState(() => _showDots = false);
+                  });
                 },
           onHorizontalDragCancel: _isSelectionMode
               ? null
@@ -546,6 +594,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                   setState(() {
                     _swipeDx = 0;
                     _swipeHintName = null;
+                    _showDots = false;
                   });
                 },
           child: Stack(
@@ -721,6 +770,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                     onPressed: () => _handleVoiceButton(terminalState),
                   );
                 },
+              ),
+
+            // Dot position indicator
+            if (_showDots)
+              Positioned(
+                top: 36,
+                left: 0,
+                right: 0,
+                child: AnimatedOpacity(
+                  opacity: _showDots ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: _buildDotIndicator(),
+                ),
               ),
 
             // Swipe session hint overlay

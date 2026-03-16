@@ -22,6 +22,15 @@ pub(crate) async fn handle_get_stats(
         sys.refresh_memory();
         sys.refresh_cpu_usage();
         let load_avg = sysinfo::System::load_average();
+
+        let disks = sysinfo::Disks::new_with_refreshed_list();
+        let (disk_total, disk_free) = disks
+            .iter()
+            .find(|d| d.mount_point() == std::path::Path::new("/"))
+            .map(|d| (d.total_space(), d.available_space()))
+            .unwrap_or((0, 0));
+        let disk_used = disk_total.saturating_sub(disk_free);
+
         SystemStats {
             cpu: CpuInfo {
                 cores: sys.cpus().len(),
@@ -45,6 +54,16 @@ pub(crate) async fn handle_get_stats(
                     "{:.1}",
                     (sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0
                 ),
+            },
+            disk: DiskInfo {
+                total: disk_total,
+                used: disk_used,
+                free: disk_free,
+                percent: if disk_total > 0 {
+                    format!("{:.1}", disk_used as f64 / disk_total as f64 * 100.0)
+                } else {
+                    "0.0".to_string()
+                },
             },
             uptime: sysinfo::System::uptime(),
             hostname: sysinfo::System::host_name().unwrap_or_default(),

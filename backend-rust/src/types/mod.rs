@@ -27,10 +27,20 @@ pub struct TmuxWindow {
 pub struct SystemStats {
     pub cpu: CpuInfo,
     pub memory: MemoryInfo,
+    pub disk: DiskInfo,
     pub uptime: u64,
     pub hostname: String,
     pub platform: String,
     pub arch: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskInfo {
+    pub total: u64,
+    pub used: u64,
+    pub free: u64,
+    pub percent: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

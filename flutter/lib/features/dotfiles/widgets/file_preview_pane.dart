@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import 'html_preview.dart';
 
 class FilePreviewPane extends StatelessWidget {
   final String content;
@@ -23,15 +24,20 @@ class FilePreviewPane extends StatelessWidget {
     final bgColor = isDark ? const Color(0xFF1E1E1E) : Colors.white;
     final codeBg = isDark ? const Color(0xFF2D2D2D) : Colors.grey.shade100;
 
+    if (_isHtml) {
+      return Container(
+        color: bgColor,
+        child: HtmlPreviewWidget(content: content, isDark: isDark),
+      );
+    }
+
     return Container(
       color: bgColor,
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: _isMarkdown
             ? _buildMarkdownPreview(textColor, codeBg, isDark)
-            : _isHtml
-                ? _buildHtmlPreview(textColor)
-                : Text(content, style: TextStyle(color: textColor)),
+            : Text(content, style: TextStyle(color: textColor)),
       ),
     );
   }
@@ -112,20 +118,6 @@ class FilePreviewPane extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildHtmlPreview(Color textColor) {
-    return HtmlWidget(
-      content,
-      textStyle: TextStyle(color: textColor, fontSize: 14),
-      onTapUrl: (url) async {
-        final uri = Uri.tryParse(url);
-        if (uri != null) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        }
-        return true;
-      },
     );
   }
 }

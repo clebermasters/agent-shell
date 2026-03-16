@@ -90,6 +90,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
   String _originalContent = '';
   bool _showSearch = false;
   bool _showPreview = false;
+  bool _previewInitialized = false;
   final TextEditingController _searchController = TextEditingController();
   int _searchIndex = 0;
   List<int> _searchMatches = [];
@@ -256,6 +257,10 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     if (dotfilesState.fileContent != null && _originalContent.isEmpty) {
       _originalContent = dotfilesState.fileContent!;
       _controller.text = dotfilesState.fileContent!;
+      if (!_previewInitialized) {
+        _previewInitialized = true;
+        _showPreview = _isPreviewable(selectedFile);
+      }
     }
 
     return PopScope(

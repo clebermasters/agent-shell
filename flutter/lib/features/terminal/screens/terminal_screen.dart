@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -109,6 +110,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       terminalNotifier.terminalService.setInputProcessor(_processInput);
 
       _persistActiveSession();
+      _pushRecentTerminalSession();
 
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) {
@@ -214,15 +216,32 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     }
   }
 
+  void _pushRecentTerminalSession() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    final raw = prefs.getString(AppConfig.keyRecentTerminalSessions);
+    final list = raw != null ? List<String>.from(jsonDecode(raw)) : <String>[];
+    list.remove(widget.sessionName);
+    list.insert(0, widget.sessionName);
+    prefs.setString(AppConfig.keyRecentTerminalSessions, jsonEncode(list.take(3).toList()));
+  }
+
+  List<String> _getRecentTerminalSessions() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    final raw = prefs.getString(AppConfig.keyRecentTerminalSessions);
+    if (raw == null) return [];
+    final all = List<String>.from(jsonDecode(raw));
+    final live = ref.read(sessionsProvider).sessions.map((s) => s.name).toSet();
+    return all.where(live.contains).toList();
+  }
+
   void _switchToAdjacentSession(int direction) {
-    final sessions = ref.read(sessionsProvider).sessions;
-    if (sessions.isEmpty) return;
-    final currentIndex = sessions.indexWhere((s) => s.name == widget.sessionName);
-    if (currentIndex == -1) return;
-    final nextIndex = (currentIndex + direction) % sessions.length;
-    final nextSession = sessions[nextIndex].name;
+    final recent = _getRecentTerminalSessions();
+    final idx = recent.indexOf(widget.sessionName);
+    if (idx == -1) return;
+    final nextIdx = idx + direction;
+    if (nextIdx < 0 || nextIdx >= recent.length) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(
-      builder: (_) => TerminalScreen(sessionName: nextSession),
+      builder: (_) => TerminalScreen(sessionName: recent[nextIdx]),
     ));
   }
 
@@ -397,14 +416,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   }
 
   Widget _buildDotIndicator() {
-    final sessions = ref.read(sessionsProvider).sessions;
-    final currentIndex = sessions.indexWhere((s) => s.name == widget.sessionName);
-    if (sessions.length < 2 || currentIndex == -1) return const SizedBox.shrink();
+    final recent = _getRecentTerminalSessions();
+    final currentIndex = recent.indexOf(widget.sessionName);
+    if (recent.length < 2 || currentIndex == -1) return const SizedBox.shrink();
 
     return Center(
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: List.generate(sessions.length, (i) {
+        children: List.generate(recent.length, (i) {
           final active = i == currentIndex;
           return Container(
             width: active ? 8 : 6,
@@ -536,25 +555,23 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
           onHorizontalDragUpdate: _isSelectionMode
               ? null
               : (details) {
-                  final sessions = ref.read(sessionsProvider).sessions;
-                  if (sessions.length < 2) return;
+                  final recent = _getRecentTerminalSessions();
+                  if (recent.length < 2) return;
                   setState(() {
                     _showDots = true;
-                    final idx = sessions.indexWhere((s) => s.name == widget.sessionName);
+                    final idx = recent.indexOf(widget.sessionName);
                     if (idx == -1) return;
                     final atStart = idx == 0;
-                    final atEnd = idx == sessions.length - 1;
+                    final atEnd = idx == recent.length - 1;
                     if ((atStart && details.delta.dx > 0) || (atEnd && details.delta.dx < 0)) {
                       _swipeDx += details.delta.dx * 0.25;
                       _swipeHintName = atStart ? '⟵ (start)' : '(end) ⟶';
                     } else {
                       _swipeDx += details.delta.dx;
                       if (_swipeDx < -60) {
-                        final next = sessions[(idx + 1) % sessions.length].name;
-                        _swipeHintName = '→ $next';
+                        _swipeHintName = '→ ${recent[idx + 1]}';
                       } else if (_swipeDx > 60) {
-                        final prev = sessions[(idx - 1 + sessions.length) % sessions.length].name;
-                        _swipeHintName = '← $prev';
+                        _swipeHintName = '← ${recent[idx - 1]}';
                       } else {
                         _swipeHintName = null;
                       }
@@ -565,10 +582,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
               ? null
               : (details) {
                   final dx = _swipeDx;
-                  final sessions = ref.read(sessionsProvider).sessions;
-                  final currentIndex = sessions.indexWhere((s) => s.name == widget.sessionName);
+                  final recent = _getRecentTerminalSessions();
+                  final currentIndex = recent.indexOf(widget.sessionName);
                   final atStart = currentIndex == 0 && dx > 0;
-                  final atEnd = currentIndex == sessions.length - 1 && dx < 0;
+                  final atEnd = currentIndex == recent.length - 1 && dx < 0;
                   setState(() {
                     _swipeDx = 0;
                     _swipeHintName = null;

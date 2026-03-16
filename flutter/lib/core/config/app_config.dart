@@ -48,6 +48,8 @@ class AppConfig {
   static const String keyFileSortMode = 'file_sort_mode';
   static const String keyFileShowHidden = 'file_show_hidden';
   static const String keyFileEditorFontSize = 'file_editor_font_size';
+  static const String keyRecentTerminalSessions = 'recent_terminal_sessions';
+  static const String keyRecentChatSessions = 'recent_chat_sessions';
 
   // Build-time defaults
   static String get defaultServerList => BuildConfig.defaultServerList;

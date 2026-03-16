@@ -76,6 +76,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pushRecentChatSession();
+
       if (widget.isAcp) {
         final ws = ref.read(sharedWebSocketServiceProvider);
         ws.selectBackend('acp');
@@ -592,42 +594,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ],
       ),
       body: GestureDetector(
-        onHorizontalDragUpdate: !widget.isAcp
-            ? null
-            : (details) {
-                final acpSessions = ref.read(sessionsProvider).acpSessions;
-                if (acpSessions.length < 2) return;
+        onHorizontalDragUpdate: (details) {
+                final recent = _getRecentChatSessions();
+                if (recent.length < 2) return;
                 setState(() {
                   _showDots = true;
-                  final idx = acpSessions.indexWhere((s) => s.sessionId == widget.sessionName);
+                  final idx = recent.indexOf(_recentChatKey);
                   if (idx == -1) return;
                   final atStart = idx == 0;
-                  final atEnd = idx == acpSessions.length - 1;
+                  final atEnd = idx == recent.length - 1;
                   if ((atStart && details.delta.dx > 0) || (atEnd && details.delta.dx < 0)) {
                     _swipeDx += details.delta.dx * 0.25;
                     _swipeHintName = atStart ? '⟵ (start)' : '(end) ⟶';
                   } else {
                     _swipeDx += details.delta.dx;
                     if (_swipeDx < -60) {
-                      final next = acpSessions[idx + 1];
-                      _swipeHintName = '→ ${next.title.isNotEmpty ? next.title : next.sessionId.substring(0, 8)}';
+                      _swipeHintName = '→ ${_labelForKey(recent[idx + 1])}';
                     } else if (_swipeDx > 60) {
-                      final prev = acpSessions[idx - 1];
-                      _swipeHintName = '← ${prev.title.isNotEmpty ? prev.title : prev.sessionId.substring(0, 8)}';
+                      _swipeHintName = '← ${_labelForKey(recent[idx - 1])}';
                     } else {
                       _swipeHintName = null;
                     }
                   }
                 });
               },
-        onHorizontalDragEnd: !widget.isAcp
-            ? null
-            : (details) {
+        onHorizontalDragEnd: (details) {
                 final dx = _swipeDx;
-                final acpSessions = ref.read(sessionsProvider).acpSessions;
-                final currentIndex = acpSessions.indexWhere((s) => s.sessionId == widget.sessionName);
+                final recent = _getRecentChatSessions();
+                final currentIndex = recent.indexOf(_recentChatKey);
                 final atStart = currentIndex == 0 && dx > 0;
-                final atEnd = currentIndex == acpSessions.length - 1 && dx < 0;
+                final atEnd = currentIndex == recent.length - 1 && dx < 0;
                 setState(() {
                   _swipeDx = 0;
                   _swipeHintName = null;
@@ -639,17 +635,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   return;
                 }
                 if (dx < -120) {
-                  _switchToAdjacentAcpSession(1);
+                  _switchToAdjacentChatSession(1);
                 } else if (dx > 120) {
-                  _switchToAdjacentAcpSession(-1);
+                  _switchToAdjacentChatSession(-1);
                 }
                 Future.delayed(const Duration(milliseconds: 600), () {
                   if (mounted) setState(() => _showDots = false);
                 });
               },
-        onHorizontalDragCancel: !widget.isAcp
-            ? null
-            : () {
+        onHorizontalDragCancel: () {
                 setState(() {
                   _swipeDx = 0;
                   _swipeHintName = null;
@@ -1042,33 +1036,101 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  void _switchToAdjacentAcpSession(int direction) {
-    final acpSessions = ref.read(sessionsProvider).acpSessions;
-    if (acpSessions.isEmpty) return;
-    final currentIndex = acpSessions.indexWhere((s) => s.sessionId == widget.sessionName);
-    if (currentIndex == -1) return;
-    final nextIndex = currentIndex + direction;
-    if (nextIndex < 0 || nextIndex >= acpSessions.length) return;
-    final next = acpSessions[nextIndex];
-    Navigator.of(context).pushReplacement(MaterialPageRoute(
-      builder: (_) => ChatScreen(
-        sessionName: next.sessionId,
-        windowIndex: 0,
-        isAcp: true,
-        cwd: next.cwd,
-      ),
-    ));
+  // Recency key: "acp:<sessionId>" or "tmux:<sessionName>\x00<windowIndex>"
+  String get _recentChatKey => widget.isAcp
+      ? 'acp:${widget.sessionName}'
+      : 'tmux:${widget.sessionName}\x00${widget.windowIndex}';
+
+  void _pushRecentChatSession() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    final raw = prefs.getString(AppConfig.keyRecentChatSessions);
+    final list = raw != null ? List<String>.from(jsonDecode(raw)) : <String>[];
+    list.remove(_recentChatKey);
+    list.insert(0, _recentChatKey);
+    prefs.setString(AppConfig.keyRecentChatSessions, jsonEncode(list.take(3).toList()));
+  }
+
+  List<String> _getRecentChatSessions() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    final raw = prefs.getString(AppConfig.keyRecentChatSessions);
+    if (raw == null) return [];
+    final all = List<String>.from(jsonDecode(raw));
+    final state = ref.read(sessionsProvider);
+    final liveAcp = state.acpSessions.map((s) => 'acp:${s.sessionId}').toSet();
+    final liveTmuxNames = state.sessions.map((s) => s.name).toSet();
+    return all.where((k) {
+      if (k.startsWith('acp:')) return liveAcp.contains(k);
+      if (k.startsWith('tmux:')) {
+        final inner = k.substring(5); // "<name>\x00<windowIndex>"
+        final sep = inner.indexOf('\x00');
+        if (sep == -1) return false;
+        return liveTmuxNames.contains(inner.substring(0, sep));
+      }
+      return false;
+    }).toList();
+  }
+
+  String _labelForKey(String key) {
+    if (key.startsWith('acp:')) {
+      final sessionId = key.substring(4);
+      final acp = ref.read(sessionsProvider).acpSessions
+          .where((s) => s.sessionId == sessionId)
+          .firstOrNull;
+      if (acp != null && acp.title.isNotEmpty) return acp.title;
+      return sessionId.length > 8 ? sessionId.substring(0, 8) : sessionId;
+    }
+    // tmux:<name>\x00<windowIndex>
+    final inner = key.substring(5);
+    final sep = inner.indexOf('\x00');
+    return sep == -1 ? inner : inner.substring(0, sep);
+  }
+
+  void _switchToAdjacentChatSession(int direction) {
+    final recent = _getRecentChatSessions();
+    final idx = recent.indexOf(_recentChatKey);
+    if (idx == -1) return;
+    final nextIdx = idx + direction;
+    if (nextIdx < 0 || nextIdx >= recent.length) return;
+    final key = recent[nextIdx];
+    if (key.startsWith('acp:')) {
+      final sessionId = key.substring(4);
+      final acp = ref.read(sessionsProvider).acpSessions
+          .where((s) => s.sessionId == sessionId)
+          .firstOrNull;
+      if (acp == null) return;
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          sessionName: acp.sessionId,
+          windowIndex: 0,
+          isAcp: true,
+          cwd: acp.cwd,
+        ),
+      ));
+    } else {
+      final inner = key.substring(5);
+      final sep = inner.indexOf('\x00');
+      if (sep == -1) return;
+      final name = inner.substring(0, sep);
+      final winIdx = int.tryParse(inner.substring(sep + 1)) ?? 0;
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          sessionName: name,
+          windowIndex: winIdx,
+          isAcp: false,
+        ),
+      ));
+    }
   }
 
   Widget _buildDotIndicator() {
-    final acpSessions = ref.read(sessionsProvider).acpSessions;
-    final currentIndex = acpSessions.indexWhere((s) => s.sessionId == widget.sessionName);
-    if (acpSessions.length < 2 || currentIndex == -1) return const SizedBox.shrink();
+    final recent = _getRecentChatSessions();
+    final currentIndex = recent.indexOf(_recentChatKey);
+    if (recent.length < 2 || currentIndex == -1) return const SizedBox.shrink();
 
     return Center(
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: List.generate(acpSessions.length, (i) {
+        children: List.generate(recent.length, (i) {
           final active = i == currentIndex;
           return Container(
             width: active ? 8 : 6,

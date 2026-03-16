@@ -12,6 +12,12 @@ import '../../terminal/screens/terminal_screen.dart';
 import '../../system/widgets/alert_banner.dart';
 import '../widgets/command_palette.dart';
 
+// Tab indices for HomeScreen NavigationBar
+const _kTabSessions = 0;
+const _kTabCron = 1;
+const _kTabDotfiles = 2;
+const _kTabSystem = 3;
+
 class HomeScreen extends ConsumerStatefulWidget {
   final bool showDebug;
 
@@ -99,8 +105,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         children: [
           AlertBanner(
             onTap: () {
-              setState(() => _currentIndex = 3); // System tab
-              _saveIndex(3);
+              setState(() => _currentIndex = _kTabSystem);
+              _saveIndex(_kTabSystem);
             },
           ),
           Expanded(child: IndexedStack(index: _currentIndex, children: _screens)),

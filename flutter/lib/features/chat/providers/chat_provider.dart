@@ -788,13 +788,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void respondPermission(String requestId, String optionId) {
+    // Guard: only respond if the card belongs to the current pending request
+    if (state.pendingPermission?.requestId != requestId) return;
     _ws?.acpRespondPermission(requestId, optionId);
     state = state.copyWith(pendingPermission: null);
   }
 
   void _handleAcpPromptDone(Map<String, dynamic> message) {
     final sessionId = message['sessionId'] as String?;
-    if (sessionId != state.sessionName) return;
+    // state.sessionName has 'acp_' prefix (set in startAcpChat); match accordingly
+    if (sessionId == null || state.sessionName != 'acp_$sessionId') return;
 
     final stopReason = message['stopReason'] as String? ?? '';
     state = state.copyWith(
@@ -839,6 +842,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       sessionName: sessionKey,
       windowIndex: 0,
       isAcp: true,
+      pendingPermission: null,
     );
     _ws!.watchAcpChatLog(sessionName, limit: 30);
   }
@@ -852,6 +856,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       windowIndex: windowIndex,
       hasMoreMessages: false,
       totalMessageCount: null,
+      pendingPermission: null,
     );
 
     // First attach to the session's PTY so we can send input

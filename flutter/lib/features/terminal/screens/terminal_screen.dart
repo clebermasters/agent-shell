@@ -227,36 +227,33 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
   void _showRenameDialog() {
     final controller = TextEditingController(text: widget.sessionName);
+
+    void doRename(String newName, NavigatorState nav) {
+      if (newName.isNotEmpty && newName != widget.sessionName) {
+        ref.read(sharedWebSocketServiceProvider).renameSession(widget.sessionName, newName);
+      }
+      nav.pop();
+    }
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('Rename Session'),
         content: TextField(
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(labelText: 'New Name'),
-          onSubmitted: (value) {
-            if (value.trim().isNotEmpty && value.trim() != widget.sessionName) {
-              ref.read(sharedWebSocketServiceProvider).renameSession(widget.sessionName, value.trim());
-            }
-            Navigator.pop(context);
-          },
+          onSubmitted: (value) => doRename(value.trim(), Navigator.of(ctx)),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
           ElevatedButton(
-            onPressed: () {
-              final newName = controller.text.trim();
-              if (newName.isNotEmpty && newName != widget.sessionName) {
-                ref.read(sharedWebSocketServiceProvider).renameSession(widget.sessionName, newName);
-              }
-              Navigator.pop(context);
-            },
+            onPressed: () => doRename(controller.text.trim(), Navigator.of(ctx)),
             child: const Text('Rename'),
           ),
         ],
       ),
-    );
+    ).then((_) => controller.dispose());
   }
 
   void _handleResize(int cols, int rows) {
@@ -271,9 +268,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     final ws = ref.read(sharedWebSocketServiceProvider);
     final notifier = ref.read(fileBrowserProvider.notifier);
     late final StreamSubscription<Map<String, dynamic>> sub;
+    Timer? timeoutTimer;
     sub = ws.messages.listen((msg) {
       if (msg['type'] == 'session-cwd') {
         final cwd = msg['cwd'] as String? ?? '';
+        timeoutTimer?.cancel();
         sub.cancel();
         if (mounted && cwd.isNotEmpty) {
           notifier.listFiles(cwd);
@@ -285,6 +284,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
         }
       }
     });
+    // Cancel the subscription if server doesn't respond within 5 seconds
+    timeoutTimer = Timer(const Duration(seconds: 5), sub.cancel);
     ws.getSessionCwd(widget.sessionName);
   }
 
@@ -514,10 +515,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                     _swipeDx += details.delta.dx;
                     final idx = sessions.indexWhere((s) => s.name == widget.sessionName);
                     if (idx == -1) return;
-                    if (_swipeDx < -40) {
+                    if (_swipeDx < -60) {
                       final next = sessions[(idx + 1) % sessions.length].name;
                       _swipeHintName = '→ $next';
-                    } else if (_swipeDx > 40) {
+                    } else if (_swipeDx > 60) {
                       final prev = sessions[(idx - 1 + sessions.length) % sessions.length].name;
                       _swipeHintName = '← $prev';
                     } else {
@@ -533,11 +534,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                     _swipeDx = 0;
                     _swipeHintName = null;
                   });
-                  if (dx < -80) {
+                  if (dx < -120) {
                     _switchToAdjacentSession(1);
-                  } else if (dx > 80) {
+                  } else if (dx > 120) {
                     _switchToAdjacentSession(-1);
                   }
+                },
+          onHorizontalDragCancel: _isSelectionMode
+              ? null
+              : () {
+                  setState(() {
+                    _swipeDx = 0;
+                    _swipeHintName = null;
+                  });
                 },
           child: Stack(
           children: [

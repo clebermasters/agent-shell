@@ -325,42 +325,42 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
 
   void _showRenameSessionDialog(BuildContext context, WidgetRef ref, String currentName) {
     final controller = TextEditingController(text: currentName);
+
+    void doRename(String newName, NavigatorState nav) {
+      if (newName.isEmpty || newName == currentName) return;
+      ref.read(sharedWebSocketServiceProvider).renameSession(currentName, newName);
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) ref.read(sessionsProvider.notifier).refresh();
+      });
+    }
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('Rename Session'),
         content: TextField(
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(labelText: 'New Name'),
           onSubmitted: (value) {
-            if (value.trim().isNotEmpty && value.trim() != currentName) {
-              ref.read(sharedWebSocketServiceProvider).renameSession(currentName, value.trim());
-              Future.delayed(const Duration(milliseconds: 500), () {
-                ref.read(sessionsProvider.notifier).refresh();
-              });
-            }
-            Navigator.pop(context);
+            final nav = Navigator.of(ctx);
+            doRename(value.trim(), nav);
+            nav.pop();
           },
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () {
-              final newName = controller.text.trim();
-              if (newName.isNotEmpty && newName != currentName) {
-                ref.read(sharedWebSocketServiceProvider).renameSession(currentName, newName);
-                Future.delayed(const Duration(milliseconds: 500), () {
-                  ref.read(sessionsProvider.notifier).refresh();
-                });
-              }
-              Navigator.pop(context);
+              final nav = Navigator.of(ctx);
+              doRename(controller.text.trim(), nav);
+              nav.pop();
             },
             child: const Text('Rename'),
           ),
         ],
       ),
-    );
+    ).then((_) => controller.dispose());
   }
 
   void _showCreateSessionDialog(BuildContext context, WidgetRef ref) {

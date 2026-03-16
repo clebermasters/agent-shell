@@ -47,6 +47,7 @@ class CommandPaletteState {
 class CommandPaletteNotifier extends StateNotifier<CommandPaletteState> {
   CommandPaletteNotifier() : super(const CommandPaletteState());
 
+  // These indices must match HomeScreen's NavigationBar order
   static const _navItems = [
     PaletteItem(title: 'Sessions', subtitle: 'Go to Sessions tab', type: PaletteItemType.nav, data: 0),
     PaletteItem(title: 'Cron', subtitle: 'Go to Cron tab', type: PaletteItemType.nav, data: 1),

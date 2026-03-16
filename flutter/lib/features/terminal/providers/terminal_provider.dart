@@ -70,6 +70,9 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   Timer? _recordingTimer;
   SharedPreferences? _prefs;
   String? _activeSessionName;
+  int _activeWindowIndex = 0;
+  StreamSubscription? _connectionSub;
+  StreamSubscription? _messageSub;
 
   TerminalNotifier(this.terminalService, this._wsService)
     : super(TerminalState(isConnected: _wsService.isConnected)) {
@@ -81,7 +84,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
   }
 
   void _init() {
-    _wsService.connectionState.listen((connected) {
+    _connectionSub = _wsService.connectionState.listen((connected) {
       if (connected && _activeSessionName != null && !state.isConnected) {
         // We just reconnected, so we need to re-attach to the terminal session
         // to resume receiving terminal data.  Use actual terminal dimensions
@@ -89,12 +92,17 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
         final terminal = state.terminal;
         final cols = (terminal?.viewWidth ?? 0) > 0 ? terminal!.viewWidth : 80;
         final rows = (terminal?.viewHeight ?? 0) > 0 ? terminal!.viewHeight : 24;
-        _wsService.attachSession(_activeSessionName!, cols: cols, rows: rows);
+        _wsService.attachSession(
+          _activeSessionName!,
+          cols: cols,
+          rows: rows,
+          windowIndex: _activeWindowIndex,
+        );
       }
       state = state.copyWith(isConnected: connected);
     });
 
-    _wsService.messages.listen((message) {
+    _messageSub = _wsService.messages.listen((message) {
       final type = message['type'] as String?;
       final msgSession = message['sessionName'] as String?
           ?? message['session'] as String?;
@@ -109,7 +117,9 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   void connect(String sessionName, {int windowIndex = 0}) async {
     _activeSessionName = sessionName;
-    state = state.copyWith(isLoading: true, error: null);
+    _activeWindowIndex = windowIndex;
+    // Reset hydration state in case a previous history stream was interrupted
+    state = state.copyWith(isLoading: true, isHydrating: false, error: null);
 
     final terminal = terminalService.createTerminal(sessionName);
 
@@ -274,6 +284,8 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
 
   @override
   void dispose() {
+    _connectionSub?.cancel();
+    _messageSub?.cancel();
     _recordingTimer?.cancel();
     _audioService.dispose();
     for (final controller in _controllers.values) {

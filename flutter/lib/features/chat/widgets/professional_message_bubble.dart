@@ -60,6 +60,7 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
   bool _isAudioPlaying = false;
   bool _isAudioLoading = false;
   bool _isAudioCompleted = false;
+  double _audioVolume = 1.0;
 
   bool get isDark => widget.isDarkMode;
 
@@ -599,6 +600,11 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
         onSkipForward: isActiveBlock
             ? () => _skipAudioBy(const Duration(seconds: 10))
             : null,
+        volume: _audioVolume,
+        onVolumeChanged: (v) {
+          setState(() => _audioVolume = v);
+          ref.read(globalAudioPlayerProvider).setVolume(v);
+        },
       ),
     );
   }
@@ -688,6 +694,7 @@ class _ProfessionalMessageBubbleState extends ConsumerState<ProfessionalMessageB
         _audioErrorMessage = null;
         _audioErrorBlockId = null;
       });
+      await player.setVolume(_audioVolume);
     } finally {
       if (mounted) {
         setState(() {

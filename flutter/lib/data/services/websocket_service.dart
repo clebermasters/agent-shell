@@ -310,6 +310,10 @@ class WebSocketService {
     send({'type': 'read-dotfile', 'path': path});
   }
 
+  void requestBinaryFileContent(String path) {
+    send({'type': 'read-binary-file', 'path': path});
+  }
+
   void saveDotfile(String path, String content) {
     send({'type': 'write-dotfile', 'path': path, 'content': content});
   }
@@ -468,6 +472,14 @@ class WebSocketService {
       'offset': offset,
       'limit': limit,
     });
+  }
+
+  void listFiles(String path) {
+    send({'type': 'list-files', 'path': path});
+  }
+
+  void getSessionCwd(String sessionName) {
+    send({'type': 'get-session-cwd', 'sessionName': sessionName});
   }
 
   void acpRespondPermission(String requestId, String optionId) {

@@ -40,9 +40,11 @@ class AppConfig {
   static const String keyTerminalFontSize = 'terminal_font_size';
   static const String keyOpenAiApiKey = 'openai_api_key';
   static const String keyVoiceAutoEnter = 'voice_auto_enter';
+  static const String keyShowVoiceButton = 'show_voice_button';
   static const String keyShowThinking = 'show_thinking';
   static const String keyShowToolCalls = 'show_tool_calls';
   static const String keyWebAuthToken = 'web_auth_token';
+  static const String chatDraftKeyPrefix = 'chat_draft_';
 
   // Build-time defaults
   static String get defaultServerList => BuildConfig.defaultServerList;

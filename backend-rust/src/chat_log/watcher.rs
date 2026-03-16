@@ -80,9 +80,10 @@ pub async fn watch_log_file(
     tool: AiTool,
     event_tx: mpsc::UnboundedSender<ChatLogEvent>,
     cleared_at: Option<i64>,
+    limit: Option<usize>,
 ) -> Result<LogWatcher> {
     if let AiTool::Opencode { cwd, pid } = &tool {
-        return watch_opencode_db(path, cwd, *pid, event_tx, cleared_at).await;
+        return watch_opencode_db(path, cwd, *pid, event_tx, cleared_at, limit).await;
     }
     // --- initial history read ---
     let file =
@@ -91,14 +92,14 @@ pub async fn watch_log_file(
     let history = read_all_messages(&mut reader, &tool);
 
     // Filter messages based on cleared_at timestamp
-    let filtered_history = if let Some(ts) = cleared_at {
+    let filtered_history: Vec<_> = if let Some(ts) = cleared_at {
         history
             .into_iter()
             .filter(|msg| {
                 if let Some(msg_ts) = msg.timestamp {
                     msg_ts.timestamp_millis() > ts
                 } else {
-                    true // Keep messages without timestamp if we can't determine
+                    false // Exclude un-timestamped historical messages after a clear
                 }
             })
             .collect()
@@ -106,10 +107,18 @@ pub async fn watch_log_file(
         history
     };
 
+    let total_count = filtered_history.len();
+    let (paginated, has_more) = match limit {
+        Some(n) if total_count > n => (filtered_history[total_count - n..].to_vec(), true),
+        _ => (filtered_history, false),
+    };
+
     event_tx
         .send(ChatLogEvent::History {
-            messages: filtered_history,
+            messages: paginated,
             tool: tool.clone(),
+            has_more,
+            total_count,
         })
         .ok();
 
@@ -176,6 +185,7 @@ async fn watch_opencode_db(
     pid: u32,
     event_tx: mpsc::UnboundedSender<ChatLogEvent>,
     cleared_at: Option<i64>,
+    limit: Option<usize>,
 ) -> Result<LogWatcher> {
     let mut state = opencode_parser::init_opencode_state(db_path, cwd, pid, cleared_at)?;
 
@@ -196,12 +206,19 @@ async fn watch_opencode_db(
     // Initial fetch for history
     if let Ok(messages) = opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
         info!("Initial fetch got {} messages", messages.len());
+        let total_count = messages.len();
+        let (paginated, has_more) = match limit {
+            Some(n) if total_count > n => (messages[total_count - n..].to_vec(), true),
+            _ => (messages, false),
+        };
         let _ = event_tx.send(ChatLogEvent::History {
-            messages,
+            messages: paginated,
             tool: AiTool::Opencode {
                 cwd: cwd.to_path_buf(),
                 pid,
             },
+            has_more,
+            total_count,
         });
     } else {
         info!("Initial fetch got no messages or error");

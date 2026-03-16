@@ -238,6 +238,7 @@ pub enum WebSocketMessage {
         session_name: String,
         #[serde(rename = "windowIndex")]
         window_index: u32,
+        limit: Option<usize>,
     },
     // ACP chat log watching (direct by session ID)
     WatchAcpChatLog {
@@ -245,6 +246,16 @@ pub enum WebSocketMessage {
         session_id: String,
         #[serde(rename = "windowIndex")]
         window_index: Option<u32>,
+        limit: Option<usize>,
+    },
+    // Load more chat history (pagination)
+    LoadMoreChatHistory {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        offset: usize,
+        limit: usize,
     },
     UnwatchChatLog,
     // Clear chat history for a session
@@ -341,6 +352,18 @@ pub enum WebSocketMessage {
         prompt: Option<String>,
         cwd: Option<String>,
     },
+    // File browser
+    ListFiles {
+        path: String,
+    },
+    GetSessionCwd {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+    },
+    // Binary file reading (images, audio, etc.)
+    ReadBinaryFile {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,6 +371,16 @@ pub enum WebSocketMessage {
 pub enum AudioAction {
     Start,
     Stop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_directory: bool,
+    pub size: u64,
+    pub modified: Option<String>, // ISO 8601
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -490,6 +523,19 @@ pub enum ServerMessage {
         window_index: u32,
         messages: Vec<crate::chat_log::ChatMessage>,
         tool: Option<crate::chat_log::AiTool>,
+        #[serde(rename = "hasMore")]
+        has_more: bool,
+        #[serde(rename = "totalCount")]
+        total_count: usize,
+    },
+    ChatHistoryChunk {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        messages: Vec<crate::chat_log::ChatMessage>,
+        #[serde(rename = "hasMore")]
+        has_more: bool,
     },
     ChatEvent {
         #[serde(rename = "sessionName")]
@@ -680,6 +726,26 @@ pub enum ServerMessage {
         #[serde(rename = "sessionId")]
         session_id: String,
         success: bool,
+        error: Option<String>,
+    },
+    // File browser responses
+    FilesList {
+        path: String,
+        entries: Vec<FileEntry>,
+    },
+    SessionCwd {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        cwd: String,
+    },
+    // Binary file content response
+    BinaryFileContent {
+        path: String,
+        #[serde(rename = "contentBase64")]
+        content_base64: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
 }

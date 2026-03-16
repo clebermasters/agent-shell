@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/cron_job.dart';
 import '../../../data/services/websocket_service.dart';
@@ -18,18 +19,20 @@ class CronState {
     this.isTesting = false,
   });
 
+  static const _unset = Object();
+
   CronState copyWith({
     List<CronJob>? jobs,
     bool? isLoading,
-    String? error,
-    String? testOutput,
+    Object? error = _unset,
+    Object? testOutput = _unset,
     bool? isTesting,
   }) {
     return CronState(
       jobs: jobs ?? this.jobs,
       isLoading: isLoading ?? this.isLoading,
-      error: error,
-      testOutput: testOutput,
+      error: error == _unset ? this.error : error as String?,
+      testOutput: testOutput == _unset ? this.testOutput : testOutput as String?,
       isTesting: isTesting ?? this.isTesting,
     );
   }
@@ -37,6 +40,7 @@ class CronState {
 
 class CronNotifier extends StateNotifier<CronState> {
   final WebSocketService _wsService;
+  Timer? _createTimer;
 
   CronNotifier(this._wsService) : super(const CronState()) {
     _init();
@@ -58,6 +62,7 @@ class CronNotifier extends StateNotifier<CronState> {
           break;
         case 'cron-job-created':
         case 'cron_job_created':
+          _createTimer?.cancel();
           final job = CronJob.fromJson(message['job'] as Map<String, dynamic>);
           state = state.copyWith(
             jobs: [...state.jobs, job],
@@ -96,12 +101,14 @@ class CronNotifier extends StateNotifier<CronState> {
           break;
         case 'error':
           final errorMsg = message['message'] as String?;
-          if (state.isLoading) {
-            state = state.copyWith(
-              error: errorMsg ?? 'Unknown error',
-              isLoading: false,
-            );
-          }
+          state = state.copyWith(
+            error: errorMsg ?? 'Unknown error',
+            isLoading: false,
+            isTesting: false,
+          );
+          // Re-sync with server — optimistic updates for update/delete/toggle
+          // may have already modified local state before the error arrived.
+          Future.microtask(refresh);
           break;
       }
     });
@@ -129,10 +136,10 @@ class CronNotifier extends StateNotifier<CronState> {
   }
 
   Future<void> createCronJob(CronJob job) async {
-    state = state.copyWith(isLoading: true);
+    _createTimer?.cancel();
+    state = state.copyWith(isLoading: true, error: null);
     _wsService.createCronJob(job);
-
-    Future.delayed(const Duration(seconds: 10), () {
+    _createTimer = Timer(const Duration(seconds: 10), () {
       if (state.isLoading) {
         state = state.copyWith(
           isLoading: false,
@@ -176,6 +183,12 @@ class CronNotifier extends StateNotifier<CronState> {
 
   void clearTestOutput() {
     state = state.copyWith(testOutput: null, isTesting: false);
+  }
+
+  @override
+  void dispose() {
+    _createTimer?.cancel();
+    super.dispose();
   }
 }
 

@@ -4,6 +4,72 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/dotfile.dart';
 import '../providers/dotfiles_provider.dart';
 
+class _HighlightingController extends TextEditingController {
+  List<int> matches = [];
+  int activeIndex = -1;
+  int queryLength = 0;
+
+  void updateHighlights({
+    required List<int> matches,
+    required int activeIndex,
+    required int queryLength,
+  }) {
+    this.matches = matches;
+    this.activeIndex = activeIndex;
+    this.queryLength = queryLength;
+    notifyListeners();
+  }
+
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    if (matches.isEmpty || queryLength == 0) {
+      return TextSpan(text: text, style: style);
+    }
+
+    final spans = <TextSpan>[];
+    int cursor = 0;
+
+    for (int i = 0; i < matches.length; i++) {
+      final start = matches[i];
+      final end = start + queryLength;
+
+      if (start > cursor) {
+        spans.add(TextSpan(
+          text: text.substring(cursor, start),
+          style: style,
+        ));
+      }
+
+      final isActive = i == activeIndex;
+      spans.add(TextSpan(
+        text: text.substring(start, end),
+        style: style?.copyWith(
+          backgroundColor: isActive
+              ? Colors.orange[600]!.withValues(alpha: 0.9)
+              : Colors.amber[300]!.withValues(alpha: 0.35),
+          color: isActive ? Colors.white : null,
+          fontWeight: isActive ? FontWeight.bold : null,
+        ),
+      ));
+
+      cursor = end;
+    }
+
+    if (cursor < text.length) {
+      spans.add(TextSpan(
+        text: text.substring(cursor),
+        style: style,
+      ));
+    }
+
+    return TextSpan(children: spans);
+  }
+}
+
 class DotfileEditorScreen extends ConsumerStatefulWidget {
   const DotfileEditorScreen({super.key});
 
@@ -13,21 +79,42 @@ class DotfileEditorScreen extends ConsumerStatefulWidget {
 }
 
 class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
-  final TextEditingController _controller = TextEditingController();
+  final _HighlightingController _controller = _HighlightingController();
   final FocusNode _focusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _hScrollController = ScrollController();
   bool _hasChanges = false;
   String _originalContent = '';
   bool _showSearch = false;
   final TextEditingController _searchController = TextEditingController();
   int _searchIndex = 0;
   List<int> _searchMatches = [];
+  bool _caseSensitive = false;
+
+  double _fontSize = 14.0;
+  double _scaleStartFontSize = 14.0;
+
+  int get _currentLine {
+    if (!_controller.selection.isValid) return 1;
+    return _controller.text
+        .substring(0, _controller.selection.baseOffset)
+        .split('\n')
+        .length;
+  }
+
+  int get _currentCol {
+    if (!_controller.selection.isValid) return 1;
+    final before =
+        _controller.text.substring(0, _controller.selection.baseOffset);
+    return before.length - (before.lastIndexOf('\n') + 1) + 1;
+  }
 
   @override
   void initState() {
     super.initState();
     _focusNode.addListener(_handleKeyPress);
     _searchController.addListener(_onSearchChanged);
+    _controller.addListener(() => setState(() {}));
   }
 
   void _handleKeyPress() {
@@ -46,12 +133,14 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
   }
 
   void _findMatches() {
-    final query = _searchController.text.toLowerCase();
-    if (query.isEmpty) {
+    final rawQuery = _searchController.text;
+    if (rawQuery.isEmpty) {
       _searchMatches = [];
+      _controller.updateHighlights(matches: [], activeIndex: -1, queryLength: 0);
       return;
     }
-    final content = _controller.text.toLowerCase();
+    final query = _caseSensitive ? rawQuery : rawQuery.toLowerCase();
+    final content = _caseSensitive ? _controller.text : _controller.text.toLowerCase();
     final matches = <int>[];
     int index = 0;
     while (true) {
@@ -62,6 +151,11 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     }
     _searchMatches = matches;
     _searchIndex = 0;
+    _controller.updateHighlights(
+      matches: _searchMatches,
+      activeIndex: _searchMatches.isEmpty ? -1 : _searchIndex,
+      queryLength: rawQuery.length,
+    );
   }
 
   void _jumpToNextMatch() {
@@ -69,6 +163,11 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     setState(() {
       _searchIndex = (_searchIndex + 1) % _searchMatches.length;
     });
+    _controller.updateHighlights(
+      matches: _searchMatches,
+      activeIndex: _searchIndex,
+      queryLength: _searchController.text.length,
+    );
     _highlightMatch();
   }
 
@@ -78,6 +177,11 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
       _searchIndex =
           (_searchIndex - 1 + _searchMatches.length) % _searchMatches.length;
     });
+    _controller.updateHighlights(
+      matches: _searchMatches,
+      activeIndex: _searchIndex,
+      queryLength: _searchController.text.length,
+    );
     _highlightMatch();
   }
 
@@ -119,6 +223,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     _controller.dispose();
     _focusNode.dispose();
     _scrollController.dispose();
+    _hScrollController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -132,7 +237,6 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     if (dotfilesState.fileContent != null && _originalContent.isEmpty) {
       _originalContent = dotfilesState.fileContent!;
       _controller.text = dotfilesState.fileContent!;
-      // Allow editing - backend will handle permission errors on save
     }
 
     return PopScope(
@@ -182,7 +286,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                   ),
                   if (selectedFile != null)
                     Text(
-                      selectedFile!.path,
+                      selectedFile.path,
                       style: TextStyle(
                         fontSize: 11,
                         color: isDark ? Colors.grey[400] : Colors.grey[500],
@@ -201,6 +305,18 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                     ),
                   ),
                 IconButton(
+                  icon: const Icon(Icons.zoom_in, size: 20),
+                  onPressed:
+                      _fontSize < 26 ? () => setState(() => _fontSize += 1) : null,
+                  tooltip: 'Zoom in',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.zoom_out, size: 20),
+                  onPressed:
+                      _fontSize > 10 ? () => setState(() => _fontSize -= 1) : null,
+                  tooltip: 'Zoom out',
+                ),
+                IconButton(
                   icon: Icon(
                     Icons.history,
                     color: isDark ? Colors.grey[300] : Colors.grey[700],
@@ -214,7 +330,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                         context,
                         MaterialPageRoute(
                           builder: (_) =>
-                              DotfileHistoryScreen(file: selectedFile!),
+                              DotfileHistoryScreen(file: selectedFile),
                         ),
                       );
                     }
@@ -231,6 +347,12 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
                       _showSearch = !_showSearch;
                       if (!_showSearch) {
                         _searchController.clear();
+                        _searchMatches = [];
+                        _controller.updateHighlights(
+                          matches: [],
+                          activeIndex: -1,
+                          queryLength: 0,
+                        );
                       }
                     });
                   },
@@ -284,129 +406,98 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
     );
   }
 
-  Widget _buildLineNumbers(bool isDark) {
-    final lines = _controller.text.split('\n').length;
-    return Container(
-      width: 50,
-      padding: const EdgeInsets.only(top: 12, right: 8),
-      color: isDark ? const Color(0xFF1E1E1E) : Colors.grey[100],
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(lines, (index) {
-          return SizedBox(
-            height: 20,
-            child: Text(
-              '${index + 1}',
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 14,
-                color: isDark ? Colors.grey[600] : Colors.grey[400],
-                height: 1.4,
-              ),
-            ),
-          );
-        }),
-      ),
-    );
-  }
-
   Widget _buildEditorWithLineNumbers(bool isDark) {
     final lines = _controller.text.split('\n');
-    final lineHeight = 20.0;
-    final paddingTop = 12.0;
+    final lineHeight = _fontSize * 1.5;
+    final charWidth = _fontSize * 0.6;
+    final lineNumWidth =
+        (lines.length.toString().length * charWidth + 20).clamp(40.0, 80.0);
 
-    return SingleChildScrollView(
-      controller: _scrollController,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Line numbers
-          Container(
-            width: 45,
-            padding: EdgeInsets.only(top: paddingTop, right: 8, bottom: 100),
-            color: isDark ? const Color(0xFF1E1E1E) : Colors.grey[100],
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: List.generate(lines.length, (index) {
-                return SizedBox(
-                  height: lineHeight,
-                  child: Text(
-                    '${index + 1}',
+    return GestureDetector(
+      onScaleStart: (_) => _scaleStartFontSize = _fontSize,
+      onScaleUpdate: (d) => setState(
+          () => _fontSize = (_scaleStartFontSize * d.scale).clamp(10.0, 26.0)),
+      child: SingleChildScrollView(
+        controller: _scrollController,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Line numbers
+            Container(
+              width: lineNumWidth,
+              padding: const EdgeInsets.only(top: 12, right: 8, bottom: 100),
+              color: isDark ? const Color(0xFF1E1E1E) : Colors.grey[100],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: List.generate(lines.length, (i) {
+                  final isCurrentLine = i == _currentLine - 1;
+                  return Container(
+                    height: lineHeight,
+                    color: isCurrentLine
+                        ? (isDark
+                            ? Colors.white.withValues(alpha: 0.06)
+                            : Colors.indigo.withValues(alpha: 0.06))
+                        : Colors.transparent,
+                    child: Text(
+                      '${i + 1}',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: _fontSize * 0.85,
+                        color: isCurrentLine
+                            ? (isDark ? Colors.grey[300] : Colors.indigo[400])
+                            : (isDark ? Colors.grey[600] : Colors.grey[400]),
+                        height: lineHeight / (_fontSize * 0.85),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+            // Divider
+            Container(
+              width: 1,
+              color: isDark ? Colors.grey[800] : Colors.grey[300],
+              margin: const EdgeInsets.only(top: 12, bottom: 100),
+            ),
+            // Editor — horizontal scroll prevents line wrapping
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                controller: _hScrollController,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minWidth: MediaQuery.of(context).size.width -
+                        lineNumWidth -
+                        1,
+                  ),
+                  child: TextField(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    maxLines: null,
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.only(
+                          top: 12, left: 12, right: 12, bottom: 100),
+                    ),
                     style: TextStyle(
                       fontFamily: 'monospace',
-                      fontSize: 14,
-                      color: isDark ? Colors.grey[600] : Colors.grey[400],
-                      height: 1.43,
+                      fontSize: _fontSize,
+                      color: isDark ? Colors.grey[200] : Colors.grey[800],
+                      height: lineHeight / _fontSize,
                     ),
+                    onChanged: (v) {
+                      if (v != _originalContent && !_hasChanges) {
+                        setState(() => _hasChanges = true);
+                      }
+                      setState(() {});
+                    },
                   ),
-                );
-              }),
-            ),
-          ),
-          // Divider
-          Container(
-            width: 1,
-            color: isDark ? Colors.grey[700] : Colors.grey[300],
-            margin: EdgeInsets.only(top: paddingTop, bottom: 100),
-          ),
-          // Editor
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              focusNode: _focusNode,
-              maxLines: null,
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.only(
-                  top: paddingTop,
-                  left: 12,
-                  right: 12,
-                  bottom: 100,
                 ),
               ),
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 14,
-                color: isDark ? Colors.grey[200] : Colors.grey[800],
-                height: 1.43,
-              ),
-              onChanged: (value) {
-                if (value != _originalContent && !_hasChanges) {
-                  setState(() => _hasChanges = true);
-                }
-                setState(() {});
-              },
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    );
-  }
-
-  Widget _buildEditor(bool isDark) {
-    final lineCount = _controller.text.split('\n').length;
-    return TextField(
-      controller: _controller,
-      focusNode: _focusNode,
-      maxLines: lineCount > 50 ? lineCount : null,
-      decoration: const InputDecoration(
-        border: InputBorder.none,
-        contentPadding: EdgeInsets.all(12),
-      ),
-      style: TextStyle(
-        fontFamily: 'monospace',
-        fontSize: 14,
-        color: isDark ? Colors.grey[200] : Colors.grey[800],
-        height: 1.4,
-      ),
-      onChanged: (value) {
-        if (value != _originalContent && !_hasChanges) {
-          setState(() => _hasChanges = true);
-        }
-        setState(() {});
-      },
     );
   }
 
@@ -420,6 +511,14 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
       child: Row(
         children: [
           Text(
+            'Ln $_currentLine, Col $_currentCol',
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? Colors.grey[400] : Colors.grey[600],
+            ),
+          ),
+          const SizedBox(width: 16),
+          Text(
             'Lines: $lines',
             style: TextStyle(
               fontSize: 12,
@@ -428,7 +527,7 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
           ),
           const SizedBox(width: 16),
           Text(
-            'Characters: $chars',
+            '$chars chars',
             style: TextStyle(
               fontSize: 12,
               color: isDark ? Colors.grey[400] : Colors.grey[600],
@@ -502,6 +601,43 @@ class _DotfileEditorScreenState extends ConsumerState<DotfileEditorScreen> {
             style: TextStyle(
               fontSize: 12,
               color: isDark ? Colors.grey[400] : Colors.grey[600],
+            ),
+          ),
+          const SizedBox(width: 4),
+          Tooltip(
+            message: 'Case sensitive',
+            child: GestureDetector(
+              onTap: () {
+                setState(() => _caseSensitive = !_caseSensitive);
+                _findMatches();
+              },
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: _caseSensitive
+                      ? const Color(0xFF6366F1).withValues(alpha: 0.25)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: _caseSensitive
+                        ? const Color(0xFF6366F1)
+                        : Colors.transparent,
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    'Aa',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: _caseSensitive
+                          ? const Color(0xFF6366F1)
+                          : (isDark ? Colors.grey[400] : Colors.grey[600]),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 4),

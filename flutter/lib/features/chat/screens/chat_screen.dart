@@ -1,10 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
-import 'dart:convert';
-import 'dart:io';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
 import '../../../data/services/websocket_service.dart';
@@ -13,6 +14,8 @@ import '../widgets/professional_message_bubble.dart';
 import '../../hosts/providers/hosts_provider.dart';
 import '../../sessions/providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
+import '../../file_browser/providers/file_browser_provider.dart';
+import '../../file_browser/screens/file_browser_screen.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   final String sessionName;
@@ -42,6 +45,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   static const double _bottomThreshold = 80.0;
   PlatformFile? _selectedFile;
   bool _isUploading = false;
+  // Scroll anchor: saved before a load-more chunk is prepended
+  double? _prependAnchorExtent;
+
+  String get _draftKey =>
+      '${AppConfig.chatDraftKeyPrefix}${widget.sessionName}_${widget.windowIndex}';
 
   bool get isDarkMode {
     return Theme.of(context).brightness == Brightness.dark;
@@ -80,8 +88,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             .read(chatProvider.notifier)
             .watchChatLog(widget.sessionName, widget.windowIndex);
       }
+
+      final prefs = ref.read(sharedPreferencesProvider);
+      final draft = prefs.getString(_draftKey);
+      if (draft != null && draft.isNotEmpty) {
+        _controller.text = draft;
+        _controller.selection =
+            TextSelection.collapsed(offset: draft.length);
+      }
     });
 
+    _controller.addListener(_saveDraft);
     _scrollController.addListener(_onScroll);
   }
 
@@ -108,6 +125,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (chatState.hasMoreMessages &&
           !chatState.isLoadingMore &&
           !chatState.isLoading) {
+        // Save current maxScrollExtent so we can restore position after prepend
+        if (_scrollController.hasClients) {
+          _prependAnchorExtent = _scrollController.position.maxScrollExtent;
+        }
         ref.read(chatProvider.notifier).loadMoreMessages();
       }
     }
@@ -160,9 +181,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
+  void _saveDraft() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    final text = _controller.text;
+    if (text.isEmpty) {
+      prefs.remove(_draftKey);
+    } else {
+      prefs.setString(_draftKey, text);
+    }
+  }
+
   @override
   void dispose() {
     ref.read(chatProvider.notifier).unwatchChatLog();
+    _controller.removeListener(_saveDraft);
     _controller.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -193,11 +225,41 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     _controller.clear();
+    ref.read(sharedPreferencesProvider).remove(_draftKey);
     _scrollToBottomAndEnable();
     setState(() {
       _autoScroll = true;
       _showScrollButton = false;
     });
+  }
+
+  void _openFileBrowser() {
+    if (widget.isAcp && widget.cwd.isNotEmpty) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => FileBrowserScreen(initialPath: widget.cwd),
+        ),
+      );
+    } else {
+      final ws = ref.read(sharedWebSocketServiceProvider);
+      final notifier = ref.read(fileBrowserProvider.notifier);
+      late final StreamSubscription<Map<String, dynamic>> sub;
+      sub = ws.messages.listen((msg) {
+        if (msg['type'] == 'session-cwd') {
+          final cwd = msg['cwd'] as String? ?? '';
+          sub.cancel();
+          if (mounted && cwd.isNotEmpty) {
+            notifier.listFiles(cwd);
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => FileBrowserScreen(initialPath: cwd),
+              ),
+            );
+          }
+        }
+      });
+      ws.getSessionCwd(widget.sessionName);
+    }
   }
 
   void _scrollToBottomAndEnable() {
@@ -369,6 +431,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
 
       _controller.clear();
+      ref.read(sharedPreferencesProvider).remove(_draftKey);
       setState(() {
         _selectedFile = null;
         _autoScroll = true;
@@ -420,6 +483,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       },
     );
 
+    // After load-more chunk is prepended, restore scroll position so the
+    // user stays anchored to what they were already reading.
+    ref.listen(
+      chatProvider.select((s) => s.isLoadingMore),
+      (wasLoading, isLoading) {
+        if (wasLoading == true && isLoading == false) {
+          final anchor = _prependAnchorExtent;
+          _prependAnchorExtent = null;
+          if (anchor != null && _scrollController.hasClients) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted || !_scrollController.hasClients) return;
+              final newExtent = _scrollController.position.maxScrollExtent;
+              final added = newExtent - anchor;
+              if (added > 0) {
+                _isProgrammaticScroll = true;
+                _scrollController.jumpTo(
+                  _scrollController.position.pixels + added,
+                );
+                _isProgrammaticScroll = false;
+              }
+            });
+          }
+        }
+      },
+    );
+
     return Scaffold(
       backgroundColor: backgroundColor,
       appBar: AppBar(
@@ -458,6 +547,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: Icon(Icons.folder_open, size: 20, color: textSecondary),
+            tooltip: 'Browse Files',
+            onPressed: _openFileBrowser,
+          ),
           IconButton(
             icon: Icon(Icons.terminal, color: textSecondary),
             onPressed: () {

@@ -3,6 +3,7 @@ mod chat_cmds;
 mod client_manager;
 mod cron_cmds;
 mod dotfiles_cmds;
+mod file_cmds;
 mod session_cmds;
 mod system_cmds;
 mod terminal_cmds;
@@ -273,18 +274,26 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         | WebSocketMessage::WriteDotfile { .. }
         | WebSocketMessage::GetDotfileHistory { .. }
         | WebSocketMessage::RestoreDotfileVersion { .. }
-        | WebSocketMessage::GetDotfileTemplates => {
+        | WebSocketMessage::GetDotfileTemplates
+        | WebSocketMessage::ReadBinaryFile { .. } => {
             dotfiles_cmds::handle(msg, &state.message_tx).await?;
         }
 
         // Chat handlers — delegated to chat_cmds
         WebSocketMessage::WatchChatLog { .. }
         | WebSocketMessage::WatchAcpChatLog { .. }
+        | WebSocketMessage::LoadMoreChatHistory { .. }
         | WebSocketMessage::UnwatchChatLog
         | WebSocketMessage::ClearChatLog { .. }
         | WebSocketMessage::SendFileToChat { .. }
         | WebSocketMessage::SendChatMessage { .. } => {
             chat_cmds::handle(msg, state, app_state).await?;
+        }
+
+        // File browser — delegated to file_cmds
+        WebSocketMessage::ListFiles { .. }
+        | WebSocketMessage::GetSessionCwd { .. } => {
+            file_cmds::handle(msg, &state.message_tx).await?;
         }
 
         // ACP handlers — delegated to acp_cmds

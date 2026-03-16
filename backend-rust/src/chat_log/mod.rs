@@ -79,6 +79,8 @@ pub enum ChatLogEvent {
     History {
         messages: Vec<ChatMessage>,
         tool: AiTool,
+        has_more: bool,
+        total_count: usize,
     },
     NewMessage {
         message: ChatMessage,

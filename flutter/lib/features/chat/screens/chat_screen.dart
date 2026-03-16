@@ -48,6 +48,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // Scroll anchor: saved before a load-more chunk is prepended
   double? _prependAnchorExtent;
 
+  String get _draftKey =>
+      '${AppConfig.chatDraftKeyPrefix}${widget.sessionName}_${widget.windowIndex}';
+
   bool get isDarkMode {
     return Theme.of(context).brightness == Brightness.dark;
   }
@@ -85,8 +88,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             .read(chatProvider.notifier)
             .watchChatLog(widget.sessionName, widget.windowIndex);
       }
+
+      final prefs = ref.read(sharedPreferencesProvider);
+      final draft = prefs.getString(_draftKey);
+      if (draft != null && draft.isNotEmpty) {
+        _controller.text = draft;
+        _controller.selection =
+            TextSelection.collapsed(offset: draft.length);
+      }
     });
 
+    _controller.addListener(_saveDraft);
     _scrollController.addListener(_onScroll);
   }
 
@@ -169,9 +181,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
+  void _saveDraft() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    final text = _controller.text;
+    if (text.isEmpty) {
+      prefs.remove(_draftKey);
+    } else {
+      prefs.setString(_draftKey, text);
+    }
+  }
+
   @override
   void dispose() {
     ref.read(chatProvider.notifier).unwatchChatLog();
+    _controller.removeListener(_saveDraft);
     _controller.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
@@ -202,6 +225,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     _controller.clear();
+    ref.read(sharedPreferencesProvider).remove(_draftKey);
     _scrollToBottomAndEnable();
     setState(() {
       _autoScroll = true;
@@ -407,6 +431,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
 
       _controller.clear();
+      ref.read(sharedPreferencesProvider).remove(_draftKey);
       setState(() {
         _selectedFile = null;
         _autoScroll = true;

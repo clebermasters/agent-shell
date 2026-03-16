@@ -11,6 +11,7 @@ import '../../../core/providers.dart';
 import '../../../data/services/websocket_service.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/professional_message_bubble.dart';
+import '../widgets/acp_permission_card.dart';
 import '../../hosts/providers/hosts_provider.dart';
 import '../../sessions/providers/sessions_provider.dart';
 import '../../terminal/screens/terminal_screen.dart';
@@ -667,6 +668,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ],
                   ),
           ),
+          if (chatState.pendingPermission != null)
+            AcpPermissionCard(
+              permission: chatState.pendingPermission!,
+              onRespond: (requestId, optionId) {
+                ref.read(chatProvider.notifier).respondPermission(requestId, optionId);
+              },
+            ),
           _buildInputArea(),
         ],
       ),

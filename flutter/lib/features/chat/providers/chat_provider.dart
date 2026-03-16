@@ -14,9 +14,27 @@ import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
 import '../../sessions/providers/sessions_provider.dart';
 
+// Sentinel value used in copyWith to distinguish "not provided" from "explicitly null"
+const _sentinel = Object();
+
+class PendingPermission {
+  final String requestId;
+  final String tool;
+  final String command;
+  final List<Map<String, dynamic>> options;
+
+  const PendingPermission({
+    required this.requestId,
+    required this.tool,
+    required this.command,
+    required this.options,
+  });
+}
+
 class ChatState {
   final List<ChatMessage> messages;
   final bool isLoading;
+  final PendingPermission? pendingPermission;
   final bool isLoadingMore;
   final String? error;
   final String? detectedTool;
@@ -35,6 +53,7 @@ class ChatState {
   const ChatState({
     this.messages = const [],
     this.isLoading = false,
+    this.pendingPermission,
     this.isLoadingMore = false,
     this.error,
     this.detectedTool,
@@ -55,6 +74,7 @@ class ChatState {
     List<ChatMessage>? messages,
     bool? isLoading,
     bool? isLoadingMore,
+    Object? pendingPermission = _sentinel,
     String? error,
     String? detectedTool,
     String? sessionName,
@@ -73,6 +93,9 @@ class ChatState {
       messages: messages ?? this.messages,
       isLoading: isLoading ?? this.isLoading,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      pendingPermission: pendingPermission == _sentinel
+          ? this.pendingPermission
+          : pendingPermission as PendingPermission?,
       error: error,
       detectedTool: detectedTool ?? this.detectedTool,
       sessionName: sessionName ?? this.sessionName,
@@ -745,18 +768,28 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final requestId = message['requestId'] as String? ?? '';
     final tool = message['tool'] as String? ?? 'Unknown';
     final command = message['command'] as String? ?? '';
+    final rawOptions = message['options'] as List?;
+    final options = rawOptions
+            ?.map((o) => Map<String, dynamic>.from(o as Map))
+            .toList() ??
+        [
+          {'id': 'approve', 'label': 'Approve'},
+          {'id': 'deny', 'label': 'Deny'},
+        ];
 
     state = state.copyWith(
-      messages: [
-        ...state.messages,
-        ChatMessage(
-          id: requestId,
-          type: ChatMessageType.system,
-          content: 'Permission Request: $tool\n$command',
-          timestamp: DateTime.now(),
-        ),
-      ],
+      pendingPermission: PendingPermission(
+        requestId: requestId,
+        tool: tool,
+        command: command,
+        options: options,
+      ),
     );
+  }
+
+  void respondPermission(String requestId, String optionId) {
+    _ws?.acpRespondPermission(requestId, optionId);
+    state = state.copyWith(pendingPermission: null);
   }
 
   void _handleAcpPromptDone(Map<String, dynamic> message) {
@@ -774,6 +807,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
           timestamp: DateTime.now(),
         ),
       ],
+    );
+
+    // Fire a local notification so the user is alerted even when app is backgrounded
+    final lastUserVisible = state.messages
+        .where((m) => m.type == ChatMessageType.assistant)
+        .lastOrNull;
+    final preview = lastUserVisible?.content?.trim().split('\n').first ?? 'Task completed';
+    _showLocalNotification(
+      title: 'AI task done',
+      body: preview.length > 100 ? '${preview.substring(0, 100)}…' : preview,
     );
   }
 

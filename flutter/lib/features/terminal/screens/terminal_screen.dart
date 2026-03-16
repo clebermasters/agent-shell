@@ -12,7 +12,6 @@ import '../widgets/terminal_accessory_bar.dart';
 import '../widgets/floating_voice_button.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
-import '../../../core/config/app_config.dart';
 import '../../chat/screens/chat_screen.dart';
 import '../../sessions/providers/sessions_provider.dart';
 import '../../file_browser/providers/file_browser_provider.dart';
@@ -43,6 +42,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
   // Selection Mode state
   bool _isSelectionMode = false;
+
+  // Swipe-between-sessions state
+  double _swipeDx = 0;
+  String? _swipeHintName;
 
   // Voice button visibility (persisted)
   bool _showVoiceButton = true;
@@ -210,6 +213,52 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     }
   }
 
+  void _switchToAdjacentSession(int direction) {
+    final sessions = ref.read(sessionsProvider).sessions;
+    if (sessions.isEmpty) return;
+    final currentIndex = sessions.indexWhere((s) => s.name == widget.sessionName);
+    if (currentIndex == -1) return;
+    final nextIndex = (currentIndex + direction) % sessions.length;
+    final nextSession = sessions[nextIndex].name;
+    Navigator.of(context).pushReplacement(MaterialPageRoute(
+      builder: (_) => TerminalScreen(sessionName: nextSession),
+    ));
+  }
+
+  void _showRenameDialog() {
+    final controller = TextEditingController(text: widget.sessionName);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename Session'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'New Name'),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty && value.trim() != widget.sessionName) {
+              ref.read(sharedWebSocketServiceProvider).renameSession(widget.sessionName, value.trim());
+            }
+            Navigator.pop(context);
+          },
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final newName = controller.text.trim();
+              if (newName.isNotEmpty && newName != widget.sessionName) {
+                ref.read(sharedWebSocketServiceProvider).renameSession(widget.sessionName, newName);
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _handleResize(int cols, int rows) {
     ref.read(terminalProvider.notifier).resize(widget.sessionName, cols, rows);
   }
@@ -373,7 +422,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       appBar: _fullscreen
           ? null
           : AppBar(
-              title: Text(widget.sessionName),
+              title: GestureDetector(
+                onLongPress: _showRenameDialog,
+                child: Text(widget.sessionName),
+              ),
               actions: [
                 IconButton(
                   icon: const Icon(Icons.chat_bubble_outline, size: 20),
@@ -452,7 +504,42 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
             _clearActiveSession();
           }
         },
-        child: Stack(
+        child: GestureDetector(
+          onHorizontalDragUpdate: _isSelectionMode
+              ? null
+              : (details) {
+                  final sessions = ref.read(sessionsProvider).sessions;
+                  if (sessions.length < 2) return;
+                  setState(() {
+                    _swipeDx += details.delta.dx;
+                    final idx = sessions.indexWhere((s) => s.name == widget.sessionName);
+                    if (idx == -1) return;
+                    if (_swipeDx < -40) {
+                      final next = sessions[(idx + 1) % sessions.length].name;
+                      _swipeHintName = '→ $next';
+                    } else if (_swipeDx > 40) {
+                      final prev = sessions[(idx - 1 + sessions.length) % sessions.length].name;
+                      _swipeHintName = '← $prev';
+                    } else {
+                      _swipeHintName = null;
+                    }
+                  });
+                },
+          onHorizontalDragEnd: _isSelectionMode
+              ? null
+              : (details) {
+                  final dx = _swipeDx;
+                  setState(() {
+                    _swipeDx = 0;
+                    _swipeHintName = null;
+                  });
+                  if (dx < -80) {
+                    _switchToAdjacentSession(1);
+                  } else if (dx > 80) {
+                    _switchToAdjacentSession(-1);
+                  }
+                },
+          child: Stack(
           children: [
             Column(
               children: [
@@ -486,6 +573,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                         )
                       : const SizedBox.shrink(),
                 ),
+
+                // Scrollback hydration indicator
+                if (terminalState.isHydrating)
+                  const LinearProgressIndicator(minHeight: 2),
 
                 // Terminal view / Selection overlay
                 Expanded(
@@ -622,7 +713,29 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                   );
                 },
               ),
+
+            // Swipe session hint overlay
+            if (_swipeHintName != null)
+              Positioned(
+                top: 8,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.7),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      _swipeHintName!,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                ),
+              ),
           ],
+        ),
         ),
       ),
     );

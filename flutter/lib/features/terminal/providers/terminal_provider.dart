@@ -16,6 +16,7 @@ import '../../sessions/providers/sessions_provider.dart';
 class TerminalState {
   final bool isConnected;
   final bool isLoading;
+  final bool isHydrating;
   final String? error;
   final Terminal? terminal;
   final TerminalController? controller;
@@ -26,6 +27,7 @@ class TerminalState {
   const TerminalState({
     this.isConnected = false,
     this.isLoading = false,
+    this.isHydrating = false,
     this.error,
     this.terminal,
     this.controller,
@@ -37,6 +39,7 @@ class TerminalState {
   TerminalState copyWith({
     bool? isConnected,
     bool? isLoading,
+    bool? isHydrating,
     String? error,
     Terminal? terminal,
     TerminalController? controller,
@@ -47,6 +50,7 @@ class TerminalState {
     return TerminalState(
       isConnected: isConnected ?? this.isConnected,
       isLoading: isLoading ?? this.isLoading,
+      isHydrating: isHydrating ?? this.isHydrating,
       error: error,
       terminal: terminal ?? this.terminal,
       controller: controller ?? this.controller,
@@ -88,6 +92,18 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
         _wsService.attachSession(_activeSessionName!, cols: cols, rows: rows);
       }
       state = state.copyWith(isConnected: connected);
+    });
+
+    _wsService.messages.listen((message) {
+      final type = message['type'] as String?;
+      final msgSession = message['sessionName'] as String?
+          ?? message['session'] as String?;
+      if (msgSession != null && msgSession != _activeSessionName) return;
+      if (type == 'terminal-history-start') {
+        state = state.copyWith(isHydrating: true);
+      } else if (type == 'terminal-history-end') {
+        state = state.copyWith(isHydrating: false);
+      }
     });
   }
 

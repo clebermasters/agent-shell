@@ -223,6 +223,7 @@ class WebSocketService {
     int cols = 80,
     int rows = 24,
     int windowIndex = 0,
+    bool requestHistory = true,
   }) {
     send({
       'type': 'attach-session',
@@ -230,6 +231,7 @@ class WebSocketService {
       'cols': cols,
       'rows': rows,
       'windowIndex': windowIndex,
+      'requestHistory': requestHistory,
     });
   }
 
@@ -254,6 +256,23 @@ class WebSocketService {
       'type': 'select-window',
       'sessionName': sessionName,
       'windowIndex': windowId,
+    });
+  }
+
+  void renameSession(String oldName, String newName) {
+    send({
+      'type': 'rename-session',
+      'sessionName': oldName,
+      'newName': newName,
+    });
+  }
+
+  void renameWindow(String sessionName, int windowIndex, String newName) {
+    send({
+      'type': 'rename-window',
+      'sessionName': sessionName,
+      'windowIndex': windowIndex,
+      'newName': newName,
     });
   }
 

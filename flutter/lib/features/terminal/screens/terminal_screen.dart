@@ -21,11 +21,13 @@ import '../../file_browser/screens/file_browser_screen.dart';
 class TerminalScreen extends ConsumerStatefulWidget {
   final String sessionName;
   final int windowIndex;
+  final bool isSwipeNavigation;
 
   const TerminalScreen({
     super.key,
     required this.sessionName,
     this.windowIndex = 0,
+    this.isSwipeNavigation = false,
   });
 
   @override
@@ -110,7 +112,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       terminalNotifier.terminalService.setInputProcessor(_processInput);
 
       _persistActiveSession();
-      _pushRecentTerminalSession();
+      if (!widget.isSwipeNavigation) _pushRecentTerminalSession();
 
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) {
@@ -241,7 +243,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     final nextIdx = idx + direction;
     if (nextIdx < 0 || nextIdx >= recent.length) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(
-      builder: (_) => TerminalScreen(sessionName: recent[nextIdx]),
+      builder: (_) => TerminalScreen(sessionName: recent[nextIdx], isSwipeNavigation: true),
     ));
   }
 

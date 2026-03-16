@@ -23,6 +23,7 @@ class ChatScreen extends ConsumerStatefulWidget {
   final int windowIndex;
   final bool isAcp;
   final String cwd;
+  final bool isSwipeNavigation;
 
   const ChatScreen({
     super.key,
@@ -30,6 +31,7 @@ class ChatScreen extends ConsumerStatefulWidget {
     this.windowIndex = 0,
     this.isAcp = false,
     this.cwd = '',
+    this.isSwipeNavigation = false,
   });
 
   @override
@@ -76,7 +78,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _pushRecentChatSession();
+      if (!widget.isSwipeNavigation) _pushRecentChatSession();
 
       if (widget.isAcp) {
         final ws = ref.read(sharedWebSocketServiceProvider);
@@ -1104,6 +1106,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           windowIndex: 0,
           isAcp: true,
           cwd: acp.cwd,
+          isSwipeNavigation: true,
         ),
       ));
     } else {
@@ -1117,6 +1120,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           sessionName: name,
           windowIndex: winIdx,
           isAcp: false,
+          isSwipeNavigation: true,
         ),
       ));
     }

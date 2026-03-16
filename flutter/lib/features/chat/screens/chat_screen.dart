@@ -49,6 +49,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // Scroll anchor: saved before a load-more chunk is prepended
   double? _prependAnchorExtent;
 
+  // Swipe-between-AI-chats state
+  double _swipeDx = 0;
+  String? _swipeHintName;
+  bool _showDots = false;
+
   String get _draftKey =>
       '${AppConfig.chatDraftKeyPrefix}${widget.sessionName}_${widget.windowIndex}';
 
@@ -586,7 +591,74 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: GestureDetector(
+        onHorizontalDragUpdate: !widget.isAcp
+            ? null
+            : (details) {
+                final acpSessions = ref.read(sessionsProvider).acpSessions;
+                if (acpSessions.length < 2) return;
+                setState(() {
+                  _showDots = true;
+                  final idx = acpSessions.indexWhere((s) => s.sessionId == widget.sessionName);
+                  if (idx == -1) return;
+                  final atStart = idx == 0;
+                  final atEnd = idx == acpSessions.length - 1;
+                  if ((atStart && details.delta.dx > 0) || (atEnd && details.delta.dx < 0)) {
+                    _swipeDx += details.delta.dx * 0.25;
+                    _swipeHintName = atStart ? '⟵ (start)' : '(end) ⟶';
+                  } else {
+                    _swipeDx += details.delta.dx;
+                    if (_swipeDx < -60) {
+                      final next = acpSessions[idx + 1];
+                      _swipeHintName = '→ ${next.title.isNotEmpty ? next.title : next.sessionId.substring(0, 8)}';
+                    } else if (_swipeDx > 60) {
+                      final prev = acpSessions[idx - 1];
+                      _swipeHintName = '← ${prev.title.isNotEmpty ? prev.title : prev.sessionId.substring(0, 8)}';
+                    } else {
+                      _swipeHintName = null;
+                    }
+                  }
+                });
+              },
+        onHorizontalDragEnd: !widget.isAcp
+            ? null
+            : (details) {
+                final dx = _swipeDx;
+                final acpSessions = ref.read(sessionsProvider).acpSessions;
+                final currentIndex = acpSessions.indexWhere((s) => s.sessionId == widget.sessionName);
+                final atStart = currentIndex == 0 && dx > 0;
+                final atEnd = currentIndex == acpSessions.length - 1 && dx < 0;
+                setState(() {
+                  _swipeDx = 0;
+                  _swipeHintName = null;
+                });
+                if (atStart || atEnd) {
+                  Future.delayed(const Duration(milliseconds: 600), () {
+                    if (mounted) setState(() => _showDots = false);
+                  });
+                  return;
+                }
+                if (dx < -120) {
+                  _switchToAdjacentAcpSession(1);
+                } else if (dx > 120) {
+                  _switchToAdjacentAcpSession(-1);
+                }
+                Future.delayed(const Duration(milliseconds: 600), () {
+                  if (mounted) setState(() => _showDots = false);
+                });
+              },
+        onHorizontalDragCancel: !widget.isAcp
+            ? null
+            : () {
+                setState(() {
+                  _swipeDx = 0;
+                  _swipeHintName = null;
+                  _showDots = false;
+                });
+              },
+        child: Stack(
+          children: [
+            Column(
         children: [
           if (chatState.error != null)
             Container(
@@ -677,6 +749,41 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           _buildInputArea(),
         ],
+            ),
+            // Dot position indicator
+            if (_showDots)
+              Positioned(
+                top: 36,
+                left: 0,
+                right: 0,
+                child: AnimatedOpacity(
+                  opacity: _showDots ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: _buildDotIndicator(),
+                ),
+              ),
+            // Swipe session hint overlay
+            if (_swipeHintName != null)
+              Positioned(
+                top: 8,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.7),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      _swipeHintName!,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -931,6 +1038,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
           child: const Icon(Icons.send_rounded, size: 22, color: Colors.white),
         ),
+      ),
+    );
+  }
+
+  void _switchToAdjacentAcpSession(int direction) {
+    final acpSessions = ref.read(sessionsProvider).acpSessions;
+    if (acpSessions.isEmpty) return;
+    final currentIndex = acpSessions.indexWhere((s) => s.sessionId == widget.sessionName);
+    if (currentIndex == -1) return;
+    final nextIndex = currentIndex + direction;
+    if (nextIndex < 0 || nextIndex >= acpSessions.length) return;
+    final next = acpSessions[nextIndex];
+    Navigator.of(context).pushReplacement(MaterialPageRoute(
+      builder: (_) => ChatScreen(
+        sessionName: next.sessionId,
+        windowIndex: 0,
+        isAcp: true,
+        cwd: next.cwd,
+      ),
+    ));
+  }
+
+  Widget _buildDotIndicator() {
+    final acpSessions = ref.read(sessionsProvider).acpSessions;
+    final currentIndex = acpSessions.indexWhere((s) => s.sessionId == widget.sessionName);
+    if (acpSessions.length < 2 || currentIndex == -1) return const SizedBox.shrink();
+
+    return Center(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(acpSessions.length, (i) {
+          final active = i == currentIndex;
+          return Container(
+            width: active ? 8 : 6,
+            height: active ? 8 : 6,
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: active
+                  ? Colors.white.withOpacity(0.9)
+                  : Colors.white.withOpacity(0.35),
+            ),
+          );
+        }),
       ),
     );
   }

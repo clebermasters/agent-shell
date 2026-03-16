@@ -9,6 +9,8 @@ import '../../system/screens/system_screen.dart';
 import '../../debug/screens/debug_screen.dart';
 import '../../settings/screens/settings_screen.dart';
 import '../../terminal/screens/terminal_screen.dart';
+import '../../system/widgets/alert_banner.dart';
+import '../widgets/command_palette.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   final bool showDebug;
@@ -93,7 +95,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
 
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: _screens),
+      body: Column(
+        children: [
+          AlertBanner(
+            onTap: () {
+              setState(() => _currentIndex = 3); // System tab
+              _saveIndex(3);
+            },
+          ),
+          Expanded(child: IndexedStack(index: _currentIndex, children: _screens)),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (index) {
@@ -130,7 +142,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               onPressed: _openSettingsScreen,
               child: const Icon(Icons.settings),
             )
-          : null,
+          : FloatingActionButton.small(
+              heroTag: 'command_palette_fab',
+              onPressed: () => showCommandPalette(context, (index) {
+                setState(() => _currentIndex = index);
+                _saveIndex(index);
+              }),
+              child: const Icon(Icons.search),
+            ),
     );
   }
 }

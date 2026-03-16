@@ -8,6 +8,7 @@ import '../../terminal/screens/terminal_screen.dart';
 import '../../chat/screens/chat_screen.dart';
 import '../../hosts/screens/host_selection_screen.dart';
 import '../../hosts/providers/hosts_provider.dart';
+import '../../system/widgets/system_mini_bar.dart';
 
 final selectedBackendProvider = StateProvider<String>((ref) => 'tmux');
 
@@ -156,7 +157,10 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
           ),
         ],
       ),
-      body: sessionsState.isLoading
+      body: Column(
+        children: [
+          const SystemMiniBar(),
+          Expanded(child: sessionsState.isLoading
           ? const Center(child: CircularProgressIndicator())
           : sessionsState.sessions.isEmpty && sessionsState.acpSessions.isEmpty
           ? Center(
@@ -212,6 +216,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                           ),
                         );
                       },
+                      onRename: () => _showRenameSessionDialog(context, ref, session.name),
                       onKill: () async {
                         final confirmed = await showDialog<bool>(
                           context: context,
@@ -308,9 +313,52 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
                 ],
               ],
             ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showCreateSessionDialog(context, ref),
         child: const Icon(Icons.add),
+      ),
+    );
+  }
+
+  void _showRenameSessionDialog(BuildContext context, WidgetRef ref, String currentName) {
+    final controller = TextEditingController(text: currentName);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename Session'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'New Name'),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty && value.trim() != currentName) {
+              ref.read(sharedWebSocketServiceProvider).renameSession(currentName, value.trim());
+              Future.delayed(const Duration(milliseconds: 500), () {
+                ref.read(sessionsProvider.notifier).refresh();
+              });
+            }
+            Navigator.pop(context);
+          },
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              final newName = controller.text.trim();
+              if (newName.isNotEmpty && newName != currentName) {
+                ref.read(sharedWebSocketServiceProvider).renameSession(currentName, newName);
+                Future.delayed(const Duration(milliseconds: 500), () {
+                  ref.read(sessionsProvider.notifier).refresh();
+                });
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Rename'),
+          ),
+        ],
       ),
     );
   }
@@ -420,12 +468,14 @@ class _SessionTile extends StatelessWidget {
   final VoidCallback onAttach;
   final VoidCallback onChat;
   final VoidCallback onKill;
+  final VoidCallback onRename;
 
   const _SessionTile({
     required this.session,
     required this.onAttach,
     required this.onChat,
     required this.onKill,
+    required this.onRename,
   });
 
   @override
@@ -461,6 +511,14 @@ class _SessionTile extends StatelessWidget {
               ),
             ),
             const PopupMenuItem(
+              value: 'rename',
+              child: ListTile(
+                leading: Icon(Icons.edit),
+                title: Text('Rename'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            const PopupMenuItem(
               value: 'kill',
               child: ListTile(
                 leading: Icon(Icons.delete, color: Colors.red),
@@ -474,6 +532,8 @@ class _SessionTile extends StatelessWidget {
               onAttach();
             } else if (value == 'chat') {
               onChat();
+            } else if (value == 'rename') {
+              onRename();
             } else if (value == 'kill') {
               onKill();
             }

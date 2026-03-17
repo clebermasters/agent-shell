@@ -7,7 +7,6 @@ ARG SERVER_LIST=""
 ARG OPENAI_API_KEY=""
 ARG SHOW_THINKING=""
 ARG SHOW_TOOL_CALLS=""
-ARG BUILD_TIMESTAMP=""
 ARG AUTH_TOKEN=""
 
 WORKDIR /app
@@ -28,7 +27,8 @@ RUN mkdir -p /root/.android && \
     fi && \
     cp /app/android/debug.keystore /root/.android/debug.keystore
 
-# Generate build config (always, to embed BUILD_TIMESTAMP and bust the SW cache hash)
+# Generate build config (without BUILD_TIMESTAMP so this layer is cacheable across builds)
+# BUILD_TIMESTAMP is injected post-compile by build.sh — it never changes compiled Dart code
 RUN echo "Generating build config..."; \
     mkdir -p /app/lib/core/config; \
     echo "// Auto-generated build configuration" > /app/lib/core/config/build_config.dart; \
@@ -40,10 +40,9 @@ RUN echo "Generating build config..."; \
     echo "  static const String defaultApiKey = '$OPENAI_API_KEY';" >> /app/lib/core/config/build_config.dart; \
     echo "  static const bool defaultShowThinking = $([ -n "$SHOW_THINKING" ] && echo "$SHOW_THINKING" || echo "true");" >> /app/lib/core/config/build_config.dart; \
     echo "  static const bool defaultShowToolCalls = $([ -n "$SHOW_TOOL_CALLS" ] && echo "$SHOW_TOOL_CALLS" || echo "true");" >> /app/lib/core/config/build_config.dart; \
-    echo "  static const String buildTimestamp = '$BUILD_TIMESTAMP';" >> /app/lib/core/config/build_config.dart; \
     echo "  static const String authToken = '$AUTH_TOKEN';" >> /app/lib/core/config/build_config.dart; \
     echo "}" >> /app/lib/core/config/build_config.dart; \
-    echo "Build config generated with timestamp: $BUILD_TIMESTAMP"
+    echo "Build config generated"
 
 # Initialize Linux platform directory if missing (flutter build linux requires it)
 RUN if [ "$BUILD_TYPE" = "linux" ] && [ ! -d "linux" ]; then \

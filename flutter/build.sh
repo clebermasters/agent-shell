@@ -118,10 +118,21 @@ if [ -f "$FLUTTER_DIR/android/gradle.properties" ]; then
         echo "org.gradle.caching=true" >> "$FLUTTER_DIR/android/gradle.properties"
 fi
 
+# Ensure base image exists — pull from GHCR or build locally if missing
+if ! docker image inspect agentshell-flutter-base:latest > /dev/null 2>&1; then
+    echo "Base image not found locally. Fetching..."
+    "$PROJECT_ROOT/scripts/build-base.sh"
+fi
+
 # Set pipefail to catch docker build failure
 set -o pipefail
 
-# Build the image with BUILD_TYPE argument and optional env vars
+BUILD_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+
+# Build the image with BUILD_TYPE argument and optional env vars.
+# BUILD_TIMESTAMP is intentionally excluded from docker build args — it was
+# previously invalidating the entire compile cache on every build (Flutter compile
+# is 10-15 min). The timestamp is injected post-compile by build.sh instead.
 DOCKER_BUILDKIT=1 docker build \
     -t agentshell-flutter-builder:latest \
     -f "$DOCKER_DIR/Dockerfile" \
@@ -133,7 +144,6 @@ DOCKER_BUILDKIT=1 docker build \
     --build-arg OPENAI_API_KEY="$OPENAI_API_KEY" \
     --build-arg SHOW_THINKING="$SHOW_THINKING" \
     --build-arg SHOW_TOOL_CALLS="$SHOW_TOOL_CALLS" \
-    --build-arg BUILD_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)" \
     --build-arg AUTH_TOKEN="$AUTH_TOKEN" \
     2>&1 | tee /tmp/flutter-build.log
 
@@ -147,6 +157,10 @@ if [ $? -eq 0 ]; then
         rm -f "$PROJECT_ROOT/$WEB_FILENAME"
         docker cp "$CONTAINER_ID:/agentshell-web" /tmp/agentshell-web
         docker rm "$CONTAINER_ID"
+        # Inject BUILD_TIMESTAMP post-compile so Docker compile layers are cacheable.
+        # This is safe: the SW (flutter_service_worker.js) just self-unregisters and
+        # does no file caching, so changing version.json doesn't break SW integrity.
+        echo "{\"build_timestamp\":\"$BUILD_TIMESTAMP\"}" > /tmp/agentshell-web/version.json
         (cd /tmp && zip -r "$PROJECT_ROOT/$WEB_FILENAME" agentshell-web && rm -rf agentshell-web)
 
         if [ -f "$PROJECT_ROOT/$WEB_FILENAME" ]; then

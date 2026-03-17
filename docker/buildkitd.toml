@@ -1,0 +1,23 @@
+# BuildKit daemon configuration for agentshell builds
+# Caps builder cache at 10GB to prevent unbounded disk growth.
+# Without this, every build accumulates new layers (especially after
+# any source change) and the cache grows to 30-40GB over time.
+
+[worker.oci]
+  gc = true
+
+  # Rule 0: exec cache mounts (pub-cache, gradle) — keep for 7 days, max 3GB
+  [[worker.oci.gcpolicy]]
+    filters = ["type==exec.cachemount"]
+    keepDuration = 168  # 7 days in hours
+    maxUsedSpace = 3221225472  # 3GB
+
+  # Rule 1: recent layers — keep 48h regardless of size
+  [[worker.oci.gcpolicy]]
+    keepDuration = 48  # 48 hours in hours
+    reservedSpace = 2147483648  # 2GB reserved minimum
+
+  # Rule 2: overall hard cap — never exceed 10GB total
+  [[worker.oci.gcpolicy]]
+    all = true
+    maxUsedSpace = 10737418240  # 10GB

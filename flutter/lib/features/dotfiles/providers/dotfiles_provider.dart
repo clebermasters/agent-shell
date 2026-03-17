@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/dotfile.dart';
 import '../../../data/models/file_entry.dart';
+import '../../../data/models/connection_status.dart';
 import '../../../data/services/websocket_service.dart';
 import '../../sessions/providers/sessions_provider.dart';
 
@@ -149,10 +151,15 @@ class DotfilesNotifier extends StateNotifier<DotfilesState> {
   void refresh() {
     if (state.isLoading) return;
     if (!_wsService.isConnected) {
-      state = state.copyWith(
-        error: 'Not connected to server',
-        isLoading: false,
-      );
+      // Not connected yet — wait for the next connected event and auto-retry.
+      // This handles the case where the screen opens before the WS handshake completes.
+      StreamSubscription<ConnectionStatus>? sub;
+      sub = _wsService.connectionStatus.listen((status) {
+        if (status == ConnectionStatus.connected) {
+          sub?.cancel();
+          refresh();
+        }
+      });
       return;
     }
     state = state.copyWith(isLoading: true, error: null);

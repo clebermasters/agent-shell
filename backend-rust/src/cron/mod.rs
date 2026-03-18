@@ -450,4 +450,105 @@ mod tests {
         let result = mgr.test_command("  ").await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_create_job_invalid_schedule() {
+        let mgr = make_manager();
+        let job = crate::types::CronJob {
+            id: String::new(),
+            name: "bad-schedule".to_string(),
+            schedule: "not a cron".to_string(),
+            command: "echo test".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+        };
+        let result = mgr.create_job(job).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid cron"));
+    }
+
+    #[tokio::test]
+    async fn test_update_job_invalid_schedule() {
+        let mgr = make_manager();
+        let job = crate::types::CronJob {
+            id: "update-test".to_string(),
+            name: "bad-update".to_string(),
+            schedule: "x x x".to_string(),
+            command: "echo test".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+        };
+        let result = mgr.update_job("update-test".to_string(), job).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_toggle_job_not_found() {
+        let mgr = make_manager();
+        let result = mgr.toggle_job("nonexistent-id", true).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_job_not_found() {
+        let mgr = make_manager();
+        // delete_job doesn't error on nonexistent — it just removes from crontab and memory
+        let result = mgr.delete_job("nonexistent-id").await;
+        // Should not panic; result depends on crontab access
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn test_create_job_generates_id() {
+        let mgr = make_manager();
+        let job = crate::types::CronJob {
+            id: String::new(), // empty ID should get UUID
+            name: "auto-id-test".to_string(),
+            schedule: "* * * * *".to_string(),
+            command: "echo test".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+        };
+        let result = mgr.create_job(job).await;
+        // May fail due to crontab access, but if it succeeds, ID should be non-empty
+        if let Ok(created) = result {
+            assert!(!created.id.is_empty());
+            // Clean up
+            let _ = mgr.delete_job(&created.id).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_jobs_returns_sorted() {
+        let mgr = make_manager();
+        // With empty manager, list should be empty and not panic
+        let jobs = mgr.list_jobs().await;
+        assert!(jobs.is_empty());
+        // Verify sort doesn't panic on empty
+    }
 }

@@ -136,4 +136,84 @@ mod tests {
         };
         assert!(json.contains("cpu") || json.contains("stats"));
     }
+
+    #[tokio::test]
+    async fn test_handle_audio_control_start() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use crate::websocket::{
+            client_manager::ClientManager,
+            types::WsState,
+        };
+        use crate::{
+            chat_clear_store::ChatClearStore,
+            chat_event_store::ChatEventStore,
+            chat_file_storage::ChatFileStorage,
+        };
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let (tx, _rx) = make_tx();
+        let chat_event_store = Arc::new(ChatEventStore::new(dir.path().to_path_buf()).unwrap());
+        let chat_clear_store = Arc::new(ChatClearStore::new(&dir.path().to_path_buf()));
+        let chat_file_storage = Arc::new(ChatFileStorage::new(dir.path().to_path_buf()));
+        let client_manager = Arc::new(ClientManager::new());
+        let mut ws_state = WsState {
+            client_id: "test-client".to_string(),
+            current_pty: Arc::new(Mutex::new(None)),
+            current_session: Arc::new(Mutex::new(None)),
+            current_window: Arc::new(Mutex::new(None)),
+            audio_tx: None,
+            message_tx: tx,
+            chat_log_handle: Arc::new(Mutex::new(None)),
+            chat_file_storage,
+            chat_event_store,
+            chat_clear_store,
+            client_manager,
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        };
+        // AudioAction::Start will attempt to start streaming — may fail without audio provider
+        let result = handle_audio_control(&mut ws_state, AudioAction::Start).await;
+        // Result depends on audio availability — just verify no panic
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn test_handle_audio_control_stop_no_tx() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use crate::websocket::{
+            client_manager::ClientManager,
+            types::WsState,
+        };
+        use crate::{
+            chat_clear_store::ChatClearStore,
+            chat_event_store::ChatEventStore,
+            chat_file_storage::ChatFileStorage,
+        };
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let (tx, _rx) = make_tx();
+        let chat_event_store = Arc::new(ChatEventStore::new(dir.path().to_path_buf()).unwrap());
+        let chat_clear_store = Arc::new(ChatClearStore::new(&dir.path().to_path_buf()));
+        let chat_file_storage = Arc::new(ChatFileStorage::new(dir.path().to_path_buf()));
+        let client_manager = Arc::new(ClientManager::new());
+        let mut ws_state = WsState {
+            client_id: "test-client".to_string(),
+            current_pty: Arc::new(Mutex::new(None)),
+            current_session: Arc::new(Mutex::new(None)),
+            current_window: Arc::new(Mutex::new(None)),
+            audio_tx: None, // No audio_tx set
+            message_tx: tx,
+            chat_log_handle: Arc::new(Mutex::new(None)),
+            chat_file_storage,
+            chat_event_store,
+            chat_clear_store,
+            client_manager,
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        };
+        // Stop with audio_tx=None should be a no-op
+        let result = handle_audio_control(&mut ws_state, AudioAction::Stop).await;
+        assert!(result.is_ok());
+        assert!(ws_state.audio_tx.is_none());
+    }
 }

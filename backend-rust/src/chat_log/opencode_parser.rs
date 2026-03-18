@@ -596,4 +596,196 @@ mod tests {
         let result = list_all_sessions(&db_path).unwrap();
         assert!(result.is_empty());
     }
+
+    fn make_state() -> OpencodeState {
+        OpencodeState {
+            pid: 0,
+            session_id: "test-session".to_string(),
+            last_time_updated: 0,
+            cleared_at: None,
+            seen_text_lengths: HashMap::new(),
+            seen_tool_calls: HashSet::new(),
+            seen_tool_results: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn test_parse_part_text_new() {
+        let mut state = make_state();
+        let part = PartData {
+            part_type: "text".to_string(),
+            text: Some("Hello world".to_string()),
+            tool: None,
+            state: None,
+        };
+        let result = parse_part("id1", &part, 1000, &mut state, "assistant");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert_eq!(msg.role, "assistant");
+        assert!(!msg.blocks.is_empty());
+        match &msg.blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "Hello world"),
+            _ => panic!("Expected Text block"),
+        }
+    }
+
+    #[test]
+    fn test_parse_part_text_incremental() {
+        let mut state = make_state();
+        let part1 = PartData {
+            part_type: "text".to_string(),
+            text: Some("Hello".to_string()),
+            tool: None,
+            state: None,
+        };
+        let _ = parse_part("id1", &part1, 1000, &mut state, "assistant");
+
+        // Same ID with longer text — should return only the delta
+        let part2 = PartData {
+            part_type: "text".to_string(),
+            text: Some("Hello world".to_string()),
+            tool: None,
+            state: None,
+        };
+        let result = parse_part("id1", &part2, 2000, &mut state, "assistant");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        match &msg.blocks[0] {
+            ContentBlock::Text { text } => assert!(text.contains("world")), // delta contains new content
+            _ => panic!("Expected Text block"),
+        }
+    }
+
+    #[test]
+    fn test_parse_part_text_no_change() {
+        let mut state = make_state();
+        let part = PartData {
+            part_type: "text".to_string(),
+            text: Some("Same text".to_string()),
+            tool: None,
+            state: None,
+        };
+        let _ = parse_part("id1", &part, 1000, &mut state, "assistant");
+        // Same length text — should return None
+        let result = parse_part("id1", &part, 2000, &mut state, "assistant");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_part_text_with_thinking() {
+        let mut state = make_state();
+        let part = PartData {
+            part_type: "text".to_string(),
+            text: Some("Before<think>internal thought</think>After".to_string()),
+            tool: None,
+            state: None,
+        };
+        let result = parse_part("id1", &part, 1000, &mut state, "assistant");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        // Should have both Thinking and Text blocks
+        assert!(msg.blocks.len() >= 2);
+        let has_thinking = msg.blocks.iter().any(|b| matches!(b, ContentBlock::Thinking { .. }));
+        let has_text = msg.blocks.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
+        assert!(has_thinking);
+        assert!(has_text);
+    }
+
+    #[test]
+    fn test_parse_part_tool_running() {
+        let mut state = make_state();
+        let part = PartData {
+            part_type: "tool".to_string(),
+            text: None,
+            tool: Some("bash".to_string()),
+            state: Some(ToolState {
+                status: Some("running".to_string()),
+                input: Some(Value::String("ls -la".to_string())),
+                output: None,
+            }),
+        };
+        let result = parse_part("tool1", &part, 1000, &mut state, "assistant");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert_eq!(msg.role, "tool");
+        match &msg.blocks[0] {
+            ContentBlock::ToolCall { name, .. } => assert_eq!(name, "bash"),
+            _ => panic!("Expected ToolCall block"),
+        }
+    }
+
+    #[test]
+    fn test_parse_part_tool_completed() {
+        let mut state = make_state();
+        let part = PartData {
+            part_type: "tool".to_string(),
+            text: None,
+            tool: Some("bash".to_string()),
+            state: Some(ToolState {
+                status: Some("completed".to_string()),
+                input: None,
+                output: Some(Value::String("file.txt\n".to_string())),
+            }),
+        };
+        let result = parse_part("tool2", &part, 1000, &mut state, "assistant");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        match &msg.blocks[0] {
+            ContentBlock::ToolResult { tool_name, .. } => assert_eq!(tool_name, "bash"),
+            _ => panic!("Expected ToolResult block"),
+        }
+    }
+
+    #[test]
+    fn test_parse_part_tool_dedup() {
+        let mut state = make_state();
+        let part = PartData {
+            part_type: "tool".to_string(),
+            text: None,
+            tool: Some("bash".to_string()),
+            state: Some(ToolState {
+                status: Some("running".to_string()),
+                input: None,
+                output: None,
+            }),
+        };
+        let result1 = parse_part("tool3", &part, 1000, &mut state, "assistant");
+        assert!(result1.is_some());
+        // Same tool ID again — should be deduped
+        let result2 = parse_part("tool3", &part, 2000, &mut state, "assistant");
+        assert!(result2.is_none());
+    }
+
+    #[test]
+    fn test_parse_part_reasoning() {
+        let mut state = make_state();
+        let part = PartData {
+            part_type: "reasoning".to_string(),
+            text: Some("Let me think about this...".to_string()),
+            tool: None,
+            state: None,
+        };
+        let result = parse_part("reason1", &part, 1000, &mut state, "assistant");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        match &msg.blocks[0] {
+            ContentBlock::Thinking { content } => assert_eq!(content, "Let me think about this..."),
+            _ => panic!("Expected Thinking block"),
+        }
+    }
+
+    #[test]
+    fn test_fetch_all_messages_empty_db() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test_fetch.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (id TEXT, data TEXT);
+             CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, data TEXT, time_updated INTEGER);"
+        ).unwrap();
+        drop(conn);
+        let (messages, max_time) = fetch_all_messages(&db_path, "test-session", None).unwrap();
+        assert!(messages.is_empty());
+        assert_eq!(max_time, 0);
+    }
 }

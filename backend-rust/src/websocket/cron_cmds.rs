@@ -101,3 +101,124 @@ pub(crate) async fn handle(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use crate::websocket::types::BroadcastMessage;
+    use crate::types::{CronJob, WebSocketMessage};
+
+    fn make_tx() -> (
+        mpsc::UnboundedSender<BroadcastMessage>,
+        mpsc::UnboundedReceiver<BroadcastMessage>,
+    ) {
+        mpsc::unbounded_channel()
+    }
+
+    #[tokio::test]
+    async fn test_list_cron_jobs() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::ListCronJobs, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("CronJobsList") || json.contains("jobs"));
+    }
+
+    #[tokio::test]
+    async fn test_test_cron_command_dry_run() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::TestCronCommand {
+            command: "echo hello".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("CronCommandOutput") || json.contains("output"));
+    }
+
+    #[tokio::test]
+    async fn test_test_cron_command_empty() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::TestCronCommand {
+            command: "  ".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("error") || json.contains("Error") || json.contains("Failed"));
+    }
+
+    #[tokio::test]
+    async fn test_create_cron_job_invalid_schedule() {
+        let (tx, mut rx) = make_tx();
+        let job = CronJob {
+            id: String::new(),
+            name: "test-job".to_string(),
+            schedule: "invalid".to_string(),
+            command: "echo test".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+        };
+        let result = handle(WebSocketMessage::CreateCronJob { job }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("error") || json.contains("Error") || json.contains("Failed"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_cron_job_nonexistent() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::DeleteCronJob {
+            id: "nonexistent-id-xyz".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        // Should get some response (success or error depending on crontab state)
+        let _ = rx.try_recv();
+    }
+
+    #[tokio::test]
+    async fn test_toggle_cron_job_nonexistent() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::ToggleCronJob {
+            id: "nonexistent-id-xyz".to_string(),
+            enabled: true,
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("error") || json.contains("Error") || json.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_unknown_message_handled() {
+        let (tx, _rx) = make_tx();
+        let result = handle(WebSocketMessage::Ping, &tx).await;
+        assert!(result.is_ok());
+    }
+}

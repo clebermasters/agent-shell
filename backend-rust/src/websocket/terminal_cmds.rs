@@ -575,3 +575,112 @@ pub(crate) async fn cleanup_session(state: &WsState) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
+    use crate::websocket::{
+        client_manager::ClientManager,
+        types::{BroadcastMessage, WsState},
+    };
+    use crate::{
+        chat_clear_store::ChatClearStore,
+        chat_event_store::ChatEventStore,
+        chat_file_storage::ChatFileStorage,
+    };
+
+    fn make_ws_state(dir: &std::path::Path) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>) {
+        let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
+        let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
+        let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
+        let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
+        let client_manager = Arc::new(ClientManager::new());
+        let ws_state = WsState {
+            client_id: "test-client".to_string(),
+            current_pty: Arc::new(Mutex::new(None)),
+            current_session: Arc::new(Mutex::new(None)),
+            current_window: Arc::new(Mutex::new(None)),
+            audio_tx: None,
+            message_tx: tx,
+            chat_log_handle: Arc::new(Mutex::new(None)),
+            chat_file_storage,
+            chat_event_store,
+            chat_clear_store,
+            client_manager,
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        };
+        (ws_state, rx)
+    }
+
+    #[tokio::test]
+    async fn test_handle_input_no_pty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ws_state, _rx) = make_ws_state(dir.path());
+        let result = handle_input(&ws_state, "hello".to_string()).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_resize_no_pty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ws_state, _rx) = make_ws_state(dir.path());
+        let result = handle_resize(&ws_state, 80, 24).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_send_enter_key_no_session() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ws_state, _rx) = make_ws_state(dir.path());
+        let result = handle_send_enter_key(&ws_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_attach_sets_state() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut ws_state, _rx) = make_ws_state(dir.path());
+        // attach_to_session will fail since no tmux, but current_session/window should be set
+        *ws_state.current_session.lock().await = None;
+        *ws_state.current_window.lock().await = None;
+
+        // handle_attach sets current_session and current_window before attempting attach
+        // The attach itself will fail, but we can verify the state was set
+        let _ = handle_attach(&mut ws_state, "test-session".to_string(), 80, 24, Some(0)).await;
+        let session = ws_state.current_session.lock().await.clone();
+        assert_eq!(session, Some("test-session".to_string()));
+        let window = *ws_state.current_window.lock().await;
+        assert_eq!(window, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_handle_input_via_tmux_no_session() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ws_state, _rx) = make_ws_state(dir.path());
+        // No session or window in state or message
+        let result = handle_input_via_tmux(&ws_state, None, None, "test".to_string()).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_session_no_pty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ws_state, _rx) = make_ws_state(dir.path());
+        // Should not panic with nothing active
+        cleanup_session(&ws_state).await;
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_session_with_chat_log_handle() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ws_state, _rx) = make_ws_state(dir.path());
+        // Set a chat_log_handle to verify it gets aborted
+        let handle = tokio::spawn(async { tokio::time::sleep(tokio::time::Duration::from_secs(60)).await });
+        *ws_state.chat_log_handle.lock().await = Some(handle);
+        cleanup_session(&ws_state).await;
+        // After cleanup, handle should be taken (None)
+        assert!(ws_state.chat_log_handle.lock().await.is_none());
+    }
+}

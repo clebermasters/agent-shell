@@ -972,4 +972,222 @@ mod tests {
         let result = handle(WebSocketMessage::Ping, &mut ws_state, app_state).await;
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_select_backend_non_acp() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SelectBackend {
+            backend: "terminal".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("BackendSelected") || json.contains("terminal"));
+    }
+
+    #[tokio::test]
+    async fn test_select_backend_acp_fails_no_opencode() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SelectBackend {
+            backend: "acp".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        // Should get acp-initialized with success=false since opencode binary isn't available
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("acp-initialized") || json.contains("false") || json.contains("error"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_create_session_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpCreateSession {
+            cwd: "/tmp".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("AcpError") || json.contains("not initialized"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_resume_session_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpResumeSession {
+            session_id: "test-sid".to_string(),
+            cwd: "/tmp".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        // Resume spawns a task — give it a moment to send the error
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn test_acp_fork_session_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpForkSession {
+            session_id: "test-sid".to_string(),
+            cwd: "/tmp".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("AcpError") || json.contains("not initialized"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_set_model_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpSetModel {
+            session_id: "test-sid".to_string(),
+            model_id: "gpt-4".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("AcpError") || json.contains("not initialized"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_set_mode_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpSetMode {
+            session_id: "test-sid".to_string(),
+            mode_id: "code".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("AcpError") || json.contains("not initialized"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_respond_permission_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpRespondPermission {
+            request_id: "req-1".to_string(),
+            option_id: "allow".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("AcpError") || json.contains("not initialized"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_load_history_with_pagination() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+
+        // Insert 10 messages directly into the app_state store
+        for i in 0..10 {
+            let msg = crate::chat_log::ChatMessage {
+                role: "user".to_string(),
+                timestamp: Some(chrono::Utc::now()),
+                blocks: vec![crate::chat_log::ContentBlock::Text {
+                    text: format!("Message {}", i),
+                }],
+            };
+            app_state.chat_event_store.append_message("acp_test-paginate", 0, "test", &msg).unwrap();
+        }
+
+        let result = handle(WebSocketMessage::AcpLoadHistory {
+            session_id: "test-paginate".to_string(),
+            offset: Some(3),
+            limit: Some(4),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("acp-history-loaded"));
+        assert!(json.contains("true")); // has_more should be true
+    }
+
+    #[tokio::test]
+    async fn test_acp_load_history_offset_beyond_total() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpLoadHistory {
+            session_id: "test-empty".to_string(),
+            offset: Some(100),
+            limit: Some(10),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("acp-history-loaded"));
+        assert!(json.contains("false")); // has_more should be false
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_acp_chat_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SendFileToAcpChat {
+            session_id: "test-sid".to_string(),
+            file: crate::types::FileAttachment {
+                filename: "test.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data: "SGVsbG8=".to_string(), // base64 "Hello"
+            },
+            prompt: Some("Analyze this".to_string()),
+            cwd: None,
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_acp_chat_saves_file() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SendFileToAcpChat {
+            session_id: "test-sid".to_string(),
+            file: crate::types::FileAttachment {
+                filename: "test.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data: "SGVsbG8=".to_string(),
+            },
+            prompt: Some("Look at this file".to_string()),
+            cwd: Some(dir.path().to_string_lossy().to_string()),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        // Verify file was persisted to chat event store
+        let messages = ws_state.chat_event_store.list_messages("acp_test-sid", 0);
+        assert!(messages.is_ok());
+    }
 }

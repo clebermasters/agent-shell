@@ -697,3 +697,107 @@ fn strip_trailing_commas(s: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_trailing_commas_object() {
+        let input = r#"{"a":1,}"#;
+        let result = strip_trailing_commas(input);
+        assert_eq!(result, r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_array() {
+        let input = r#"[1,2,]"#;
+        let result = strip_trailing_commas(input);
+        assert_eq!(result, r#"[1,2]"#);
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_nested() {
+        let input = r#"{"a":[1,2,],"b":{"c":3,},}"#;
+        let result = strip_trailing_commas(input);
+        // All trailing commas should be stripped
+        assert!(!result.contains(",]"));
+        assert!(!result.contains(",}"));
+        // Verify it's valid JSON
+        let parsed: sj::Result<sj::Value> = sj::from_str(&result);
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_no_commas() {
+        let input = r#"{"a":1,"b":2}"#;
+        let result = strip_trailing_commas(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_empty() {
+        let result = strip_trailing_commas("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_mcp_def_to_acp_local() {
+        let def = sj::json!({
+            "type": "local",
+            "command": ["/usr/bin/node", "--stdio"],
+            "environment": {"KEY": "value"}
+        });
+        let result = mcp_def_to_acp("test-server", &def);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert_eq!(val["name"], "test-server");
+        assert!(val["command"].as_str().is_some());
+        assert_eq!(val["args"], sj::json!(["--stdio"]));
+        assert!(val["env"].as_array().is_some());
+    }
+
+    #[test]
+    fn test_mcp_def_to_acp_http() {
+        let def = sj::json!({
+            "type": "http",
+            "url": "https://example.com/mcp",
+            "headers": {"Authorization": "Bearer xyz"}
+        });
+        let result = mcp_def_to_acp("http-server", &def);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert_eq!(val["name"], "http-server");
+        assert_eq!(val["type"], "http");
+        assert_eq!(val["url"], "https://example.com/mcp");
+    }
+
+    #[test]
+    fn test_mcp_def_to_acp_remote() {
+        let def = sj::json!({
+            "type": "remote",
+            "url": "https://example.com/sse"
+        });
+        let result = mcp_def_to_acp("remote-server", &def);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert_eq!(val["type"], "sse"); // remote maps to sse
+    }
+
+    #[test]
+    fn test_mcp_def_to_acp_unknown() {
+        let def = sj::json!({
+            "type": "unknown-type",
+            "url": "https://example.com"
+        });
+        let result = mcp_def_to_acp("unknown-server", &def);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_command_fallback() {
+        // A non-existent command should return the original
+        let result = resolve_command("nonexistent_command_xyz_abc_123");
+        assert_eq!(result, "nonexistent_command_xyz_abc_123");
+    }
+}

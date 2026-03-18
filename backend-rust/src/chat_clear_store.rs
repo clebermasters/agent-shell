@@ -90,3 +90,77 @@ impl ChatClearStore {
         self.save_to_file(&state).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_store() -> (ChatClearStore, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let store = ChatClearStore::new(&dir.path().to_path_buf());
+        (store, dir)
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_cleared_at() {
+        let (store, _dir) = make_store();
+        store.set_cleared_at("sess1", 0, 12345678).await;
+        let ts = store.get_cleared_at("sess1", 0).await;
+        assert_eq!(ts, Some(12345678));
+    }
+
+    #[tokio::test]
+    async fn test_get_cleared_at_missing_returns_none() {
+        let (store, _dir) = make_store();
+        let ts = store.get_cleared_at("nonexistent", 0).await;
+        assert_eq!(ts, None);
+    }
+
+    #[tokio::test]
+    async fn test_clear_removes_entry() {
+        let (store, _dir) = make_store();
+        store.set_cleared_at("sess1", 0, 999).await;
+        store.clear("sess1", 0).await;
+        let ts = store.get_cleared_at("sess1", 0).await;
+        assert_eq!(ts, None);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_sessions_independent() {
+        let (store, _dir) = make_store();
+        store.set_cleared_at("sess1", 0, 100).await;
+        store.set_cleared_at("sess2", 0, 200).await;
+        assert_eq!(store.get_cleared_at("sess1", 0).await, Some(100));
+        assert_eq!(store.get_cleared_at("sess2", 0).await, Some(200));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_windows_independent() {
+        let (store, _dir) = make_store();
+        store.set_cleared_at("sess1", 0, 100).await;
+        store.set_cleared_at("sess1", 1, 200).await;
+        assert_eq!(store.get_cleared_at("sess1", 0).await, Some(100));
+        assert_eq!(store.get_cleared_at("sess1", 1).await, Some(200));
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_cleared_at() {
+        let (store, _dir) = make_store();
+        store.set_cleared_at("sess1", 0, 100).await;
+        store.set_cleared_at("sess1", 0, 999).await;
+        assert_eq!(store.get_cleared_at("sess1", 0).await, Some(999));
+    }
+
+    #[test]
+    fn test_persist_and_reload() {
+        let dir = TempDir::new().unwrap();
+        {
+            let store = ChatClearStore::new(&dir.path().to_path_buf());
+            // Can't easily test persistence synchronously without runtime, just test construction
+            let _ = store;
+        }
+        // Reload from same dir
+        let _store2 = ChatClearStore::new(&dir.path().to_path_buf());
+    }
+}

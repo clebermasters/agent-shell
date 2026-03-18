@@ -144,46 +144,20 @@ impl CronManager {
     }
 
     pub async fn test_command(&self, command: &str) -> Result<String> {
-        info!("Testing cron command: {}", command);
+        info!("Dry-run test for cron command: {}", command);
 
-        // Basic security check - reject obvious dangerous patterns
-        let dangerous_patterns = [
-            "rm -rf /",
-            "rm -fr /",
-            "dd if=/dev/zero",
-            ":(){ :|:& };:",
-            "mkfs.",
-            "format ",
-            "> /dev/sda",
-            "chmod -R 777 /",
-        ];
-
-        let command_lower = command.to_lowercase();
-        for pattern in &dangerous_patterns {
-            if command_lower.contains(pattern) {
-                return Err(anyhow::anyhow!(
-                    "Command contains potentially dangerous pattern"
-                ));
-            }
+        // Validate the command is not empty
+        let command = command.trim();
+        if command.is_empty() {
+            return Err(anyhow::anyhow!("Command is empty"));
         }
 
-        // Execute command in a shell with timeout
-        let output = tokio::process::Command::new("timeout")
-            .arg("10") // 10 second timeout
-            .arg("sh")
-            .arg("-c")
-            .arg(command)
-            .output()
-            .await?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        if output.status.success() {
-            Ok(format!("Success:\n{}", stdout))
-        } else {
-            Ok(format!("Failed:\nStdout: {}\nStderr: {}", stdout, stderr))
-        }
+        // Dry-run only: return what would be executed without running it.
+        // Shell execution is intentionally disabled — arbitrary `sh -c` is an RCE vector.
+        Ok(format!(
+            "Dry-run: the following command would be executed by cron:\n{}",
+            command
+        ))
     }
 
     // Private helper methods
@@ -403,4 +377,77 @@ impl CronManager {
 
 lazy_static::lazy_static! {
     pub static ref CRON_MANAGER: CronManager = CronManager::new();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_manager() -> CronManager {
+        CronManager::new()
+    }
+
+    #[test]
+    fn test_validate_valid_expressions() {
+        let mgr = make_manager();
+        assert!(mgr.validate_cron_expression("* * * * *").is_ok());
+        assert!(mgr.validate_cron_expression("0 12 * * *").is_ok());
+        assert!(mgr.validate_cron_expression("*/5 * * * *").is_ok());
+        assert!(mgr.validate_cron_expression("0 0 1 1 *").is_ok());
+        assert!(mgr.validate_cron_expression("0 8-18 * * 1-5").is_ok());
+    }
+
+    #[test]
+    fn test_validate_wrong_field_count() {
+        let mgr = make_manager();
+        assert!(mgr.validate_cron_expression("* * *").is_err());
+        assert!(mgr.validate_cron_expression("* * * * * *").is_err()); // 6 fields
+        assert!(mgr.validate_cron_expression("").is_err());
+    }
+
+    #[test]
+    fn test_validate_invalid_expression() {
+        let mgr = make_manager();
+        // Invalid range
+        assert!(mgr.validate_cron_expression("99 * * * *").is_err());
+    }
+
+    #[test]
+    fn test_calculate_next_run_valid() {
+        let mgr = make_manager();
+        let result = mgr.calculate_next_run("* * * * *").unwrap();
+        assert!(result.is_some());
+        // Should be in the future
+        let next = result.unwrap();
+        assert!(next > Utc::now() - chrono::Duration::seconds(60));
+    }
+
+    #[test]
+    fn test_calculate_next_run_invalid() {
+        let mgr = make_manager();
+        let result = mgr.calculate_next_run("invalid expr");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_jobs_empty() {
+        let mgr = make_manager();
+        let jobs = mgr.list_jobs().await;
+        assert!(jobs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_test_command_dry_run() {
+        let mgr = make_manager();
+        let result = mgr.test_command("echo hello").await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Dry-run"));
+    }
+
+    #[tokio::test]
+    async fn test_test_command_empty() {
+        let mgr = make_manager();
+        let result = mgr.test_command("  ").await;
+        assert!(result.is_err());
+    }
 }

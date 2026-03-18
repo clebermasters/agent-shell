@@ -5,6 +5,7 @@ import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
 import '../../../data/models/tmux_session.dart';
 import '../../../data/models/acp_session.dart';
+import '../../../data/models/connection_status.dart';
 import '../../../data/services/websocket_service.dart';
 import '../../hosts/providers/hosts_provider.dart';
 
@@ -165,3 +166,8 @@ final sessionsProvider = StateNotifierProvider<SessionsNotifier, SessionsState>(
     return SessionsNotifier(wsService);
   },
 );
+
+final connectionStatusProvider = StreamProvider<ConnectionStatus>((ref) {
+  final service = ref.watch(sharedWebSocketServiceProvider);
+  return service.connectionStatus;
+});

@@ -608,3 +608,113 @@ pub fn find_opencode_db() -> Result<PathBuf> {
         bail!("Opencode database not found at {}", db_path.display())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_descendant_pids_includes_self() {
+        // Use our own PID — it definitely exists
+        let pid = std::process::id();
+        let result = get_descendant_pids(pid);
+        assert!(result.is_ok());
+        let pids = result.unwrap();
+        assert!(pids.contains(&pid));
+    }
+
+    #[test]
+    fn test_direct_children_does_not_panic() {
+        let children = direct_children(1); // init/systemd always exists on Linux
+        // May be empty or have some children — just shouldn't panic
+        let _ = children;
+    }
+
+    #[test]
+    fn test_process_name_self() {
+        let pid = std::process::id();
+        let name = process_name(pid);
+        // Should return something for our own process
+        assert!(name.is_some());
+    }
+
+    #[test]
+    fn test_process_name_nonexistent() {
+        // PID 0 doesn't have a /proc entry
+        let name = process_name(0);
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn test_get_process_cwd_self() {
+        let pid = std::process::id();
+        let result = get_process_cwd(pid);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_process_cwd_nonexistent() {
+        let result = get_process_cwd(999999999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_newest_jsonl_in_empty_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let result = newest_jsonl_in(dir.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_newest_jsonl_in_with_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("old.jsonl"), "{}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(dir.path().join("newer.jsonl"), "{}").unwrap();
+        let result = newest_jsonl_in(dir.path());
+        assert!(result.is_some());
+        // Should return the newer file
+        assert!(result.unwrap().file_name().unwrap().to_str().unwrap().ends_with(".jsonl"));
+    }
+
+    #[test]
+    fn test_newest_jsonl_ignores_non_jsonl() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "{}").unwrap();
+        std::fs::write(dir.path().join("data.json"), "{}").unwrap();
+        let result = newest_jsonl_in(dir.path());
+        assert!(result.is_none()); // No .jsonl files
+    }
+
+    #[test]
+    fn test_parse_line_invalid_json() {
+        let result = parse_line("not json at all", &AiTool::Claude);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_line_codex_invalid() {
+        let result = parse_line("not json", &AiTool::Codex);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_line_opencode_always_none() {
+        let result = parse_line("{}", &AiTool::Opencode { pid: 0, cwd: std::path::PathBuf::new() });
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_is_process_alive_with_cwd_self() {
+        let pid = std::process::id();
+        let cwd = std::env::current_dir().unwrap();
+        // May be true or false depending on CWD match — just should not panic
+        let _ = is_process_alive_with_cwd(pid, &cwd);
+    }
+
+    #[test]
+    fn test_is_process_alive_nonexistent_pid() {
+        let result = is_process_alive_with_cwd(999999999, std::path::Path::new("/"));
+        assert!(!result);
+    }
+}

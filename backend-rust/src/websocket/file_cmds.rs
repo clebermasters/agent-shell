@@ -194,3 +194,207 @@ fn list_files(path: &str) -> anyhow::Result<Vec<FileEntry>> {
 
     Ok(entries)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use crate::websocket::types::BroadcastMessage;
+    use crate::types::WebSocketMessage;
+    use tempfile::TempDir;
+
+    fn make_tx() -> (
+        mpsc::UnboundedSender<BroadcastMessage>,
+        mpsc::UnboundedReceiver<BroadcastMessage>,
+    ) {
+        mpsc::unbounded_channel()
+    }
+
+    #[test]
+    fn test_validate_path_absolute() {
+        assert!(validate_path("/home/user/file.txt").is_ok());
+    }
+
+    #[test]
+    fn test_validate_path_relative_fails() {
+        assert!(validate_path("relative/path").is_err());
+    }
+
+    #[test]
+    fn test_validate_path_traversal_fails() {
+        assert!(validate_path("/home/../etc/passwd").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_files_existing_dir() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.txt"), "content").unwrap();
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::ListFiles {
+            path: dir.path().to_string_lossy().to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("test.txt") || json.contains("entries"));
+    }
+
+    #[tokio::test]
+    async fn test_list_files_nonexistent_dir() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::ListFiles {
+            path: "/nonexistent/directory/xyz".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok()); // Error response
+    }
+
+    #[tokio::test]
+    async fn test_get_session_cwd_nonexistent() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::GetSessionCwd {
+            session_name: "nonexistent-session-xyz".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_session_cwd_existing() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::GetSessionCwd {
+            session_name: "AgentShell".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexistent_file() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::DeleteFiles {
+            paths: vec!["/tmp/nonexistent_file_xyz_abc.txt".to_string()],
+            recursive: false,
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("false") || json.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_file_path_traversal_blocked() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::DeleteFiles {
+            paths: vec!["/tmp/../etc/passwd".to_string()],
+            recursive: false,
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("traversal") || json.contains("false"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_file_relative_path_blocked() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::DeleteFiles {
+            paths: vec!["relative/path.txt".to_string()],
+            recursive: false,
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("false") || json.contains("absolute"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("delete_me.txt");
+        std::fs::write(&file_path, "data").unwrap();
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::DeleteFiles {
+            paths: vec![file_path.to_string_lossy().to_string()],
+            recursive: false,
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("true"));
+        assert!(!file_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_rename_relative_path_blocked() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::RenameFile {
+            path: "relative/path.txt".to_string(),
+            new_name: "new.txt".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("false"));
+    }
+
+    #[tokio::test]
+    async fn test_rename_invalid_new_name() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::RenameFile {
+            path: "/tmp/somefile.txt".to_string(),
+            new_name: "../../etc/passwd".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("false") || json.contains("Invalid"));
+    }
+
+    #[tokio::test]
+    async fn test_rename_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("old.txt");
+        std::fs::write(&file_path, "data").unwrap();
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::RenameFile {
+            path: file_path.to_string_lossy().to_string(),
+            new_name: "new.txt".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("true"));
+    }
+
+    #[tokio::test]
+    async fn test_unknown_message_no_op() {
+        let (tx, _rx) = make_tx();
+        let result = handle(WebSocketMessage::Ping, &tx).await;
+        assert!(result.is_ok());
+    }
+}

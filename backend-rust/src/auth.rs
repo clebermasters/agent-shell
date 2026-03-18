@@ -2,14 +2,22 @@ use axum::{extract::Request, http::StatusCode, middleware::Next, response::Respo
 use subtle::ConstantTimeEq;
 use tracing::warn;
 
-/// Read AUTH_TOKEN from environment. If not set, auth is disabled (open access).
-fn expected_token() -> Option<String> {
-    let token = std::env::var("AUTH_TOKEN").ok()?;
+/// Read AUTH_TOKEN from environment. Panics at startup if not set or empty.
+/// Call `require_auth_token()` once during startup to enforce this invariant.
+fn expected_token() -> String {
+    let token = std::env::var("AUTH_TOKEN")
+        .unwrap_or_default();
     if token.is_empty() {
-        None
-    } else {
-        Some(token)
+        eprintln!("FATAL: AUTH_TOKEN environment variable is not set or is empty.");
+        eprintln!("Set AUTH_TOKEN to a strong secret before starting the server.");
+        std::process::exit(1);
     }
+    token
+}
+
+/// Call once at startup to abort if AUTH_TOKEN is missing.
+pub fn require_auth_token() {
+    let _ = expected_token();
 }
 
 /// Extract token value from a query string like "foo=bar&token=secret&baz=1"
@@ -57,12 +65,9 @@ fn safe_path(request: &Request) -> &str {
 }
 
 /// Middleware that validates the auth token from query param or header.
-/// If AUTH_TOKEN env var is not set, all requests are allowed (backwards compatible).
+/// AUTH_TOKEN must be set — if it isn't, the server exits at startup.
 pub async fn auth_middleware(request: Request, next: Next) -> Result<Response, StatusCode> {
-    let expected = match expected_token() {
-        Some(t) => t,
-        None => return Ok(next.run(request).await), // No token configured, allow all
-    };
+    let expected = expected_token();
 
     // Check query parameter first (?token=xxx)
     let token_from_query = request
@@ -97,5 +102,81 @@ pub async fn auth_middleware(request: Request, next: Next) -> Result<Response, S
             );
             Err(StatusCode::UNAUTHORIZED)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_token_from_query_found() {
+        let query = "foo=bar&token=secret&baz=1";
+        assert_eq!(extract_token_from_query(query), Some("secret".to_string()));
+    }
+
+    #[test]
+    fn test_extract_token_first_param() {
+        let query = "token=mytoken";
+        assert_eq!(extract_token_from_query(query), Some("mytoken".to_string()));
+    }
+
+    #[test]
+    fn test_extract_token_not_found() {
+        let query = "foo=bar&baz=1";
+        assert_eq!(extract_token_from_query(query), None);
+    }
+
+    #[test]
+    fn test_extract_token_empty_query() {
+        assert_eq!(extract_token_from_query(""), None);
+    }
+
+    #[test]
+    fn test_extract_token_url_encoded() {
+        let query = "token=hello%20world";
+        assert_eq!(extract_token_from_query(query), Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_percent_decode_no_encoding() {
+        assert_eq!(percent_decode(b"hello"), "hello");
+    }
+
+    #[test]
+    fn test_percent_decode_space() {
+        assert_eq!(percent_decode(b"hello%20world"), "hello world");
+    }
+
+    #[test]
+    fn test_percent_decode_special_chars() {
+        assert_eq!(percent_decode(b"foo%3Dbar"), "foo=bar");
+    }
+
+    #[test]
+    fn test_percent_decode_partial_sequence() {
+        // Incomplete percent sequence at end — should be passed through
+        let result = percent_decode(b"hello%2");
+        assert!(result.starts_with("hello"));
+    }
+
+    #[test]
+    fn test_tokens_match_same() {
+        assert!(tokens_match("secret", "secret"));
+    }
+
+    #[test]
+    fn test_tokens_match_different() {
+        assert!(!tokens_match("wrong", "secret"));
+    }
+
+    #[test]
+    fn test_tokens_match_different_length() {
+        assert!(!tokens_match("short", "longer_secret"));
+    }
+
+    #[test]
+    fn test_tokens_match_empty() {
+        assert!(tokens_match("", ""));
     }
 }

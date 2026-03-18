@@ -61,3 +61,82 @@ impl ClientManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_new_manager_empty() {
+        let mgr = ClientManager::new();
+        assert_eq!(mgr.client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_add_client() {
+        let mgr = ClientManager::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        mgr.add_client("client1".to_string(), tx).await;
+        assert_eq!(mgr.client_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_remove_client() {
+        let mgr = ClientManager::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        mgr.add_client("client1".to_string(), tx).await;
+        mgr.remove_client("client1").await;
+        assert_eq!(mgr.client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_nonexistent_client_ok() {
+        let mgr = ClientManager::new();
+        mgr.remove_client("ghost").await; // should not panic
+        assert_eq!(mgr.client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_clients() {
+        let mgr = ClientManager::new();
+        for i in 0..5 {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            mgr.add_client(format!("client{}", i), tx).await;
+        }
+        assert_eq!(mgr.client_count().await, 5);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_sends_to_all_clients() {
+        let mgr = ClientManager::new();
+        let (tx1, mut rx1) = mpsc::unbounded_channel();
+        let (tx2, mut rx2) = mpsc::unbounded_channel();
+        mgr.add_client("c1".to_string(), tx1).await;
+        mgr.add_client("c2".to_string(), tx2).await;
+
+        mgr.broadcast(ServerMessage::Pong).await;
+
+        // Both receivers should get the message
+        assert!(rx1.try_recv().is_ok());
+        assert!(rx2.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_binary() {
+        let mgr = ClientManager::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        mgr.add_client("c1".to_string(), tx).await;
+        mgr.broadcast_binary(bytes::Bytes::from("binary data")).await;
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_dead_client_does_not_panic() {
+        let mgr = ClientManager::new();
+        let (tx, rx) = mpsc::unbounded_channel();
+        mgr.add_client("c1".to_string(), tx).await;
+        drop(rx); // Drop the receiver — sending to a dead client
+        // Should not panic
+        mgr.broadcast(ServerMessage::Pong).await;
+    }
+}

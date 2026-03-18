@@ -19,14 +19,17 @@ class WebSocketService {
   bool _isConnected = false;
   String? _currentUrl;
   final List<Map<String, dynamic>> _pendingQueue = [];
+  int _reconnectAttempts = 0;
 
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
   final _logController = StreamController<String>.broadcast();
+  final _statusController = StreamController<ConnectionStatus>.broadcast();
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<bool> get connectionState => _connectionController.stream;
   Stream<String> get logs => _logController.stream;
+  Stream<ConnectionStatus> get connectionStatus => _statusController.stream;
   bool get isConnected => _isConnected;
   String? get currentUrl => _currentUrl;
 
@@ -55,6 +58,7 @@ class WebSocketService {
     }
 
     _currentUrl = url;
+    _reconnectAttempts = 0;
     _log('Connecting to: ${_sanitizeUrl(url)}');
     await _doConnect();
   }
@@ -66,6 +70,15 @@ class WebSocketService {
 
   Future<void> _doConnect() async {
     if (_currentUrl == null) return;
+
+    // Emit appropriate status based on attempt count
+    if (_reconnectAttempts == 0) {
+      _statusController.add(ConnectionStatus.connecting);
+    } else if (_reconnectAttempts < 3) {
+      _statusController.add(ConnectionStatus.reconnecting);
+    } else {
+      _statusController.add(ConnectionStatus.offline);
+    }
 
     // Cancel any existing connection
     await _subscription?.cancel();
@@ -85,9 +98,11 @@ class WebSocketService {
       await _channel!.ready;
 
       _isConnected = true;
+      _reconnectAttempts = 0;
       // ignore: avoid_print
       print('[CONN] Flutter→Backend CONNECTED to ${_sanitizeUrl(_currentUrl!)}');
       _connectionController.add(true);
+      _statusController.add(ConnectionStatus.connected);
       _flushPendingQueue();
       _startPingTimer();
     } catch (e) {
@@ -96,6 +111,7 @@ class WebSocketService {
 
       _isConnected = false;
       _connectionController.add(false);
+      _reconnectAttempts++;
       _scheduleReconnect();
     }
   }
@@ -127,6 +143,7 @@ class WebSocketService {
 
     _isConnected = false;
     _connectionController.add(false);
+    _reconnectAttempts++;
     _scheduleReconnect();
   }
 
@@ -136,6 +153,7 @@ class WebSocketService {
 
     _isConnected = false;
     _connectionController.add(false);
+    _reconnectAttempts++;
     _scheduleReconnect();
   }
 
@@ -173,6 +191,7 @@ class WebSocketService {
       _channel?.sink.close();
     } catch (_) {}
     _isConnected = false;
+    _reconnectAttempts = 0;
     _connectionController.add(false);
     _doConnect();
   }
@@ -525,7 +544,9 @@ class WebSocketService {
     _subscription?.cancel();
     _channel?.sink.close();
     _isConnected = false;
+    _reconnectAttempts = 0;
     _connectionController.add(false);
+    _statusController.add(ConnectionStatus.connecting);
   }
 
   void dispose() {
@@ -533,5 +554,6 @@ class WebSocketService {
     _messageController.close();
     _connectionController.close();
     _logController.close();
+    _statusController.close();
   }
 }

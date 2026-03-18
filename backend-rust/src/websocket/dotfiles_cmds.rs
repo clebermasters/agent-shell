@@ -150,3 +150,72 @@ pub(crate) async fn handle(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use crate::websocket::types::BroadcastMessage;
+    use crate::types::WebSocketMessage;
+
+    fn make_tx() -> (
+        mpsc::UnboundedSender<BroadcastMessage>,
+        mpsc::UnboundedReceiver<BroadcastMessage>,
+    ) {
+        mpsc::unbounded_channel()
+    }
+
+    #[tokio::test]
+    async fn test_list_dotfiles() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::ListDotfiles, &tx).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_templates() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::GetDotfileTemplates, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("templates") || json.contains("DotfileTemplates"));
+    }
+
+    #[tokio::test]
+    async fn test_read_dotfile_nonexistent_returns_error() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::ReadDotfile {
+            path: ".nonexistent_file_xyz_abc".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("error") || json.contains("Error"));
+    }
+
+    #[tokio::test]
+    async fn test_get_dotfile_history() {
+        let (tx, mut rx) = make_tx();
+        let result = handle(WebSocketMessage::GetDotfileHistory {
+            path: ".bashrc".to_string(),
+        }, &tx).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_unknown_message_handled_gracefully() {
+        let (tx, _rx) = make_tx();
+        // Ping is not a dotfiles message — should be handled by the _ arm
+        let result = handle(WebSocketMessage::Ping, &tx).await;
+        assert!(result.is_ok());
+    }
+}

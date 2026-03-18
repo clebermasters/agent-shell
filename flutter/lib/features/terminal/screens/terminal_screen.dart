@@ -13,6 +13,7 @@ import '../widgets/terminal_accessory_bar.dart';
 import '../widgets/floating_voice_button.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
+import '../../../core/widgets/connection_status_banner.dart';
 import '../../chat/screens/chat_screen.dart';
 import '../../sessions/providers/sessions_provider.dart';
 import '../../file_browser/providers/file_browser_provider.dart';
@@ -39,7 +40,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   final FocusNode _focusNode = FocusNode(debugLabel: 'TerminalMainFocus');
   bool _showCustomKeyboard = false;
   bool _fullscreen = false;
-  bool _showStatus = true;
   bool _wasKeyboardVisible = false;
   bool _lastKeyboardVisible = false;
 
@@ -113,14 +113,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
       _persistActiveSession();
       if (!widget.isSwipeNavigation) _pushRecentTerminalSession();
-
-      Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) {
-          setState(() {
-            _showStatus = false;
-          });
-        }
-      });
 
       // Initial focus
       _focusNode.requestFocus();
@@ -620,36 +612,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
           children: [
             Column(
               children: [
-                // Connection status bar
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  height: (_showStatus || !terminalState.isConnected)
-                      ? null
-                      : 0,
-                  child: (_showStatus || !terminalState.isConnected)
-                      ? Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          color: terminalState.isConnected
-                              ? Colors.green
-                              : (terminalState.isLoading
-                                    ? Colors.orange
-                                    : Colors.red),
-                          child: Text(
-                            terminalState.isLoading
-                                ? 'Connecting...'
-                                : terminalState.isConnected
-                                ? 'Connected'
-                                : terminalState.error ?? 'Disconnected',
-                            style: const TextStyle(color: Colors.white),
-                            textAlign: TextAlign.center,
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
+                const ConnectionStatusBanner(),
 
                 // Scrollback hydration indicator
                 if (terminalState.isHydrating)

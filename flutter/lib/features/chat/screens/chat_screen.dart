@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/providers.dart';
+import '../../../core/widgets/connection_status_banner.dart';
 import '../../../data/services/websocket_service.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/professional_message_bubble.dart';
@@ -656,6 +657,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           children: [
             Column(
         children: [
+          const ConnectionStatusBanner(),
           if (chatState.error != null)
             Container(
               width: double.infinity,

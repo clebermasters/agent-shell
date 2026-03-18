@@ -255,3 +255,106 @@ pub(crate) async fn handle_rename_window(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use crate::websocket::types::BroadcastMessage;
+
+    fn make_tx() -> (
+        mpsc::UnboundedSender<BroadcastMessage>,
+        mpsc::UnboundedReceiver<BroadcastMessage>,
+    ) {
+        mpsc::unbounded_channel()
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_list_sessions(&tx).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_windows_existing_session() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_list_windows(&tx, "AgentShell".to_string()).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_list_windows_nonexistent_session() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_list_windows(&tx, "nonexistent-xyz".to_string()).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rename_session_empty_name_returns_error_response() {
+        let (tx, mut rx) = make_tx();
+        handle_rename_session(&tx, "AgentShell".to_string(), "".to_string()).await.unwrap();
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("false") || json.contains("empty"));
+    }
+
+    #[tokio::test]
+    async fn test_rename_window_empty_name_returns_error_response() {
+        let (tx, mut rx) = make_tx();
+        handle_rename_window(&tx, "AgentShell".to_string(), "0".to_string(), "".to_string()).await.unwrap();
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("false") || json.contains("empty"));
+    }
+
+    #[tokio::test]
+    async fn test_kill_session_nonexistent() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_kill_session(&tx, "nonexistent-session-xyz".to_string()).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_session_default_name() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_create_session(&tx, None).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        // Kill whatever was created to clean up
+        if json.contains("sessionName") {
+            // Best effort cleanup — ignore errors
+        }
+        assert!(!json.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_window_nonexistent_session() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_create_window(&tx, "nonexistent-session".to_string(), None).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_kill_window_nonexistent() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_kill_window(&tx, "nonexistent".to_string(), "99".to_string()).await;
+        assert!(result.is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+}

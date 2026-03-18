@@ -309,3 +309,161 @@ impl ChatEventStore {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat_log::{ChatMessage, ContentBlock};
+    use tempfile::TempDir;
+
+    fn make_store() -> (ChatEventStore, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let store = ChatEventStore::new(dir.path().to_path_buf()).unwrap();
+        (store, dir)
+    }
+
+    fn text_msg(role: &str, text: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            timestamp: Some(chrono::Utc::now()),
+            blocks: vec![ContentBlock::Text { text: text.to_string() }],
+        }
+    }
+
+    #[test]
+    fn test_new_creates_db() {
+        let dir = TempDir::new().unwrap();
+        let store = ChatEventStore::new(dir.path().to_path_buf());
+        assert!(store.is_ok());
+    }
+
+    #[test]
+    fn test_append_and_list() {
+        let (store, _dir) = make_store();
+        let msg = text_msg("user", "hello");
+        store.append_message("sess1", 0, "user", &msg).unwrap();
+
+        let events = store.list_events("sess1", 0).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session_name, "sess1");
+        assert_eq!(events[0].source, "user");
+    }
+
+    #[test]
+    fn test_list_messages() {
+        let (store, _dir) = make_store();
+        let msg = text_msg("assistant", "hi there");
+        store.append_message("sess1", 0, "acp", &msg).unwrap();
+
+        let messages = store.list_messages("sess1", 0).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "assistant");
+    }
+
+    #[test]
+    fn test_append_or_merge_new_message() {
+        let (store, _dir) = make_store();
+        store.append_or_merge_text("sess1", 0, "acp", "assistant", "Hello").unwrap();
+        let messages = store.list_messages("sess1", 0).unwrap();
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_append_or_merge_merges_same_role() {
+        let (store, _dir) = make_store();
+        store.append_or_merge_text("sess1", 0, "acp", "assistant", "Hello").unwrap();
+        store.append_or_merge_text("sess1", 0, "acp", "assistant", " World").unwrap();
+        let messages = store.list_messages("sess1", 0).unwrap();
+        assert_eq!(messages.len(), 1);
+        match &messages[0].blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "Hello World"),
+            _ => panic!("Expected text block"),
+        }
+    }
+
+    #[test]
+    fn test_append_or_merge_different_roles() {
+        let (store, _dir) = make_store();
+        store.append_or_merge_text("sess1", 0, "acp", "assistant", "Hi").unwrap();
+        store.append_or_merge_text("sess1", 0, "user", "user", "Hello").unwrap();
+        let messages = store.list_messages("sess1", 0).unwrap();
+        assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn test_clear_messages() {
+        let (store, _dir) = make_store();
+        let msg = text_msg("user", "test");
+        store.append_message("sess1", 0, "user", &msg).unwrap();
+        store.clear_messages("sess1", 0).unwrap();
+        let events = store.list_events("sess1", 0).unwrap();
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn test_clear_only_affects_target_session() {
+        let (store, _dir) = make_store();
+        let msg = text_msg("user", "test");
+        store.append_message("sess1", 0, "user", &msg).unwrap();
+        store.append_message("sess2", 0, "user", &msg).unwrap();
+        store.clear_messages("sess1", 0).unwrap();
+        assert_eq!(store.list_events("sess1", 0).unwrap().len(), 0);
+        assert_eq!(store.list_events("sess2", 0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_acp_deleted_sessions() {
+        let (store, _dir) = make_store();
+        store.mark_acp_session_deleted("session-abc").unwrap();
+        let ids = store.get_deleted_acp_session_ids().unwrap();
+        assert!(ids.contains(&"session-abc".to_string()));
+    }
+
+    #[test]
+    fn test_acp_deleted_idempotent() {
+        let (store, _dir) = make_store();
+        store.mark_acp_session_deleted("sid1").unwrap();
+        store.mark_acp_session_deleted("sid1").unwrap(); // INSERT OR IGNORE
+        let ids = store.get_deleted_acp_session_ids().unwrap();
+        assert_eq!(ids.iter().filter(|id| *id == "sid1").count(), 1);
+    }
+
+    #[test]
+    fn test_get_acp_overlay_empty() {
+        let (store, _dir) = make_store();
+        let events = store.get_acp_overlay("sess1", None).unwrap();
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn test_get_acp_overlay_with_webhook_source() {
+        let (store, _dir) = make_store();
+        let msg = text_msg("user", "from webhook");
+        store.append_message("sess1", 0, "webhook", &msg).unwrap();
+        let events = store.get_acp_overlay("sess1", None).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn test_get_acp_overlay_filters_cleared() {
+        let (store, _dir) = make_store();
+        let mut msg = text_msg("user", "old");
+        let old_ts = chrono::Utc::now() - chrono::Duration::seconds(100);
+        msg.timestamp = Some(old_ts);
+        store.append_message("sess1", 0, "webhook", &msg).unwrap();
+
+        // Filter anything before now
+        let events = store.get_acp_overlay("sess1", Some(chrono::Utc::now().timestamp_millis())).unwrap();
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn test_multiple_windows_independent() {
+        let (store, _dir) = make_store();
+        let msg = text_msg("user", "test");
+        store.append_message("sess1", 0, "user", &msg).unwrap();
+        store.append_message("sess1", 1, "user", &msg).unwrap();
+        assert_eq!(store.list_events("sess1", 0).unwrap().len(), 1);
+        assert_eq!(store.list_events("sess1", 1).unwrap().len(), 1);
+    }
+}

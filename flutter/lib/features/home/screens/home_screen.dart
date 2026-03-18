@@ -10,6 +10,7 @@ import '../../debug/screens/debug_screen.dart';
 import '../../settings/screens/settings_screen.dart';
 import '../../terminal/screens/terminal_screen.dart';
 import '../../system/widgets/alert_banner.dart';
+import '../../../core/widgets/connection_status_banner.dart';
 import '../widgets/command_palette.dart';
 
 // Tab indices for HomeScreen NavigationBar
@@ -109,6 +110,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               _saveIndex(_kTabSystem);
             },
           ),
+          const ConnectionStatusBanner(),
           Expanded(child: IndexedStack(index: _currentIndex, children: _screens)),
         ],
       ),

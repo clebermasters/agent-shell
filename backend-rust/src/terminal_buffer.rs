@@ -112,3 +112,79 @@ impl Utf8StreamDecoder {
         (result, processed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_filter_control_sequences_removes_da_responses() {
+        assert_eq!(filter_control_sequences("\x1b[?0c"), "");
+        assert_eq!(filter_control_sequences("\x1b[?1c"), "");
+        assert_eq!(filter_control_sequences("\x1b[?0;0c"), "");
+        assert_eq!(filter_control_sequences("\x1b[?1;0c"), "");
+        assert_eq!(filter_control_sequences("\x1b[?2c"), "");
+    }
+
+    #[test]
+    fn test_filter_control_sequences_preserves_normal_text() {
+        let text = "Hello, World!\nSome terminal output";
+        assert_eq!(filter_control_sequences(text), text);
+    }
+
+    #[test]
+    fn test_filter_control_sequences_mixed() {
+        let input = "before\x1b[?0cafter";
+        assert_eq!(filter_control_sequences(input), "beforeafter");
+    }
+
+    #[test]
+    fn test_filter_empty_string() {
+        assert_eq!(filter_control_sequences(""), "");
+    }
+
+    #[test]
+    fn test_utf8_decoder_simple_ascii() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let (out, _) = decoder.decode_chunk(b"hello");
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn test_utf8_decoder_valid_utf8() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let (out, _) = decoder.decode_chunk("héllo".as_bytes());
+        assert_eq!(out, "héllo");
+    }
+
+    #[test]
+    fn test_utf8_decoder_split_multibyte() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let bytes = "é".as_bytes(); // é is 2 bytes: 0xc3 0xa9
+        let (out1, _) = decoder.decode_chunk(&bytes[..1]);
+        let (out2, _) = decoder.decode_chunk(&bytes[1..]);
+        assert_eq!(out1 + &out2, "é");
+    }
+
+    #[test]
+    fn test_utf8_decoder_empty_chunk() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let (out, _) = decoder.decode_chunk(b"");
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn test_utf8_decoder_multiple_chunks() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let (o1, _) = decoder.decode_chunk(b"hel");
+        let (o2, _) = decoder.decode_chunk(b"lo");
+        assert_eq!(o1 + &o2, "hello");
+    }
+
+    #[test]
+    fn test_utf8_decoder_full_unicode() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let (out, _) = decoder.decode_chunk("こんにちは".as_bytes());
+        assert_eq!(out, "こんにちは");
+    }
+}

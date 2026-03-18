@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::signal;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::CorsLayer,
     services::{ServeDir, ServeFile},
 };
 use tracing::{error, info};
@@ -126,12 +126,9 @@ async fn main() -> Result<()> {
     let serve_dir =
         ServeDir::new("../dist").not_found_service(ServeFile::new("../dist/index.html"));
 
-    // Log AUTH_TOKEN status at startup
-    if std::env::var("AUTH_TOKEN").ok().filter(|t| !t.is_empty()).is_some() {
-        info!("AUTH_TOKEN is set — all API/WebSocket requests require valid token");
-    } else {
-        info!("WARNING: AUTH_TOKEN not set — backend is open to all connections");
-    }
+    // Require AUTH_TOKEN at startup — exits with a clear error if not set
+    auth::require_auth_token();
+    info!("AUTH_TOKEN is set — all API/WebSocket requests require valid token");
 
     // Build the router — protected routes require auth token
     let protected = Router::new()
@@ -215,13 +212,8 @@ async fn main() -> Result<()> {
         .merge(protected)
         // Serve static files (Vue app) — no auth required
         .fallback_service(serve_dir)
-        // Add CORS
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        // Add CORS — restrict to localhost and optional configured domain
+        .layer(build_cors_layer())
         .with_state(Arc::new(app_state));
 
     // Dev branch uses different ports
@@ -282,6 +274,32 @@ async fn main() -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+/// Build a CORS layer that only allows localhost origins plus an optional
+/// domain configured via the `ALLOWED_ORIGIN` environment variable.
+fn build_cors_layer() -> CorsLayer {
+    use axum::http::{HeaderValue, Method, header};
+
+    let mut origins: Vec<HeaderValue> = vec![
+        "http://localhost".parse().unwrap(),
+        "http://localhost:4010".parse().unwrap(),
+        "https://localhost:4443".parse().unwrap(),
+        "http://127.0.0.1:4010".parse().unwrap(),
+    ];
+
+    if let Ok(domain) = std::env::var("ALLOWED_ORIGIN") {
+        if !domain.is_empty() {
+            if let Ok(hv) = domain.parse::<HeaderValue>() {
+                origins.push(hv);
+            }
+        }
+    }
+
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, "X-Auth-Token".parse().unwrap()])
 }
 
 async fn shutdown_signal() {

@@ -46,6 +46,7 @@ dependencies = [
  "simdutf8",
  "subtle",
  "sysinfo",
+ "tempfile",
  "tokio",
  "tower-http",
  "tracing",

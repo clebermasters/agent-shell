@@ -261,21 +261,26 @@ impl DotFilesManager {
         Ok(())
     }
 
-    /// Validate and resolve file path - simplified for personal use
+    /// Validate and resolve file path.
+    /// All paths must resolve to within the user's home directory.
     fn validate_and_resolve_path(&self, path: &str) -> Result<PathBuf> {
         let home_dir = dirs::home_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+        let canonical_home = home_dir
+            .canonicalize()
+            .unwrap_or_else(|_| home_dir.clone());
 
-        // Resolve the path
+        // Resolve the path — absolute paths are re-rooted under home
         let file_path = if path.starts_with("~/") {
             home_dir.join(&path[2..])
         } else if path.starts_with('/') {
-            PathBuf::from(path)
+            // Absolute path: treat as relative to home to prevent traversal
+            home_dir.join(path.trim_start_matches('/'))
         } else {
             home_dir.join(path)
         };
 
-        // Canonicalize to resolve symlinks and relative paths
+        // Canonicalize to resolve symlinks and relative components
         let canonical_path = if file_path.exists() {
             file_path.canonicalize()?
         } else {
@@ -291,6 +296,13 @@ impl DotFilesManager {
                 file_path
             }
         };
+
+        // Containment check: resolved path must be inside home directory
+        if !canonical_path.starts_with(&canonical_home) {
+            return Err(anyhow::anyhow!(
+                "Access denied: path is outside the home directory"
+            ));
+        }
 
         Ok(canonical_path)
     }
@@ -409,3 +421,146 @@ const BASHRC_TEMPLATE: &str = include_str!("templates/bashrc.template");
 const VIMRC_TEMPLATE: &str = include_str!("templates/vimrc.template");
 const GITCONFIG_TEMPLATE: &str = include_str!("templates/gitconfig.template");
 const TMUX_CONF_TEMPLATE: &str = include_str!("templates/tmux.conf.template");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_manager() -> DotFilesManager {
+        DotFilesManager::new()
+    }
+
+    #[tokio::test]
+    async fn test_list_dotfiles_returns_results() {
+        let mgr = make_manager();
+        let result = mgr.list_dotfiles().await;
+        assert!(result.is_ok());
+        let files = result.unwrap();
+        // Should have all the common dotfiles listed (even if they don't exist)
+        assert!(!files.is_empty());
+        // All should have a name
+        for f in &files {
+            assert!(!f.name.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_calculate_hash_deterministic() {
+        let mgr = make_manager();
+        let h1 = mgr.calculate_hash("hello world");
+        let h2 = mgr.calculate_hash("hello world");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_calculate_hash_different_inputs() {
+        let mgr = make_manager();
+        let h1 = mgr.calculate_hash("hello");
+        let h2 = mgr.calculate_hash("world");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_detect_mime_type() {
+        use std::path::Path;
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("photo.jpg")), "image/jpeg");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("photo.jpeg")), "image/jpeg");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("img.png")), "image/png");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("anim.gif")), "image/gif");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("img.webp")), "image/webp");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("img.bmp")), "image/bmp");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.mp3")), "audio/mpeg");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.wav")), "audio/wav");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.ogg")), "audio/ogg");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.m4a")), "audio/aac");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.aac")), "audio/aac");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.flac")), "audio/flac");
+        assert_eq!(DotFilesManager::detect_mime_type(Path::new("unknown.xyz")), "application/octet-stream");
+    }
+
+    #[test]
+    fn test_get_templates() {
+        let mgr = make_manager();
+        let templates = mgr.get_templates();
+        assert!(!templates.is_empty());
+        for t in &templates {
+            assert!(!t.name.is_empty());
+            assert!(!t.content.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_is_readable_nonexistent() {
+        let mgr = make_manager();
+        assert!(!mgr.is_readable(std::path::Path::new("/nonexistent/path/xyz")));
+    }
+
+    #[test]
+    fn test_is_writable_check_parent() {
+        let mgr = make_manager();
+        // /tmp should be writable
+        assert!(mgr.is_writable(std::path::Path::new("/tmp/new_test_file_xyz.txt")));
+    }
+
+    #[tokio::test]
+    async fn test_read_dotfile_existing() {
+        // Try to read .bashrc if it exists
+        let home = dirs::home_dir().unwrap();
+        let bashrc = home.join(".bashrc");
+        if bashrc.exists() {
+            let mgr = make_manager();
+            let result = mgr.read_dotfile(".bashrc").await;
+            assert!(result.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_dotfile_nonexistent() {
+        let mgr = make_manager();
+        let result = mgr.read_dotfile(".nonexistent_dotfile_xyz_abc_def").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_file_history_empty() {
+        let mgr = make_manager();
+        let result = mgr.get_file_history(".bashrc").await;
+        assert!(result.is_ok());
+        // No history yet
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_validate_path_rejects_traversal() {
+        let mgr = make_manager();
+        // A path like /etc/passwd (absolute, outside home) — should be re-rooted to home or rejected
+        // The validate_and_resolve_path re-roots absolute paths under home
+        let home = dirs::home_dir().unwrap();
+        let result = mgr.validate_and_resolve_path("/etc/passwd");
+        if let Ok(p) = result {
+            // If it succeeds, it should be re-rooted inside home
+            assert!(p.starts_with(&home));
+        }
+        // Either error or re-rooted — no actual /etc/passwd access
+    }
+
+    #[tokio::test]
+    async fn test_write_and_read_dotfile() {
+        let mgr = make_manager();
+        // Write to a test file in home
+        let test_path = ".agentshell_test_dotfile_xyz";
+        let content = "# test content\nexport TEST=1\n";
+        
+        let result = mgr.write_dotfile(test_path, content).await;
+        if result.is_ok() {
+            let read_result = mgr.read_dotfile(test_path).await;
+            assert!(read_result.is_ok());
+            assert_eq!(read_result.unwrap(), content);
+            
+            // Cleanup
+            let home = dirs::home_dir().unwrap();
+            let _ = std::fs::remove_file(home.join(test_path));
+        }
+        // If writing failed (permissions), that's also a valid outcome
+    }
+}

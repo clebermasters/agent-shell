@@ -781,3 +781,78 @@ pub enum ServerMessage {
         error: Option<String>,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_parse_datetime_rfc3339() {
+        let result = parse_datetime_lenient("2024-01-15T10:30:00Z");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_datetime_naive_dot_f() {
+        let result = parse_datetime_lenient("2024-01-15T10:30:00.123");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_datetime_space_separated() {
+        let result = parse_datetime_lenient("2024-01-15 10:30:00.000");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_datetime_invalid() {
+        assert!(parse_datetime_lenient("not-a-date").is_none());
+        assert!(parse_datetime_lenient("").is_none());
+    }
+
+    #[test]
+    fn test_cron_job_deserialization_with_camel_case_dates() {
+        let json = r#"{
+            "id": "test-id",
+            "name": "test job",
+            "schedule": "* * * * *",
+            "command": "echo hi",
+            "enabled": true,
+            "lastRun": "2024-01-15T10:30:00Z",
+            "nextRun": null
+        }"#;
+        let job: CronJob = serde_json::from_str(json).unwrap();
+        assert_eq!(job.id, "test-id");
+        assert!(job.last_run.is_some());
+        assert!(job.next_run.is_none());
+    }
+
+    #[test]
+    fn test_tmux_session_serialization() {
+        let session = TmuxSession {
+            name: "test".to_string(),
+            attached: true,
+            created: chrono::Utc::now(),
+            windows: 2,
+            dimensions: "80x24".to_string(),
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"name\":\"test\""));
+        assert!(json.contains("\"attached\":true"));
+    }
+
+    #[test]
+    fn test_websocket_message_deserialization() {
+        let json = r#"{"type":"list-sessions"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(msg, WebSocketMessage::ListSessions));
+    }
+
+    #[test]
+    fn test_server_message_pong_serialization() {
+        let msg = ServerMessage::Pong;
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("pong"));
+    }
+}

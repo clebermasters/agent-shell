@@ -104,3 +104,26 @@ impl TmuxMonitor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_tmux_monitor_new() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let _monitor = TmuxMonitor::new(tx);
+        // Just ensure construction doesn't panic
+    }
+
+    #[tokio::test]
+    async fn test_check_for_changes_with_running_tmux() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<crate::types::ServerMessage>();
+        let monitor = TmuxMonitor::new(tx);
+        // Run check_for_changes once — should succeed since tmux is running
+        monitor.check_for_changes().await;
+        // May or may not broadcast depending on whether state changed — just shouldn't panic
+        let _ = rx.try_recv();
+    }
+}

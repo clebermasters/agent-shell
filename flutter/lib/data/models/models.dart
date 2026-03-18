@@ -4,3 +4,4 @@ export 'cron_job.dart';
 export 'dotfile.dart';
 export 'system_stats.dart';
 export 'chat_message.dart';
+export 'connection_status.dart';

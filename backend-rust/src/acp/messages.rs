@@ -57,3 +57,82 @@ pub fn parse_jsonrpc_message(line: &str) -> Option<JsonRpcMessage> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_jsonrpc_request() {
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+        let msg = parse_jsonrpc_message(line).unwrap();
+        match msg {
+            JsonRpcMessage::Request(req) => {
+                assert_eq!(req.method, "initialize");
+                assert_eq!(req.jsonrpc, "2.0");
+            }
+            _ => panic!("Expected Request"),
+        }
+    }
+
+    #[test]
+    fn test_parse_jsonrpc_response() {
+        let line = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}"#;
+        let msg = parse_jsonrpc_message(line).unwrap();
+        match msg {
+            JsonRpcMessage::Response(resp) => {
+                assert_eq!(resp.id, json!(1));
+                assert!(resp.result.is_some());
+            }
+            _ => panic!("Expected Response"),
+        }
+    }
+
+    #[test]
+    fn test_parse_jsonrpc_notification() {
+        let line = r#"{"jsonrpc":"2.0","method":"update","params":{"x":1}}"#;
+        let msg = parse_jsonrpc_message(line).unwrap();
+        match msg {
+            JsonRpcMessage::Notification(notif) => {
+                assert_eq!(notif.method, "update");
+            }
+            _ => panic!("Expected Notification"),
+        }
+    }
+
+    #[test]
+    fn test_parse_non_json_returns_none() {
+        assert!(parse_jsonrpc_message("not json").is_none());
+        assert!(parse_jsonrpc_message("").is_none());
+    }
+
+    #[test]
+    fn test_parse_invalid_json_returns_none() {
+        assert!(parse_jsonrpc_message("{invalid}").is_none());
+    }
+
+    #[test]
+    fn test_jsonrpc_error_serialization() {
+        let err = JsonRpcError {
+            code: -32601,
+            message: "Method not found".to_string(),
+            data: None,
+        };
+        let json_str = serde_json::to_string(&err).unwrap();
+        assert!(json_str.contains("Method not found"));
+        assert!(json_str.contains("-32601"));
+    }
+
+    #[test]
+    fn test_jsonrpc_request_no_params() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: json!(42),
+            method: "ping".to_string(),
+            params: None,
+        };
+        let json_str = serde_json::to_string(&req).unwrap();
+        assert!(!json_str.contains("params")); // skip_serializing_if
+    }
+}

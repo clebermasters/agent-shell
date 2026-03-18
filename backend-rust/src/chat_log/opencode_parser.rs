@@ -510,3 +510,90 @@ pub fn list_all_sessions(db_path: &Path) -> Result<Vec<crate::acp::session::Sess
 
     Ok(sessions)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_extract_thinking_no_tags() {
+        let (thinking, regular) = extract_thinking("Hello world");
+        assert_eq!(thinking, "");
+        assert_eq!(regular, "Hello world");
+    }
+
+    #[test]
+    fn test_extract_thinking_with_tag() {
+        let text = "Before<think>internal thought</think>After";
+        let (thinking, regular) = extract_thinking(text);
+        assert_eq!(thinking, "internal thought");
+        assert_eq!(regular, "BeforeAfter");
+    }
+
+    #[test]
+    fn test_extract_thinking_multiple_blocks() {
+        let text = "A<think>t1</think>B<think>t2</think>C";
+        let (thinking, regular) = extract_thinking(text);
+        assert!(thinking.contains("t1") || thinking.contains("t2"));
+        assert!(regular.contains("A") && regular.contains("B") && regular.contains("C"));
+    }
+
+    #[test]
+    fn test_extract_thinking_unclosed_tag() {
+        let text = "Before<think>unclosed";
+        let (thinking, regular) = extract_thinking(text);
+        assert_eq!(thinking, "unclosed");
+        assert_eq!(regular, "Before");
+    }
+
+    #[test]
+    fn test_get_process_start_time_self() {
+        let pid = std::process::id();
+        let result = get_process_start_time(pid);
+        assert!(result.is_ok());
+        assert!(result.unwrap() >= 0);
+    }
+
+    #[test]
+    fn test_get_process_start_time_nonexistent() {
+        let result = get_process_start_time(999999999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_process_uptime_ms_self() {
+        let pid = std::process::id();
+        let result = get_process_uptime_ms(pid);
+        assert!(result.is_ok());
+        assert!(result.unwrap() >= 0);
+    }
+
+    #[test]
+    fn test_get_process_uptime_ms_nonexistent() {
+        let result = get_process_uptime_ms(999999999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_list_all_sessions_nonexistent_db() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("nonexistent.db");
+        // Should fail because DB doesn't exist / has no tables
+        let _ = list_all_sessions(&db_path); // May succeed or fail — just shouldn't panic
+    }
+
+    #[test]
+    fn test_list_all_sessions_empty_db() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        // Create a valid SQLite DB with the session table
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id TEXT, directory TEXT, title TEXT, time_updated INTEGER, parent_id TEXT);"
+        ).unwrap();
+        drop(conn);
+        let result = list_all_sessions(&db_path).unwrap();
+        assert!(result.is_empty());
+    }
+}

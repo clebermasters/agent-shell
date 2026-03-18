@@ -97,3 +97,43 @@ pub(crate) async fn handle_audio_control(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use crate::websocket::types::BroadcastMessage;
+
+    fn make_tx() -> (
+        mpsc::UnboundedSender<BroadcastMessage>,
+        mpsc::UnboundedReceiver<BroadcastMessage>,
+    ) {
+        mpsc::unbounded_channel()
+    }
+
+    #[tokio::test]
+    async fn test_handle_ping_sends_pong() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_ping(&tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("pong"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_stats_sends_response() {
+        let (tx, mut rx) = make_tx();
+        let result = handle_get_stats(&tx).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("cpu") || json.contains("stats"));
+    }
+}

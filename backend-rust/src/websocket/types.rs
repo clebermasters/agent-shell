@@ -133,3 +133,91 @@ pub(crate) async fn send_message(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat_log::{ChatMessage, ContentBlock};
+    use chrono::Utc;
+
+    fn make_msg(role: &str, ts_offset_secs: i64) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            timestamp: Some(Utc::now() + chrono::Duration::seconds(ts_offset_secs)),
+            blocks: vec![ContentBlock::Text { text: format!("{} message", role) }],
+        }
+    }
+
+    fn make_msg_no_ts(role: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.to_string(),
+            timestamp: None,
+            blocks: vec![ContentBlock::Text { text: role.to_string() }],
+        }
+    }
+
+    #[test]
+    fn test_merge_empty_persisted_returns_tool() {
+        let tool = vec![make_msg("user", 0)];
+        let result = merge_history_messages(tool.clone(), vec![]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "user");
+    }
+
+    #[test]
+    fn test_merge_empty_tool_returns_persisted() {
+        let persisted = vec![make_msg("assistant", 0)];
+        let result = merge_history_messages(vec![], persisted);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].role, "assistant");
+    }
+
+    #[test]
+    fn test_merge_both_empty() {
+        let result = merge_history_messages(vec![], vec![]);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_merge_orders_by_timestamp() {
+        let tool = vec![make_msg("user", 10)]; // later
+        let persisted = vec![make_msg("assistant", 0)]; // earlier
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].role, "assistant"); // earlier first
+        assert_eq!(result[1].role, "user");
+    }
+
+    #[test]
+    fn test_merge_tool_before_persisted_at_same_time() {
+        // Same timestamp: tool comes before persisted
+        let now = Utc::now();
+        let mut tool_msg = make_msg("user", 0);
+        tool_msg.timestamp = Some(now);
+        let mut pers_msg = make_msg("assistant", 0);
+        pers_msg.timestamp = Some(now);
+        let result = merge_history_messages(vec![tool_msg], vec![pers_msg]);
+        assert_eq!(result[0].role, "user"); // tool comes first
+    }
+
+    #[test]
+    fn test_merge_no_timestamps_preserves_order() {
+        let tool = vec![make_msg_no_ts("t1"), make_msg_no_ts("t2")];
+        let persisted = vec![make_msg_no_ts("p1")];
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn test_merge_multiple_messages() {
+        let tool = vec![make_msg("user", 0), make_msg("user", 20)];
+        let persisted = vec![make_msg("assistant", 10), make_msg("assistant", 30)];
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 4);
+        // Should be in timestamp order: 0, 10, 20, 30
+        assert_eq!(result[0].role, "user");
+        assert_eq!(result[1].role, "assistant");
+        assert_eq!(result[2].role, "user");
+        assert_eq!(result[3].role, "assistant");
+    }
+}

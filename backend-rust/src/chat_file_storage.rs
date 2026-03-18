@@ -202,3 +202,153 @@ fn sanitize_filename(filename: &str) -> String {
         })
         .unwrap_or_else(|| "file".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use tempfile::TempDir;
+
+    fn make_storage() -> (ChatFileStorage, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let storage = ChatFileStorage::new(dir.path().to_path_buf());
+        (storage, dir)
+    }
+
+    fn encode(data: &[u8]) -> String {
+        BASE64.encode(data)
+    }
+
+    #[test]
+    fn test_save_and_get_file() {
+        let (storage, _dir) = make_storage();
+        let data = encode(b"hello world");
+        let id = storage.save_file(&data, "test.txt", "text/plain").unwrap();
+        let retrieved = storage.get_file_data(&id).unwrap();
+        assert_eq!(retrieved, b"hello world");
+    }
+
+    #[test]
+    fn test_get_path() {
+        let (storage, _dir) = make_storage();
+        let data = encode(b"content");
+        let id = storage.save_file(&data, "file.txt", "text/plain").unwrap();
+        let path = storage.get_path(&id);
+        assert!(path.is_some());
+        assert!(path.unwrap().exists());
+    }
+
+    #[test]
+    fn test_get_path_missing_returns_none() {
+        let (storage, _dir) = make_storage();
+        assert!(storage.get_path("nonexistent-id").is_none());
+    }
+
+    #[test]
+    fn test_get_file_data_missing_returns_none() {
+        let (storage, _dir) = make_storage();
+        assert!(storage.get_file_data("missing-id").is_none());
+    }
+
+    #[test]
+    fn test_extension_from_filename() {
+        assert_eq!(extension_from_filename("photo.jpg"), Some("jpg".to_string()));
+        assert_eq!(extension_from_filename("doc.PDF"), Some("pdf".to_string()));
+        assert_eq!(extension_from_filename("noext"), None);
+        assert_eq!(extension_from_filename(".hidden"), None);
+    }
+
+    #[test]
+    fn test_extension_from_mime_type() {
+        assert_eq!(extension_from_mime_type("image/png"), Some("png".to_string()));
+        assert_eq!(extension_from_mime_type("image/jpeg"), Some("jpg".to_string()));
+        assert_eq!(extension_from_mime_type("application/json"), Some("json".to_string()));
+        assert_eq!(extension_from_mime_type("text/plain"), Some("txt".to_string()));
+        assert_eq!(extension_from_mime_type("audio/mpeg"), Some("mp3".to_string()));
+        assert_eq!(extension_from_mime_type("application/pdf"), Some("pdf".to_string()));
+        assert_eq!(extension_from_mime_type("text/markdown"), Some("md".to_string()));
+        assert_eq!(extension_from_mime_type("application/zip"), Some("zip".to_string()));
+        assert_eq!(extension_from_mime_type("application/gzip"), Some("gz".to_string()));
+        assert_eq!(extension_from_mime_type("audio/wav"), Some("wav".to_string()));
+        assert_eq!(extension_from_mime_type("audio/ogg"), Some("ogg".to_string()));
+        assert_eq!(extension_from_mime_type("image/gif"), Some("gif".to_string()));
+        assert_eq!(extension_from_mime_type("image/webp"), Some("webp".to_string()));
+    }
+
+    #[test]
+    fn test_extension_from_mime_type_with_params() {
+        // MIME types can have ;charset=... suffix
+        assert_eq!(extension_from_mime_type("text/plain; charset=utf-8"), Some("txt".to_string()));
+    }
+
+    #[test]
+    fn test_sanitize_filename() {
+        assert_eq!(sanitize_filename("hello world.txt"), "hello_world.txt");
+        assert_eq!(sanitize_filename("file/with/slash.txt"), "slash.txt"); // path.file_name()
+        assert_eq!(sanitize_filename("normal_file-1.txt"), "normal_file-1.txt");
+    }
+
+    #[test]
+    fn test_save_file_extension_from_mime() {
+        let (storage, _dir) = make_storage();
+        let data = encode(b"png data");
+        let id = storage.save_file(&data, "noext", "image/png").unwrap();
+        let path = storage.get_path(&id).unwrap();
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("png"));
+    }
+
+    #[test]
+    fn test_get_mime_type() {
+        let (storage, _dir) = make_storage();
+        let data = encode(b"png content");
+        let id = storage.save_file(&data, "image.png", "image/png").unwrap();
+        let mime = storage.get_mime_type(&id).unwrap();
+        assert_eq!(mime, "image/png");
+    }
+
+    #[test]
+    fn test_get_mime_type_various() {
+        let (storage, _dir) = make_storage();
+        let cases: &[(&str, &str)] = &[
+            ("image/jpeg", "f.jpg"),
+            ("image/gif", "f.gif"),
+            ("image/webp", "f.webp"),
+            ("application/pdf", "f.pdf"),
+            ("audio/mpeg", "f.mp3"),
+            ("audio/wav", "f.wav"),
+            ("audio/ogg", "f.ogg"),
+            ("text/html", "f.html"),
+            ("text/plain", "f.txt"),
+            ("application/json", "f.json"),
+            ("text/csv", "f.csv"),
+            ("application/xml", "f.xml"),
+            ("application/zip", "f.zip"),
+            ("application/gzip", "f.gz"),
+            ("application/x-tar", "f.tar"),
+            ("application/x-7z-compressed", "f.7z"),
+            ("application/msword", "f.doc"),
+        ];
+        for (expected_mime, filename) in cases {
+            let id = storage.save_file(&encode(b"x"), filename, *expected_mime).unwrap();
+            let mime = storage.get_mime_type(&id).unwrap();
+            assert_eq!(&mime, expected_mime, "Failed for {}", filename);
+        }
+    }
+
+    #[test]
+    fn test_save_file_to_directory() {
+        let (storage, dir) = make_storage();
+        let target = dir.path().join("uploads");
+        let data = encode(b"file content");
+        let path = storage.save_file_to_directory(&data, "test.txt", "text/plain", &target).unwrap();
+        assert!(path.exists());
+        assert_eq!(std::fs::read(&path).unwrap(), b"file content");
+    }
+
+    #[test]
+    fn test_save_file_invalid_base64() {
+        let (storage, _dir) = make_storage();
+        let result = storage.save_file("not-valid-base64!!!", "file.txt", "text/plain");
+        assert!(result.is_err());
+    }
+}

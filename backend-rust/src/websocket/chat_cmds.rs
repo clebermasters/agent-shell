@@ -790,3 +790,224 @@ pub(crate) async fn handle(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
+    use tempfile::TempDir;
+    use crate::websocket::{
+        client_manager::ClientManager,
+        types::{BroadcastMessage, WsState},
+    };
+    use crate::{
+        chat_clear_store::ChatClearStore,
+        chat_event_store::ChatEventStore,
+        chat_file_storage::ChatFileStorage,
+        types::WebSocketMessage,
+    };
+    use base64::Engine;
+
+    fn make_ws_state(dir: &std::path::Path) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>) {
+        let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
+        let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
+        let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
+        let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
+        let client_manager = Arc::new(ClientManager::new());
+        let state = WsState {
+            client_id: "test-client".to_string(),
+            current_pty: Arc::new(Mutex::new(None)),
+            current_session: Arc::new(Mutex::new(None)),
+            current_window: Arc::new(Mutex::new(None)),
+            audio_tx: None,
+            message_tx: tx,
+            chat_log_handle: Arc::new(Mutex::new(None)),
+            chat_file_storage,
+            chat_event_store,
+            chat_clear_store,
+            client_manager,
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        };
+        (state, rx)
+    }
+
+    #[tokio::test]
+    async fn test_unwatch_chat_log() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::UnwatchChatLog, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_clear_chat_log() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, mut rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::ClearChatLog {
+            session_name: "test-session".to_string(),
+            window_index: 0,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+        // Should have received ChatLogCleared response
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("Cleared") || json.contains("cleared"));
+    }
+
+    #[tokio::test]
+    async fn test_load_more_chat_history_acp_session() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        // acp_ prefix sessions try to read opencode DB — it won't exist, error handled gracefully
+        let result = handle(WebSocketMessage::LoadMoreChatHistory {
+            session_name: "acp_test-session-id".to_string(),
+            window_index: 0,
+            offset: 0,
+            limit: 20,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_load_more_chat_history_regular_session() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::LoadMoreChatHistory {
+            session_name: "AgentShell".to_string(),
+            window_index: 0,
+            offset: 0,
+            limit: 20,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_chat_image() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, mut rx) = make_ws_state(dir.path());
+        // 1x1 PNG pixel in base64
+        let png_data = base64::engine::general_purpose::STANDARD.encode(
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        );
+        let result = handle(WebSocketMessage::SendFileToChat {
+            session_name: "AgentShell".to_string(),
+            window_index: 0,
+            file: crate::types::FileAttachment {
+                data: png_data,
+                filename: "test.png".to_string(),
+                mime_type: "image/png".to_string(),
+            },
+            prompt: Some("Check this image".to_string()),
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+        // Should broadcast the file message
+        let _ = rx.try_recv();
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_chat_document() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let data = base64::engine::general_purpose::STANDARD.encode(b"document content");
+        let result = handle(WebSocketMessage::SendFileToChat {
+            session_name: "AgentShell".to_string(),
+            window_index: 0,
+            file: crate::types::FileAttachment {
+                data,
+                filename: "doc.pdf".to_string(),
+                mime_type: "application/pdf".to_string(),
+            },
+            prompt: None,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_chat_audio() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let data = base64::engine::general_purpose::STANDARD.encode(b"audio bytes");
+        let result = handle(WebSocketMessage::SendFileToChat {
+            session_name: "AgentShell".to_string(),
+            window_index: 0,
+            file: crate::types::FileAttachment {
+                data,
+                filename: "sound.mp3".to_string(),
+                mime_type: "audio/mpeg".to_string(),
+            },
+            prompt: None,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_chat_message_empty_ignored() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, mut rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::SendChatMessage {
+            session_name: "AgentShell".to_string(),
+            window_index: 0,
+            message: "   ".to_string(),
+            notify: None,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+        // Empty messages are ignored — no response expected
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_send_chat_message_valid() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::SendChatMessage {
+            session_name: "AgentShell".to_string(),
+            window_index: 0,
+            message: "Hello from test".to_string(),
+            notify: None,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_watch_chat_log_nonexistent_session() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::WatchChatLog {
+            session_name: "nonexistent-session-xyz".to_string(),
+            window_index: 0,
+            limit: None,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+        // Task is spawned asynchronously — give it a moment
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test]
+    async fn test_unknown_message_no_op() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::Ping, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    fn make_app_state(dir: &std::path::Path) -> Arc<crate::AppState> {
+        let (broadcast_tx, _) = mpsc::unbounded_channel();
+        let client_manager = Arc::new(ClientManager::new());
+        let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
+        let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
+        let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
+        Arc::new(crate::AppState {
+            enable_audio_logs: false,
+            broadcast_tx,
+            client_manager,
+            chat_file_storage,
+            chat_event_store,
+            chat_clear_store,
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        })
+    }
+}

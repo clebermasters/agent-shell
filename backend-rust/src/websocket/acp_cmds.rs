@@ -824,3 +824,152 @@ pub(crate) async fn handle(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
+    use tempfile::TempDir;
+    use crate::websocket::{
+        client_manager::ClientManager,
+        types::{BroadcastMessage, WsState},
+    };
+    use crate::{
+        chat_clear_store::ChatClearStore,
+        chat_event_store::ChatEventStore,
+        chat_file_storage::ChatFileStorage,
+        types::WebSocketMessage,
+    };
+
+    fn make_state(dir: &std::path::Path) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>, Arc<crate::AppState>) {
+        let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
+        let (broadcast_tx, _) = mpsc::unbounded_channel();
+        let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
+        let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
+        let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
+        let client_manager = Arc::new(ClientManager::new());
+        let ws_state = WsState {
+            client_id: "test-client".to_string(),
+            current_pty: Arc::new(Mutex::new(None)),
+            current_session: Arc::new(Mutex::new(None)),
+            current_window: Arc::new(Mutex::new(None)),
+            audio_tx: None,
+            message_tx: tx,
+            chat_log_handle: Arc::new(Mutex::new(None)),
+            chat_file_storage: chat_file_storage.clone(),
+            chat_event_store: chat_event_store.clone(),
+            chat_clear_store: chat_clear_store.clone(),
+            client_manager: client_manager.clone(),
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        };
+        let app_state = Arc::new(crate::AppState {
+            enable_audio_logs: false,
+            broadcast_tx,
+            client_manager,
+            chat_file_storage,
+            chat_event_store,
+            chat_clear_store,
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        });
+        (ws_state, rx, app_state)
+    }
+
+    #[test]
+    fn test_write_acp_session_file() {
+        // Just ensure it doesn't panic
+        write_acp_session_file("test-session-id", "/home/user/project");
+    }
+
+    #[tokio::test]
+    async fn test_acp_load_history_empty() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpLoadHistory {
+            session_id: "test-session".to_string(),
+            offset: None,
+            limit: None,
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("AcpHistoryLoaded") || json.contains("messages"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_clear_history() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpClearHistory {
+            session_id: "test-session".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("Cleared") || json.contains("cleared") || json.contains("true"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_delete_session() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpDeleteSession {
+            session_id: "session-to-delete".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("Deleted") || json.contains("deleted") || json.contains("true"));
+    }
+
+    #[tokio::test]
+    async fn test_acp_list_sessions_no_client_auto_init_fails() {
+        // ACP client is None — AcpListSessions will try to auto-init ACP which will fail
+        // since opencode binary likely isn't available in test environment
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpListSessions, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        // May or may not send a response depending on timing
+        let _ = rx.try_recv();
+    }
+
+    #[tokio::test]
+    async fn test_acp_send_prompt_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        // Client is None — should handle gracefully
+        let result = handle(WebSocketMessage::AcpSendPrompt {
+            session_id: "test-sid".to_string(),
+            message: "Hello".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_cancel_prompt_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpCancelPrompt {
+            session_id: "test-sid".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_unknown_message_no_op() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::Ping, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+}

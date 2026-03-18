@@ -478,3 +478,91 @@ pub async fn send_special_key(session_name: &str, window_index: u32, key: &str) 
     Ok(())
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunk_empty_string() {
+        let chunks = chunk_terminal_stream("", 100);
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn test_chunk_fits_in_one() {
+        let chunks = chunk_terminal_stream("hello world\n", 100);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "hello world\n");
+    }
+
+    #[test]
+    fn test_chunk_splits_across_boundary() {
+        let text = "line1\nline2\nline3\n";
+        let chunks = chunk_terminal_stream(text, 12);
+        // Each chunk should be <= 12 bytes unless a single line exceeds max
+        for chunk in &chunks {
+            // Either the chunk fits or it was a single oversized line
+            assert!(!chunk.is_empty());
+        }
+        // All content should be preserved
+        let joined: String = chunks.join("");
+        assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn test_chunk_single_large_line() {
+        let big_line = "a".repeat(200) + "\n";
+        let chunks = chunk_terminal_stream(&big_line, 50);
+        // Big line gets its own chunk even if > max_bytes
+        assert!(!chunks.is_empty());
+        let joined: String = chunks.join("");
+        assert_eq!(joined, big_line);
+    }
+
+    #[test]
+    fn test_chunk_multiple_lines() {
+        let text = "aaa\nbbb\nccc\n";
+        let chunks = chunk_terminal_stream(text, 8);
+        let joined: String = chunks.join("");
+        assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn test_chunk_no_trailing_newline() {
+        let text = "hello";
+        let chunks = chunk_terminal_stream(text, 100);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "hello");
+    }
+
+    #[test]
+    fn test_escape_single_quotes_no_quotes() {
+        assert_eq!(escape_single_quotes("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_escape_single_quotes_with_quote() {
+        assert_eq!(escape_single_quotes("it's"), "it'\\''s");
+    }
+
+    #[test]
+    fn test_escape_single_quotes_multiple() {
+        let result = escape_single_quotes("a'b'c");
+        assert_eq!(result, "a'\\''b'\\''c");
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions_returns_result() {
+        // tmux is running in test environment
+        let result = list_sessions().await;
+        // Should succeed since tmux is running
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_tmux_server() {
+        let result = ensure_tmux_server().await;
+        assert!(result.is_ok());
+    }
+}

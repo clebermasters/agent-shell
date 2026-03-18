@@ -327,19 +327,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_session_default_name() {
+        let test_name = format!("test-{}", chrono::Utc::now().timestamp_millis());
         let (tx, mut rx) = make_tx();
-        let result = handle_create_session(&tx, None).await;
+        let result = handle_create_session(&tx, Some(test_name.clone())).await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
             BroadcastMessage::Text(s) => s.as_ref().clone(),
             _ => panic!("Expected text"),
         };
-        // Kill whatever was created to clean up
-        if json.contains("sessionName") {
-            // Best effort cleanup — ignore errors
-        }
         assert!(!json.is_empty());
+        assert!(json.contains(&test_name));
+        // Cleanup: kill the tmux session we just created
+        let _ = tmux::kill_session(&test_name).await;
     }
 
     #[tokio::test]

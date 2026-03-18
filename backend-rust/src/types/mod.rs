@@ -926,4 +926,152 @@ mod tests {
         assert_eq!(parsed.filename, "test.png");
         assert_eq!(parsed.mime_type, "image/png");
     }
+
+    // Phase 2: Additional WebSocketMessage deserialization tests
+
+    #[test]
+    fn test_input_deser() {
+        let json = r#"{"type":"input","data":"hello"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::Input { data } => assert_eq!(data, "hello"),
+            _ => panic!("Expected Input"),
+        }
+    }
+
+    #[test]
+    fn test_resize_deser() {
+        let json = r#"{"type":"resize","cols":120,"rows":40}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::Resize { cols, rows } => {
+                assert_eq!(cols, 120);
+                assert_eq!(rows, 40);
+            }
+            _ => panic!("Expected Resize"),
+        }
+    }
+
+    #[test]
+    fn test_ping_deser() {
+        let json = r#"{"type":"ping"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(msg, WebSocketMessage::Ping));
+    }
+
+    #[test]
+    fn test_get_stats_deser() {
+        let json = r#"{"type":"get-stats"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(msg, WebSocketMessage::GetStats));
+    }
+
+    #[test]
+    fn test_send_enter_key_deser() {
+        let json = r#"{"type":"send-enter-key"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(msg, WebSocketMessage::SendEnterKey));
+    }
+
+    #[test]
+    fn test_create_session_with_name() {
+        let json = r#"{"type":"create-session","name":"my-sess"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::CreateSession { name } => assert_eq!(name, Some("my-sess".to_string())),
+            _ => panic!("Expected CreateSession"),
+        }
+    }
+
+    #[test]
+    fn test_create_session_without_name() {
+        let json = r#"{"type":"create-session"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::CreateSession { name } => assert_eq!(name, None),
+            _ => panic!("Expected CreateSession"),
+        }
+    }
+
+    #[test]
+    fn test_kill_session_deser() {
+        let json = r#"{"type":"kill-session","sessionName":"doomed"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::KillSession { session_name } => assert_eq!(session_name, "doomed"),
+            _ => panic!("Expected KillSession"),
+        }
+    }
+
+    #[test]
+    fn test_watch_chat_log_deser() {
+        let json = r#"{"type":"watch-chat-log","sessionName":"s","windowIndex":1,"limit":50}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::WatchChatLog { session_name, window_index, limit } => {
+                assert_eq!(session_name, "s");
+                assert_eq!(window_index, 1);
+                assert_eq!(limit, Some(50));
+            }
+            _ => panic!("Expected WatchChatLog"),
+        }
+    }
+
+    #[test]
+    fn test_load_more_chat_history_deser() {
+        let json = r#"{"type":"load-more-chat-history","sessionName":"s","windowIndex":0,"offset":10,"limit":20}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::LoadMoreChatHistory { session_name, window_index, offset, limit } => {
+                assert_eq!(session_name, "s");
+                assert_eq!(window_index, 0);
+                assert_eq!(offset, 10);
+                assert_eq!(limit, 20);
+            }
+            _ => panic!("Expected LoadMoreChatHistory"),
+        }
+    }
+
+    #[test]
+    fn test_parse_datetime_with_timezone_offset() {
+        let result = parse_datetime_lenient("2024-06-15T10:30:00+05:00");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_server_message_session_created_skip_none() {
+        let msg = ServerMessage::SessionCreated {
+            success: true,
+            session_name: Some("new-sess".to_string()),
+            error: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"sessionName\":\"new-sess\""));
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn test_server_message_window_selected_with_error_none() {
+        let msg = ServerMessage::WindowSelected {
+            success: true,
+            window_index: Some(2),
+            error: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"windowIndex\":2"));
+        assert!(!json.contains("\"error\""));
+    }
+
+    #[test]
+    fn test_create_cron_job_deser() {
+        let json = r#"{"type":"create-cron-job","job":{"id":"","name":"test","schedule":"* * * * *","command":"echo hi","enabled":true}}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::CreateCronJob { job } => {
+                assert_eq!(job.name, "test");
+                assert_eq!(job.command, "echo hi");
+            }
+            _ => panic!("Expected CreateCronJob"),
+        }
+    }
 }

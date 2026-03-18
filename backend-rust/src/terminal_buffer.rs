@@ -237,4 +237,59 @@ mod tests {
         assert!(result.contains("line4"));
         assert!(!result.contains("\x1b[?0c"));
     }
+
+    // Phase 6: Filter & decoder additional tests
+
+    #[test]
+    fn test_filter_multiple_consecutive_da() {
+        let input = "\x1b[?0c\x1b[?1c\x1b[?2c";
+        assert_eq!(filter_control_sequences(input), "");
+    }
+
+    #[test]
+    fn test_filter_da_at_boundaries() {
+        let input = "\x1b[?0chello\x1b[?1c";
+        assert_eq!(filter_control_sequences(input), "hello");
+    }
+
+    #[test]
+    fn test_filter_preserves_ansi_color_codes() {
+        let input = "\x1b[31mred text\x1b[0m";
+        assert_eq!(filter_control_sequences(input), input);
+    }
+
+    #[test]
+    fn test_utf8_decoder_3byte_split_at_all_positions() {
+        let bytes = "€".as_bytes(); // 3 bytes: E2 82 AC
+        assert_eq!(bytes.len(), 3);
+
+        // Split at position 2
+        let mut decoder = Utf8StreamDecoder::new();
+        let (o1, _) = decoder.decode_chunk(&bytes[..2]);
+        let (o2, _) = decoder.decode_chunk(&bytes[2..]);
+        assert_eq!(format!("{}{}", o1, o2), "€");
+    }
+
+    #[test]
+    fn test_utf8_decoder_mixed_ascii_and_multibyte_split() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let text = "hi€ok";
+        let bytes = text.as_bytes();
+        // Split in the middle of the euro sign
+        let split_at = 3; // 'h','i', then first byte of €
+        let (o1, _) = decoder.decode_chunk(&bytes[..split_at]);
+        let (o2, _) = decoder.decode_chunk(&bytes[split_at..]);
+        assert_eq!(format!("{}{}", o1, o2), text);
+    }
+
+    #[test]
+    fn test_utf8_decoder_consecutive_multibyte_across_chunks() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let text = "€€";
+        let bytes = text.as_bytes(); // 6 bytes total
+        // Split at byte 4 (middle of second €)
+        let (o1, _) = decoder.decode_chunk(&bytes[..4]);
+        let (o2, _) = decoder.decode_chunk(&bytes[4..]);
+        assert_eq!(format!("{}{}", o1, o2), text);
+    }
 }

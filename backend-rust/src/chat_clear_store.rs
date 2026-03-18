@@ -188,4 +188,49 @@ mod tests {
         let ts = store.get_cleared_at("any", 0).await;
         assert_eq!(ts, None);
     }
+
+    // Phase 12: Chat clear store additional tests
+
+    #[tokio::test]
+    async fn test_clear_nonexistent_key_is_noop() {
+        let (store, _dir) = make_store();
+        // Clearing a key that was never set should not panic
+        store.clear("never-set", 99).await;
+        assert_eq!(store.get_cleared_at("never-set", 99).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_set_clear_cycle() {
+        let (store, _dir) = make_store();
+        store.set_cleared_at("sess", 0, 100).await;
+        assert_eq!(store.get_cleared_at("sess", 0).await, Some(100));
+        store.clear("sess", 0).await;
+        assert_eq!(store.get_cleared_at("sess", 0).await, None);
+        store.set_cleared_at("sess", 0, 200).await;
+        assert_eq!(store.get_cleared_at("sess", 0).await, Some(200));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_entries_persist_and_reload() {
+        let dir = TempDir::new().unwrap();
+        {
+            let store = ChatClearStore::new(&dir.path().to_path_buf());
+            store.set_cleared_at("a", 0, 10).await;
+            store.set_cleared_at("b", 1, 20).await;
+            store.set_cleared_at("c", 2, 30).await;
+        }
+        let store2 = ChatClearStore::new(&dir.path().to_path_buf());
+        assert_eq!(store2.get_cleared_at("a", 0).await, Some(10));
+        assert_eq!(store2.get_cleared_at("b", 1).await, Some(20));
+        assert_eq!(store2.get_cleared_at("c", 2).await, Some(30));
+    }
+
+    #[tokio::test]
+    async fn test_key_format_verification() {
+        let (store, _dir) = make_store();
+        store.set_cleared_at("my-session", 3, 555).await;
+        // Verify internal key format is "session:window"
+        let state = store.state.read().await;
+        assert!(state.cleared_at.contains_key("my-session:3"));
+    }
 }

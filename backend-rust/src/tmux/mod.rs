@@ -565,4 +565,71 @@ mod tests {
         let result = ensure_tmux_server().await;
         assert!(result.is_ok());
     }
+
+    // Phase 7: Chunk helpers additional tests
+
+    #[test]
+    fn test_chunk_exactly_max_bytes() {
+        let text = "abcde\n"; // 6 bytes
+        let chunks = chunk_terminal_stream(text, 6);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    #[test]
+    fn test_chunk_max_bytes_one() {
+        let text = "a\nb\n";
+        let chunks = chunk_terminal_stream(text, 1);
+        // Each line-inclusive segment gets its own chunk
+        assert!(!chunks.is_empty());
+        let joined: String = chunks.join("");
+        assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn test_chunk_unicode_boundary_safety() {
+        // Unicode chars shouldn't be split within a chunk boundary
+        let text = "héllo\nwörld\n";
+        let chunks = chunk_terminal_stream(text, 8);
+        let joined: String = chunks.join("");
+        assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn test_chunk_many_empty_lines() {
+        let text = "\n\n\n\n\n";
+        let chunks = chunk_terminal_stream(text, 3);
+        let joined: String = chunks.join("");
+        assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn test_chunk_very_long_single_line() {
+        let long_line = "x".repeat(1000);
+        let chunks = chunk_terminal_stream(&long_line, 100);
+        assert!(!chunks.is_empty());
+        let joined: String = chunks.join("");
+        assert_eq!(joined, long_line);
+    }
+
+    #[test]
+    fn test_chunk_joined_equals_original() {
+        let text = "line1\nline2\nline3\nline4\nline5\n";
+        for max in [5, 10, 15, 20, 100] {
+            let chunks = chunk_terminal_stream(text, max);
+            let joined: String = chunks.join("");
+            assert_eq!(joined, text, "Failed for max_bytes={}", max);
+        }
+    }
+
+    #[test]
+    fn test_escape_single_quotes_empty() {
+        assert_eq!(escape_single_quotes(""), "");
+    }
+
+    #[test]
+    fn test_escape_single_quotes_only_quotes() {
+        let result = escape_single_quotes("'''");
+        assert_eq!(result, "'\\'''\\'''\\''");
+    }
 }

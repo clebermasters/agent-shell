@@ -126,4 +126,64 @@ mod tests {
         // May or may not broadcast depending on whether state changed — just shouldn't panic
         let _ = rx.try_recv();
     }
+
+    // Phase 10: State comparison tests
+
+    #[test]
+    fn test_session_state_equality() {
+        let state1 = SessionState {
+            sessions: vec![],
+            window_pane_counts: HashMap::new(),
+        };
+        let state2 = SessionState {
+            sessions: vec![],
+            window_pane_counts: HashMap::new(),
+        };
+        assert_eq!(state1, state2);
+    }
+
+    #[test]
+    fn test_session_state_inequality_sessions_differ() {
+        let state1 = SessionState {
+            sessions: vec![],
+            window_pane_counts: HashMap::new(),
+        };
+        let state2 = SessionState {
+            sessions: vec![TmuxSession {
+                name: "test".to_string(),
+                attached: false,
+                created: chrono::Utc::now(),
+                windows: 1,
+                dimensions: "80x24".to_string(),
+            }],
+            window_pane_counts: HashMap::new(),
+        };
+        assert_ne!(state1, state2);
+    }
+
+    #[test]
+    fn test_session_state_inequality_window_counts_differ() {
+        let mut counts1 = HashMap::new();
+        counts1.insert("sess".to_string(), (1_usize, 1_usize));
+        let mut counts2 = HashMap::new();
+        counts2.insert("sess".to_string(), (2_usize, 3_usize));
+        let state1 = SessionState {
+            sessions: vec![],
+            window_pane_counts: counts1,
+        };
+        let state2 = SessionState {
+            sessions: vec![],
+            window_pane_counts: counts2,
+        };
+        assert_ne!(state1, state2);
+    }
+
+    #[tokio::test]
+    async fn test_new_monitor_starts_with_empty_state() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let monitor = TmuxMonitor::new(tx);
+        let state = monitor.state.read().await;
+        assert!(state.sessions.is_empty());
+        assert!(state.window_pane_counts.is_empty());
+    }
 }

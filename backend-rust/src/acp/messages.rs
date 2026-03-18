@@ -135,4 +135,55 @@ mod tests {
         let json_str = serde_json::to_string(&req).unwrap();
         assert!(!json_str.contains("params")); // skip_serializing_if
     }
+
+    // Phase 3: JSON-RPC edge cases
+
+    #[test]
+    fn test_response_with_error_no_result() {
+        let line = r#"{"jsonrpc":"2.0","id":5,"error":{"code":-32600,"message":"Invalid Request"}}"#;
+        let msg = parse_jsonrpc_message(line).unwrap();
+        match msg {
+            JsonRpcMessage::Response(resp) => {
+                assert!(resp.result.is_none());
+                let err = resp.error.unwrap();
+                assert_eq!(err.code, -32600);
+                assert_eq!(err.message, "Invalid Request");
+            }
+            _ => panic!("Expected Response"),
+        }
+    }
+
+    #[test]
+    fn test_notification_with_null_params() {
+        let line = r#"{"jsonrpc":"2.0","method":"heartbeat","params":null}"#;
+        let msg = parse_jsonrpc_message(line).unwrap();
+        match msg {
+            JsonRpcMessage::Notification(notif) => {
+                assert_eq!(notif.method, "heartbeat");
+                assert!(notif.params.is_none() || notif.params == Some(serde_json::Value::Null));
+            }
+            _ => panic!("Expected Notification"),
+        }
+    }
+
+    #[test]
+    fn test_request_with_string_id() {
+        let line = r#"{"jsonrpc":"2.0","id":"req-abc","method":"test","params":{}}"#;
+        let msg = parse_jsonrpc_message(line).unwrap();
+        match msg {
+            JsonRpcMessage::Request(req) => {
+                assert_eq!(req.id, json!("req-abc"));
+                assert_eq!(req.method, "test");
+            }
+            _ => panic!("Expected Request"),
+        }
+    }
+
+    #[test]
+    fn test_message_with_id_and_method_is_request() {
+        // Has both id and method => untagged tries Request first
+        let line = r#"{"jsonrpc":"2.0","id":99,"method":"doSomething"}"#;
+        let msg = parse_jsonrpc_message(line).unwrap();
+        assert!(matches!(msg, JsonRpcMessage::Request(_)));
+    }
 }

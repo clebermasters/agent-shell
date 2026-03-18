@@ -597,4 +597,74 @@ mod tests {
         }
         // If .bashrc doesn't exist, that's OK — error path is also valid
     }
+
+    // Phase 11: Dotfiles additional tests
+
+    #[test]
+    fn test_validate_path_tilde_expansion() {
+        let mgr = make_manager();
+        let result = mgr.validate_and_resolve_path("~/.bashrc");
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        let home = dirs::home_dir().unwrap();
+        assert!(path.starts_with(&home.canonicalize().unwrap_or(home)));
+    }
+
+    #[test]
+    fn test_validate_path_relative() {
+        let mgr = make_manager();
+        let result = mgr.validate_and_resolve_path(".bashrc");
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        let home = dirs::home_dir().unwrap();
+        assert!(path.starts_with(&home.canonicalize().unwrap_or(home)));
+    }
+
+    #[test]
+    fn test_calculate_hash_empty_string() {
+        let mgr = make_manager();
+        let hash = mgr.calculate_hash("");
+        assert!(!hash.is_empty());
+        // Should be deterministic
+        assert_eq!(hash, mgr.calculate_hash(""));
+    }
+
+    #[test]
+    fn test_template_structure_validation() {
+        let mgr = make_manager();
+        let templates = mgr.get_templates();
+        for t in &templates {
+            assert!(!t.name.is_empty(), "Template name should not be empty");
+            assert!(!t.description.is_empty(), "Template description should not be empty");
+            assert!(!t.content.is_empty(), "Template content should not be empty");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_history_returns_empty_for_unvisited() {
+        let mgr = make_manager();
+        let result = mgr.get_file_history(".some_random_file_xyz").await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_common_dotfiles_list_count() {
+        let mgr = make_manager();
+        assert_eq!(mgr.common_dotfiles.len(), 13);
+    }
+
+    #[test]
+    fn test_dotfile_type_equality() {
+        assert_eq!(DotFileType::Shell, DotFileType::Shell);
+        assert_ne!(DotFileType::Shell, DotFileType::Git);
+        assert_ne!(DotFileType::Vim, DotFileType::Tmux);
+    }
+
+    #[test]
+    fn test_dotfile_template_count() {
+        let mgr = make_manager();
+        let templates = mgr.get_templates();
+        assert_eq!(templates.len(), 4);
+    }
 }

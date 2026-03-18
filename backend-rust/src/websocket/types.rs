@@ -267,4 +267,102 @@ mod tests {
             _ => panic!("Expected text"),
         }
     }
+
+    // Phase 9: Merge logic additional tests
+
+    #[test]
+    fn test_merge_single_each_source_tool_first() {
+        let tool = vec![make_msg("user", 0)];
+        let persisted = vec![make_msg("assistant", 5)];
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].role, "user");
+        assert_eq!(result[1].role, "assistant");
+    }
+
+    #[test]
+    fn test_merge_single_each_source_persisted_first() {
+        let tool = vec![make_msg("user", 10)];
+        let persisted = vec![make_msg("assistant", 0)];
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].role, "assistant");
+        assert_eq!(result[1].role, "user");
+    }
+
+    #[test]
+    fn test_merge_large_volume() {
+        let tool: Vec<ChatMessage> = (0..100).map(|i| make_msg("user", i * 2)).collect();
+        let persisted: Vec<ChatMessage> = (0..100).map(|i| make_msg("assistant", i * 2 + 1)).collect();
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 200);
+        // Verify ordered by timestamp
+        for i in 1..result.len() {
+            if let (Some(prev), Some(curr)) = (&result[i-1].timestamp, &result[i].timestamp) {
+                assert!(prev <= curr);
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_all_same_timestamp_tool_first() {
+        let now = Utc::now();
+        let mut tool = vec![make_msg("user", 0)];
+        tool[0].timestamp = Some(now);
+        let mut persisted = vec![make_msg("assistant", 0)];
+        persisted[0].timestamp = Some(now);
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 2);
+        // Tool messages should come before persisted at same timestamp
+        assert_eq!(result[0].role, "user");
+        assert_eq!(result[1].role, "assistant");
+    }
+
+    #[test]
+    fn test_merge_both_sources_no_timestamps() {
+        let tool = vec![make_msg_no_ts("t1"), make_msg_no_ts("t2")];
+        let persisted = vec![make_msg_no_ts("p1"), make_msg_no_ts("p2")];
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 4);
+        // Tool messages should come first when no timestamps
+        assert_eq!(result[0].role, "t1");
+        assert_eq!(result[1].role, "t2");
+    }
+
+    #[test]
+    fn test_merge_preserves_block_content() {
+        let mut tool_msg = make_msg("user", 0);
+        tool_msg.blocks = vec![ContentBlock::Text { text: "important data".to_string() }];
+        let result = merge_history_messages(vec![tool_msg], vec![]);
+        match &result[0].blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "important data"),
+            _ => panic!("Expected text block"),
+        }
+    }
+
+    #[test]
+    fn test_merge_many_same_timestamp_ordering() {
+        let now = Utc::now();
+        let tool: Vec<ChatMessage> = (0..5).map(|i| {
+            let mut m = make_msg("user", 0);
+            m.timestamp = Some(now);
+            m.blocks = vec![ContentBlock::Text { text: format!("t{}", i) }];
+            m
+        }).collect();
+        let persisted: Vec<ChatMessage> = (0..5).map(|i| {
+            let mut m = make_msg("assistant", 0);
+            m.timestamp = Some(now);
+            m.blocks = vec![ContentBlock::Text { text: format!("p{}", i) }];
+            m
+        }).collect();
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 10);
+        // First 5 should be tool messages (same timestamp, tool comes first)
+        for i in 0..5 {
+            assert_eq!(result[i].role, "user");
+        }
+        for i in 5..10 {
+            assert_eq!(result[i].role, "assistant");
+        }
+    }
 }

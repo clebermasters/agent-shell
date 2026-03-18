@@ -642,17 +642,18 @@ mod tests {
     async fn test_handle_attach_sets_state() {
         let dir = tempfile::TempDir::new().unwrap();
         let (mut ws_state, _rx) = make_ws_state(dir.path());
-        // attach_to_session will fail since no tmux, but current_session/window should be set
+        let test_session = format!("test-attach-{}", chrono::Utc::now().timestamp_millis());
         *ws_state.current_session.lock().await = None;
         *ws_state.current_window.lock().await = None;
 
         // handle_attach sets current_session and current_window before attempting attach
-        // The attach itself will fail, but we can verify the state was set
-        let _ = handle_attach(&mut ws_state, "test-session".to_string(), 80, 24, Some(0)).await;
+        let _ = handle_attach(&mut ws_state, test_session.clone(), 80, 24, Some(0)).await;
         let session = ws_state.current_session.lock().await.clone();
-        assert_eq!(session, Some("test-session".to_string()));
+        assert_eq!(session, Some(test_session.clone()));
         let window = *ws_state.current_window.lock().await;
         assert_eq!(window, Some(0));
+        // Cleanup: kill the tmux session created by attach_to_session
+        let _ = crate::tmux::kill_session(&test_session).await;
     }
 
     #[tokio::test]

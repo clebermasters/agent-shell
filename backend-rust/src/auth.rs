@@ -199,4 +199,41 @@ mod tests {
         let query = "token=first&token=second";
         assert_eq!(extract_token_from_query(query), Some("first".to_string()));
     }
+
+    // Phase 5: Auth edge cases
+
+    #[test]
+    fn test_tokens_match_unicode() {
+        assert!(tokens_match("tökën", "tökën"));
+        assert!(!tokens_match("tökën", "token"));
+    }
+
+    #[test]
+    fn test_tokens_match_whitespace_difference() {
+        assert!(!tokens_match("secret ", "secret"));
+        assert!(!tokens_match(" secret", "secret"));
+    }
+
+    #[test]
+    fn test_percent_decode_empty() {
+        assert_eq!(percent_decode(b""), "");
+    }
+
+    #[test]
+    fn test_percent_decode_single_percent() {
+        // Just "%" alone — not enough for a valid sequence
+        let result = percent_decode(b"%");
+        assert_eq!(result, "%");
+    }
+
+    #[test]
+    fn test_percent_decode_consecutive() {
+        assert_eq!(percent_decode(b"%20%20"), "  ");
+    }
+
+    #[test]
+    fn test_extract_token_empty_value() {
+        let query = "token=";
+        assert_eq!(extract_token_from_query(query), Some("".to_string()));
+    }
 }

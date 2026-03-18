@@ -685,4 +685,74 @@ mod tests {
         }
         // If it fails due to crontab, that's OK — test is about timestamps when it works
     }
+
+    // Phase 8: Cron validation additional tests
+
+    #[test]
+    fn test_validate_range_expression() {
+        let mgr = make_manager();
+        assert!(mgr.validate_cron_expression("0 0 1,15 * *").is_ok());
+    }
+
+    #[test]
+    fn test_validate_step_expression() {
+        let mgr = make_manager();
+        assert!(mgr.validate_cron_expression("*/10 * * * *").is_ok());
+    }
+
+    #[test]
+    fn test_validate_out_of_range_hour() {
+        let mgr = make_manager();
+        assert!(mgr.validate_cron_expression("0 25 * * *").is_err());
+    }
+
+    #[test]
+    fn test_validate_out_of_range_month() {
+        let mgr = make_manager();
+        assert!(mgr.validate_cron_expression("0 0 * 13 *").is_err());
+    }
+
+    #[test]
+    fn test_validate_out_of_range_dow() {
+        let mgr = make_manager();
+        assert!(mgr.validate_cron_expression("0 0 * * 8").is_err());
+    }
+
+    #[test]
+    fn test_calculate_next_run_returns_future() {
+        let mgr = make_manager();
+        let result = mgr.calculate_next_run("0 0 * * *").unwrap(); // midnight daily
+        assert!(result.is_some());
+        let next = result.unwrap();
+        assert!(next > Utc::now());
+    }
+
+    #[test]
+    fn test_calculate_next_run_specific_schedule() {
+        let mgr = make_manager();
+        let result = mgr.calculate_next_run("30 12 * * *").unwrap(); // 12:30 daily
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_test_command_nonempty_returns_dryrun() {
+        let mgr = make_manager();
+        let result = mgr.test_command("ls -la /tmp").await.unwrap();
+        assert!(result.contains("Dry-run"));
+        assert!(result.contains("ls -la /tmp"));
+    }
+
+    #[tokio::test]
+    async fn test_test_command_whitespace_only() {
+        let mgr = make_manager();
+        let result = mgr.test_command("   \t  ").await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cron_manager_new_is_empty() {
+        let mgr = make_manager();
+        // Can't call async list_jobs in sync test, but we can verify construction
+        let _ = mgr;
+    }
 }

@@ -800,4 +800,110 @@ mod tests {
         let result = resolve_command("nonexistent_command_xyz_abc_123");
         assert_eq!(result, "nonexistent_command_xyz_abc_123");
     }
+
+    // Phase 4: SessionUpdate enum deserialization tests
+
+    #[test]
+    fn test_session_update_agent_message_chunk() {
+        let json = r#"{"sessionUpdate":"agent_message_chunk","content":"hello"}"#;
+        let update: SessionUpdate = sj::from_str(json).unwrap();
+        match update {
+            SessionUpdate::AgentMessageChunk { content } => {
+                assert_eq!(content, sj::json!("hello"));
+            }
+            _ => panic!("Expected AgentMessageChunk"),
+        }
+    }
+
+    #[test]
+    fn test_session_update_agent_thought_chunk() {
+        let json = r#"{"sessionUpdate":"agent_thought_chunk","content":"thinking..."}"#;
+        let update: SessionUpdate = sj::from_str(json).unwrap();
+        assert!(matches!(update, SessionUpdate::AgentThoughtChunk { .. }));
+    }
+
+    #[test]
+    fn test_session_update_user_message_chunk() {
+        let json = r#"{"sessionUpdate":"user_message_chunk","content":"user says"}"#;
+        let update: SessionUpdate = sj::from_str(json).unwrap();
+        assert!(matches!(update, SessionUpdate::UserMessageChunk { .. }));
+    }
+
+    #[test]
+    fn test_session_update_tool_call() {
+        let json = r#"{
+            "sessionUpdate":"tool_call",
+            "toolCallId":"tc-1",
+            "title":"Read file",
+            "kind":"read",
+            "status":"running",
+            "locations":null,
+            "rawInput":{"path":"/tmp/test.txt"}
+        }"#;
+        let update: SessionUpdate = sj::from_str(json).unwrap();
+        match update {
+            SessionUpdate::ToolCall { tool_call_id, title, kind, status, .. } => {
+                assert_eq!(tool_call_id, "tc-1");
+                assert_eq!(title, "Read file");
+                assert_eq!(kind, "read");
+                assert_eq!(status, "running");
+            }
+            _ => panic!("Expected ToolCall"),
+        }
+    }
+
+    #[test]
+    fn test_session_update_tool_call_update() {
+        let json = r#"{
+            "sessionUpdate":"tool_call_update",
+            "toolCallId":"tc-1",
+            "status":"completed",
+            "kind":"read",
+            "title":"Read file",
+            "rawInput":null,
+            "content":null,
+            "locations":null,
+            "rawOutput":{"text":"file contents"}
+        }"#;
+        let update: SessionUpdate = sj::from_str(json).unwrap();
+        match update {
+            SessionUpdate::ToolCallUpdate { tool_call_id, status, raw_output, .. } => {
+                assert_eq!(tool_call_id, "tc-1");
+                assert_eq!(status, "completed");
+                assert!(raw_output.is_some());
+            }
+            _ => panic!("Expected ToolCallUpdate"),
+        }
+    }
+
+    #[test]
+    fn test_session_update_plan() {
+        let json = r#"{"sessionUpdate":"plan","entries":[{"step":"analyze"},{"step":"implement"}]}"#;
+        let update: SessionUpdate = sj::from_str(json).unwrap();
+        match update {
+            SessionUpdate::Plan { entries } => assert_eq!(entries.len(), 2),
+            _ => panic!("Expected Plan"),
+        }
+    }
+
+    #[test]
+    fn test_session_update_usage_update() {
+        let json = r#"{"sessionUpdate":"usage_update","used":500,"size":4096,"cost":0.05}"#;
+        let update: SessionUpdate = sj::from_str(json).unwrap();
+        match update {
+            SessionUpdate::UsageUpdate { used, size, cost } => {
+                assert_eq!(used, Some(500));
+                assert_eq!(size, Some(4096));
+                assert!(cost.is_some());
+            }
+            _ => panic!("Expected UsageUpdate"),
+        }
+    }
+
+    #[test]
+    fn test_session_update_unknown_variant() {
+        let json = r#"{"sessionUpdate":"some_future_event","data":123}"#;
+        let update: SessionUpdate = sj::from_str(json).unwrap();
+        assert!(matches!(update, SessionUpdate::Unknown));
+    }
 }

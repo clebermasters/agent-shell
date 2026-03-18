@@ -187,4 +187,54 @@ mod tests {
         let (out, _) = decoder.decode_chunk("こんにちは".as_bytes());
         assert_eq!(out, "こんにちは");
     }
+
+    #[test]
+    fn test_utf8_decoder_3byte_split() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let bytes = "€".as_bytes(); // € is 3 bytes: 0xE2 0x82 0xAC
+        assert_eq!(bytes.len(), 3);
+        let (out1, _) = decoder.decode_chunk(&bytes[..1]);
+        let (out2, _) = decoder.decode_chunk(&bytes[1..]);
+        assert_eq!(format!("{}{}", out1, out2), "€");
+    }
+
+    #[test]
+    fn test_utf8_decoder_4byte_emoji_split() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let bytes = "😀".as_bytes(); // 4 bytes: F0 9F 98 80
+        assert_eq!(bytes.len(), 4);
+        let (out1, _) = decoder.decode_chunk(&bytes[..1]);
+        let (out2, _) = decoder.decode_chunk(&bytes[1..]);
+        assert_eq!(format!("{}{}", out1, out2), "😀");
+    }
+
+    #[test]
+    fn test_utf8_decoder_4byte_split_at_2() {
+        let mut decoder = Utf8StreamDecoder::new();
+        let bytes = "😀".as_bytes();
+        let (out1, _) = decoder.decode_chunk(&bytes[..2]);
+        let (out2, _) = decoder.decode_chunk(&bytes[2..]);
+        assert_eq!(format!("{}{}", out1, out2), "😀");
+    }
+
+    #[test]
+    fn test_utf8_decoder_invalid_bytes() {
+        let mut decoder = Utf8StreamDecoder::new();
+        // Invalid UTF-8 bytes followed by valid ASCII
+        let input: Vec<u8> = vec![0xFF, 0xFE, b'h', b'i'];
+        let (out, _) = decoder.decode_chunk(&input);
+        // Should not panic on invalid bytes; output content is implementation-defined
+        let _ = out;
+    }
+
+    #[test]
+    fn test_filter_sequences_embedded_in_multiline() {
+        let input = "line1\nline2\x1b[?0cline3\nline4";
+        let result = filter_control_sequences(input);
+        assert!(result.contains("line1"));
+        assert!(result.contains("line2"));
+        assert!(result.contains("line3"));
+        assert!(result.contains("line4"));
+        assert!(!result.contains("\x1b[?0c"));
+    }
 }

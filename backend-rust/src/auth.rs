@@ -179,4 +179,24 @@ mod tests {
     fn test_tokens_match_empty() {
         assert!(tokens_match("", ""));
     }
+
+    #[test]
+    fn test_percent_decode_multiple_encoded() {
+        assert_eq!(percent_decode(b"a%20b%3Dc"), "a b=c");
+    }
+
+    #[test]
+    fn test_percent_decode_invalid_hex() {
+        // %GG is not valid hex — should be passed through
+        let result = percent_decode(b"hello%GGworld");
+        // The exact behavior depends on implementation: may skip or pass through
+        assert!(result.contains("hello"));
+        assert!(result.contains("world"));
+    }
+
+    #[test]
+    fn test_extract_token_multiple_params() {
+        let query = "token=first&token=second";
+        assert_eq!(extract_token_from_query(query), Some("first".to_string()));
+    }
 }

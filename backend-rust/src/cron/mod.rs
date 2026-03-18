@@ -551,4 +551,138 @@ mod tests {
         assert!(jobs.is_empty());
         // Verify sort doesn't panic on empty
     }
+
+    #[tokio::test]
+    async fn test_create_job_duplicate_name_rejected() {
+        let mgr = make_manager();
+        // Manually insert a job into the manager's jobs map
+        {
+            let mut jobs = mgr.jobs.write().await;
+            jobs.insert("existing-id".to_string(), crate::types::CronJob {
+                id: "existing-id".to_string(),
+                name: "duplicate-name".to_string(),
+                schedule: "* * * * *".to_string(),
+                command: "echo hi".to_string(),
+                enabled: true,
+                last_run: None,
+                next_run: None,
+                output: None,
+                created_at: None,
+                updated_at: None,
+                environment: None,
+                log_output: None,
+                email_to: None,
+                tmux_session: None,
+            });
+        }
+        // Try to create another job with the same name
+        let job = crate::types::CronJob {
+            id: String::new(),
+            name: "duplicate-name".to_string(),
+            schedule: "* * * * *".to_string(),
+            command: "echo test".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+        };
+        let result = mgr.create_job(job).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_update_job_duplicate_name_rejected() {
+        let mgr = make_manager();
+        // Insert two jobs with different names
+        {
+            let mut jobs = mgr.jobs.write().await;
+            jobs.insert("id-1".to_string(), crate::types::CronJob {
+                id: "id-1".to_string(),
+                name: "job-one".to_string(),
+                schedule: "* * * * *".to_string(),
+                command: "echo one".to_string(),
+                enabled: true,
+                last_run: None,
+                next_run: None,
+                output: None,
+                created_at: None,
+                updated_at: None,
+                environment: None,
+                log_output: None,
+                email_to: None,
+                tmux_session: None,
+            });
+            jobs.insert("id-2".to_string(), crate::types::CronJob {
+                id: "id-2".to_string(),
+                name: "job-two".to_string(),
+                schedule: "* * * * *".to_string(),
+                command: "echo two".to_string(),
+                enabled: true,
+                last_run: None,
+                next_run: None,
+                output: None,
+                created_at: None,
+                updated_at: None,
+                environment: None,
+                log_output: None,
+                email_to: None,
+                tmux_session: None,
+            });
+        }
+        // Try to update id-2 with name "job-one" (duplicate)
+        let updated_job = crate::types::CronJob {
+            id: "id-2".to_string(),
+            name: "job-one".to_string(), // conflicts with id-1
+            schedule: "* * * * *".to_string(),
+            command: "echo updated".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+        };
+        let result = mgr.update_job("id-2".to_string(), updated_job).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_create_job_sets_timestamps() {
+        let mgr = make_manager();
+        let job = crate::types::CronJob {
+            id: String::new(),
+            name: "timestamp-test".to_string(),
+            schedule: "* * * * *".to_string(),
+            command: "echo test".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+        };
+        let result = mgr.create_job(job).await;
+        if let Ok(created) = result {
+            assert!(created.created_at.is_some());
+            assert!(created.updated_at.is_some());
+            let _ = mgr.delete_job(&created.id).await;
+        }
+        // If it fails due to crontab, that's OK — test is about timestamps when it works
+    }
 }

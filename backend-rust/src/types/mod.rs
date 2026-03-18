@@ -855,4 +855,75 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("pong"));
     }
+
+    #[test]
+    fn test_attach_session_deser() {
+        let json = r#"{"type":"attach-session","sessionName":"my-sess","cols":80,"rows":24}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::AttachSession { session_name, cols, rows, .. } => {
+                assert_eq!(session_name, "my-sess");
+                assert_eq!(cols, 80);
+                assert_eq!(rows, 24);
+            }
+            _ => panic!("Expected AttachSession"),
+        }
+    }
+
+    #[test]
+    fn test_send_chat_message_deser_with_notify() {
+        let json = r#"{"type":"send-chat-message","sessionName":"s","windowIndex":0,"message":"hi","notify":true}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::SendChatMessage { message, notify, .. } => {
+                assert_eq!(message, "hi");
+                assert_eq!(notify, Some(true));
+            }
+            _ => panic!("Expected SendChatMessage"),
+        }
+        // Also test without notify field (should default)
+        let json2 = r#"{"type":"send-chat-message","sessionName":"s","windowIndex":0,"message":"hi"}"#;
+        let msg2: WebSocketMessage = serde_json::from_str(json2).unwrap();
+        match msg2 {
+            WebSocketMessage::SendChatMessage { notify, .. } => assert_eq!(notify, None),
+            _ => panic!("Expected SendChatMessage"),
+        }
+    }
+
+    #[test]
+    fn test_server_message_error_ser() {
+        let msg = ServerMessage::Error { message: "something went wrong".to_string() };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"error\""));
+        assert!(json.contains("something went wrong"));
+    }
+
+    #[test]
+    fn test_server_message_chat_history_ser() {
+        let msg = ServerMessage::ChatHistory {
+            session_name: "test".to_string(),
+            window_index: 0,
+            messages: vec![],
+            tool: None,
+            has_more: false,
+            total_count: 0,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("chat-history"));
+        assert!(json.contains("\"sessionName\":\"test\""));
+    }
+
+    #[test]
+    fn test_file_attachment_roundtrip() {
+        let attachment = FileAttachment {
+            filename: "test.png".to_string(),
+            mime_type: "image/png".to_string(),
+            data: "base64data".to_string(),
+        };
+        let json = serde_json::to_string(&attachment).unwrap();
+        assert!(json.contains("\"mimeType\":\"image/png\""));
+        let parsed: FileAttachment = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.filename, "test.png");
+        assert_eq!(parsed.mime_type, "image/png");
+    }
 }

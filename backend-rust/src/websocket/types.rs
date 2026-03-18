@@ -220,4 +220,51 @@ mod tests {
         assert_eq!(result[2].role, "user");
         assert_eq!(result[3].role, "assistant");
     }
+
+    #[test]
+    fn test_merge_five_tool_same_timestamp() {
+        let now = Utc::now();
+        let tool: Vec<ChatMessage> = (0..5).map(|i| {
+            let mut m = make_msg("user", 0);
+            m.timestamp = Some(now);
+            m.blocks = vec![ContentBlock::Text { text: format!("tool-{}", i) }];
+            m
+        }).collect();
+        let result = merge_history_messages(tool, vec![]);
+        assert_eq!(result.len(), 5);
+        // Should maintain insertion order
+        for (i, msg) in result.iter().enumerate() {
+            match &msg.blocks[0] {
+                ContentBlock::Text { text } => assert_eq!(text, &format!("tool-{}", i)),
+                _ => panic!("Expected text"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_interleaved_timestamps() {
+        // Tool at t=0, t=20, t=40; persisted at t=10, t=30
+        let tool = vec![make_msg("user", 0), make_msg("user", 20), make_msg("user", 40)];
+        let persisted = vec![make_msg("assistant", 10), make_msg("assistant", 30)];
+        let result = merge_history_messages(tool, persisted);
+        assert_eq!(result.len(), 5);
+        // Expected order: user(0), assistant(10), user(20), assistant(30), user(40)
+        assert_eq!(result[0].role, "user");
+        assert_eq!(result[1].role, "assistant");
+        assert_eq!(result[2].role, "user");
+        assert_eq!(result[3].role, "assistant");
+        assert_eq!(result[4].role, "user");
+    }
+
+    #[tokio::test]
+    async fn test_send_message_success() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<BroadcastMessage>();
+        let result = send_message(&tx, crate::types::ServerMessage::Pong).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        match msg {
+            BroadcastMessage::Text(s) => assert!(s.contains("pong")),
+            _ => panic!("Expected text"),
+        }
+    }
 }

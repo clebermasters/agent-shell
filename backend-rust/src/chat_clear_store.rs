@@ -163,4 +163,29 @@ mod tests {
         // Reload from same dir
         let _store2 = ChatClearStore::new(&dir.path().to_path_buf());
     }
+
+    #[tokio::test]
+    async fn test_persistence_roundtrip_async() {
+        let dir = TempDir::new().unwrap();
+        {
+            let store = ChatClearStore::new(&dir.path().to_path_buf());
+            store.set_cleared_at("sess1", 0, 42).await;
+        }
+        // Create new store from same directory — should load persisted data
+        let store2 = ChatClearStore::new(&dir.path().to_path_buf());
+        let ts = store2.get_cleared_at("sess1", 0).await;
+        assert_eq!(ts, Some(42));
+    }
+
+    #[tokio::test]
+    async fn test_load_from_corrupt_json() {
+        let dir = TempDir::new().unwrap();
+        // Write corrupt JSON to the state file
+        let path = dir.path().join("chat_clear_state.json");
+        std::fs::write(&path, "not valid json {{{").unwrap();
+        // Should default to empty state, not panic
+        let store = ChatClearStore::new(&dir.path().to_path_buf());
+        let ts = store.get_cleared_at("any", 0).await;
+        assert_eq!(ts, None);
+    }
 }

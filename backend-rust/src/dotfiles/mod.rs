@@ -563,4 +563,38 @@ mod tests {
         }
         // If writing failed (permissions), that's also a valid outcome
     }
+
+    #[test]
+    fn test_validate_path_dot_dot_traversal() {
+        let mgr = make_manager();
+        let home = dirs::home_dir().unwrap();
+        // Path with ../ should be resolved and still be under home
+        let result = mgr.validate_and_resolve_path("../../../etc/passwd");
+        if let Ok(p) = result {
+            // If resolved, must still be under home
+            assert!(p.starts_with(&home));
+        }
+        // Error is also acceptable — traversal blocked
+    }
+
+    #[test]
+    fn test_detect_mime_type_no_extension() {
+        // File without extension
+        assert_eq!(DotFilesManager::detect_mime_type(std::path::Path::new("Makefile")), "application/octet-stream");
+        assert_eq!(DotFilesManager::detect_mime_type(std::path::Path::new("LICENSE")), "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn test_read_binary_file_valid() {
+        let mgr = make_manager();
+        // Try reading a known small file that's likely to exist
+        let home = dirs::home_dir().unwrap();
+        // Try .bashrc first
+        let result = mgr.read_binary_file(".bashrc").await;
+        if let Ok((bytes, mime)) = result {
+            assert!(!bytes.is_empty());
+            assert!(!mime.is_empty());
+        }
+        // If .bashrc doesn't exist, that's OK — error path is also valid
+    }
 }

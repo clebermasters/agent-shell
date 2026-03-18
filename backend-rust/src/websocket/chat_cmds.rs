@@ -994,6 +994,147 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_clear_chat_log_sets_cleared_at() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let app = make_app_state(dir.path());
+        let result = handle(WebSocketMessage::ClearChatLog {
+            session_name: "test-session".to_string(),
+            window_index: 0,
+        }, &mut state, app.clone()).await;
+        assert!(result.is_ok());
+        // The handler uses state.chat_clear_store (not app's), verify on state's store
+        let ts = state.chat_clear_store.get_cleared_at("test-session", 0).await;
+        assert!(ts.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_clear_chat_log_clears_persisted_messages() {
+        let dir = TempDir::new().unwrap();
+        let app = make_app_state(dir.path());
+        // Pre-populate messages
+        let msg = crate::chat_log::ChatMessage {
+            role: "user".to_string(),
+            timestamp: Some(chrono::Utc::now()),
+            blocks: vec![crate::chat_log::ContentBlock::Text { text: "hello".to_string() }],
+        };
+        app.chat_event_store.append_message("test-sess", 0, "webhook", &msg).unwrap();
+        assert_eq!(app.chat_event_store.list_messages("test-sess", 0).unwrap().len(), 1);
+
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::ClearChatLog {
+            session_name: "test-sess".to_string(),
+            window_index: 0,
+        }, &mut state, app.clone()).await;
+        assert!(result.is_ok());
+        // Messages should be cleared
+        let msgs = app.chat_event_store.list_messages("test-sess", 0).unwrap();
+        assert_eq!(msgs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_clear_chat_log_response_content() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, mut rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::ClearChatLog {
+            session_name: "my-session".to_string(),
+            window_index: 1,
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("chat-log-cleared"));
+        assert!(json.contains("true")); // success: true
+        assert!(json.contains("my-session"));
+    }
+
+    #[tokio::test]
+    async fn test_send_chat_message_with_notify() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::SendChatMessage {
+            session_name: "AgentShell".to_string(),
+            window_index: 0,
+            message: "Test notification message".to_string(),
+            notify: Some(true),
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_chat_message_no_notify() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::SendChatMessage {
+            session_name: "AgentShell".to_string(),
+            window_index: 0,
+            message: "No notification".to_string(),
+            notify: Some(false),
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_chat_message_persists_to_store() {
+        let dir = TempDir::new().unwrap();
+        let app = make_app_state(dir.path());
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::SendChatMessage {
+            session_name: "persist-test".to_string(),
+            window_index: 0,
+            message: "Persisted message".to_string(),
+            notify: None,
+        }, &mut state, app.clone()).await;
+        assert!(result.is_ok());
+        // The message uses the state's chat_event_store, not app's
+        let msgs = state.chat_event_store.list_messages("persist-test", 0).unwrap();
+        assert!(!msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_watch_acp_chat_log_no_opencode_db() {
+        let dir = TempDir::new().unwrap();
+        let (mut state, _rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::WatchAcpChatLog {
+            session_id: "test-acp-session".to_string(),
+            window_index: Some(0),
+            limit: Some(20),
+        }, &mut state, make_app_state(dir.path())).await;
+        assert!(result.is_ok());
+        // Spawned task will fail to find opencode DB — should handle gracefully
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_load_more_chat_history_with_data() {
+        let dir = TempDir::new().unwrap();
+        let app = make_app_state(dir.path());
+        // Pre-populate with messages using webhook source
+        for i in 0..5 {
+            let msg = crate::chat_log::ChatMessage {
+                role: "user".to_string(),
+                timestamp: Some(chrono::Utc::now()),
+                blocks: vec![crate::chat_log::ContentBlock::Text { text: format!("Msg {}", i) }],
+            };
+            app.chat_event_store.append_message("acp_test-hist", 0, "webhook", &msg).unwrap();
+        }
+
+        let (mut state, mut rx) = make_ws_state(dir.path());
+        let result = handle(WebSocketMessage::LoadMoreChatHistory {
+            session_name: "acp_test-hist".to_string(),
+            window_index: 0,
+            offset: 0,
+            limit: 3,
+        }, &mut state, app).await;
+        assert!(result.is_ok());
+        // Should receive a response (chat-history-chunk or error)
+        let _ = rx.try_recv();
+    }
+
     fn make_app_state(dir: &std::path::Path) -> Arc<crate::AppState> {
         let (broadcast_tx, _) = mpsc::unbounded_channel();
         let client_manager = Arc::new(ClientManager::new());

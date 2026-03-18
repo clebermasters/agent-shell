@@ -121,6 +121,13 @@ auto-save-list
 tramp
 .\#*
 
+# Media / uploaded files (UUID-named uploads)
+*.mp3
+*.pdf
+# Ignore PNGs except project assets
+*.png
+!logo-square.png
+
 # Temporary files
 *.tmp
 *.temp

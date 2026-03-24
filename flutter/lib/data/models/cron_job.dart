@@ -15,6 +15,10 @@ class CronJob extends Equatable {
   final bool logOutput;
   final String? tmuxSession;
   final Map<String, String>? environment;
+  final String? workdir;
+  final String? prompt;
+  final String? llmProvider;
+  final String? llmModel;
 
   const CronJob({
     required this.id,
@@ -31,6 +35,10 @@ class CronJob extends Equatable {
     this.logOutput = false,
     this.tmuxSession,
     this.environment,
+    this.workdir,
+    this.prompt,
+    this.llmProvider,
+    this.llmModel,
   });
 
   CronJob copyWith({
@@ -48,6 +56,10 @@ class CronJob extends Equatable {
     bool? logOutput,
     String? tmuxSession,
     Map<String, String>? environment,
+    String? workdir,
+    String? prompt,
+    String? llmProvider,
+    String? llmModel,
   }) {
     return CronJob(
       id: id ?? this.id,
@@ -64,6 +76,10 @@ class CronJob extends Equatable {
       logOutput: logOutput ?? this.logOutput,
       tmuxSession: tmuxSession ?? this.tmuxSession,
       environment: environment ?? this.environment,
+      workdir: workdir ?? this.workdir,
+      prompt: prompt ?? this.prompt,
+      llmProvider: llmProvider ?? this.llmProvider,
+      llmModel: llmModel ?? this.llmModel,
     );
   }
 
@@ -82,6 +98,10 @@ class CronJob extends Equatable {
     'logOutput': logOutput,
     'tmuxSession': tmuxSession,
     'environment': environment,
+    'workdir': workdir,
+    'prompt': prompt,
+    'llmProvider': llmProvider,
+    'llmModel': llmModel,
   };
 
   factory CronJob.fromJson(Map<String, dynamic> json) => CronJob(
@@ -109,6 +129,10 @@ class CronJob extends Equatable {
     environment: json['environment'] != null
         ? Map<String, String>.from(json['environment'] as Map)
         : null,
+    workdir: json['workdir'] as String?,
+    prompt: json['prompt'] as String?,
+    llmProvider: json['llmProvider'] as String?,
+    llmModel: json['llmModel'] as String?,
   );
 
   @override
@@ -127,5 +151,9 @@ class CronJob extends Equatable {
     logOutput,
     tmuxSession,
     environment,
+    workdir,
+    prompt,
+    llmProvider,
+    llmModel,
   ];
 }

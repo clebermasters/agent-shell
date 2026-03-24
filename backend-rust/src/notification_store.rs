@@ -223,6 +223,10 @@ impl NotificationStore {
         Ok(file)
     }
 
+    pub fn base_dir(&self) -> &PathBuf {
+        &self.base_dir
+    }
+
     pub fn get_unread_count(&self) -> Result<i32> {
         let conn = Connection::open(&self.db_path).with_context(|| {
             format!(

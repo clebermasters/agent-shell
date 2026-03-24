@@ -34,6 +34,7 @@ mod cron;
 mod dotfiles;
 mod monitor;
 mod notification;
+mod notification_handler;
 mod notification_store;
 mod terminal_buffer;
 mod tmux;
@@ -157,6 +158,40 @@ async fn main() -> Result<()> {
                                 .unwrap_or_else(|| "application/octet-stream".to_string());
                             let headers = [
                                 (axum::http::header::CONTENT_TYPE, mime.to_string()),
+                                (
+                                    axum::http::header::CACHE_CONTROL,
+                                    "public, max-age=3600".to_string(),
+                                ),
+                            ];
+                            return Ok((headers, data));
+                        }
+                    }
+                    Err(axum::http::StatusCode::NOT_FOUND)
+                }
+            }),
+        )
+        // API: Notifications
+        .route(
+            "/api/notifications",
+            axum::routing::get(notification_handler::list_notifications),
+        )
+        .route(
+            "/api/notifications",
+            axum::routing::post(notification_handler::create_notification),
+        )
+        .route(
+            "/api/notifications/:id/read",
+            axum::routing::post(notification_handler::mark_read),
+        )
+        .route(
+            "/api/notifications/files/:id",
+            get({
+                let notification_store = app_state.notification_store.clone();
+                move |axum::extract::Path(id): axum::extract::Path<String>| async move {
+                    if let Ok(Some(file)) = notification_store.get_file(&id) {
+                        if let Ok(data) = std::fs::read(&file.stored_path) {
+                            let headers = [
+                                (axum::http::header::CONTENT_TYPE, file.mime_type.clone()),
                                 (
                                     axum::http::header::CACHE_CONTROL,
                                     "public, max-age=3600".to_string(),

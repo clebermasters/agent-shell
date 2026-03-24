@@ -2,6 +2,8 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::notification::Notification;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TmuxSession {
@@ -20,7 +22,6 @@ pub struct TmuxWindow {
     pub active: bool,
     pub panes: u32,
 }
-
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -592,6 +593,9 @@ pub enum ServerMessage {
         window_index: u32,
         preview: String,
     },
+    NotificationEvent {
+        notification: Notification,
+    },
     // Terminal history bootstrap
     TerminalHistoryStart {
         #[serde(rename = "sessionName")]
@@ -861,7 +865,12 @@ mod tests {
         let json = r#"{"type":"attach-session","sessionName":"my-sess","cols":80,"rows":24}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WebSocketMessage::AttachSession { session_name, cols, rows, .. } => {
+            WebSocketMessage::AttachSession {
+                session_name,
+                cols,
+                rows,
+                ..
+            } => {
                 assert_eq!(session_name, "my-sess");
                 assert_eq!(cols, 80);
                 assert_eq!(rows, 24);
@@ -875,14 +884,17 @@ mod tests {
         let json = r#"{"type":"send-chat-message","sessionName":"s","windowIndex":0,"message":"hi","notify":true}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WebSocketMessage::SendChatMessage { message, notify, .. } => {
+            WebSocketMessage::SendChatMessage {
+                message, notify, ..
+            } => {
                 assert_eq!(message, "hi");
                 assert_eq!(notify, Some(true));
             }
             _ => panic!("Expected SendChatMessage"),
         }
         // Also test without notify field (should default)
-        let json2 = r#"{"type":"send-chat-message","sessionName":"s","windowIndex":0,"message":"hi"}"#;
+        let json2 =
+            r#"{"type":"send-chat-message","sessionName":"s","windowIndex":0,"message":"hi"}"#;
         let msg2: WebSocketMessage = serde_json::from_str(json2).unwrap();
         match msg2 {
             WebSocketMessage::SendChatMessage { notify, .. } => assert_eq!(notify, None),
@@ -892,7 +904,9 @@ mod tests {
 
     #[test]
     fn test_server_message_error_ser() {
-        let msg = ServerMessage::Error { message: "something went wrong".to_string() };
+        let msg = ServerMessage::Error {
+            message: "something went wrong".to_string(),
+        };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"error\""));
         assert!(json.contains("something went wrong"));
@@ -978,7 +992,9 @@ mod tests {
         let json = r#"{"type":"create-session","name":"my-sess"}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WebSocketMessage::CreateSession { name } => assert_eq!(name, Some("my-sess".to_string())),
+            WebSocketMessage::CreateSession { name } => {
+                assert_eq!(name, Some("my-sess".to_string()))
+            }
             _ => panic!("Expected CreateSession"),
         }
     }
@@ -1008,7 +1024,11 @@ mod tests {
         let json = r#"{"type":"watch-chat-log","sessionName":"s","windowIndex":1,"limit":50}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WebSocketMessage::WatchChatLog { session_name, window_index, limit } => {
+            WebSocketMessage::WatchChatLog {
+                session_name,
+                window_index,
+                limit,
+            } => {
                 assert_eq!(session_name, "s");
                 assert_eq!(window_index, 1);
                 assert_eq!(limit, Some(50));
@@ -1022,7 +1042,12 @@ mod tests {
         let json = r#"{"type":"load-more-chat-history","sessionName":"s","windowIndex":0,"offset":10,"limit":20}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WebSocketMessage::LoadMoreChatHistory { session_name, window_index, offset, limit } => {
+            WebSocketMessage::LoadMoreChatHistory {
+                session_name,
+                window_index,
+                offset,
+                limit,
+            } => {
                 assert_eq!(session_name, "s");
                 assert_eq!(window_index, 0);
                 assert_eq!(offset, 10);

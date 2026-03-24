@@ -177,6 +177,10 @@ mod tests {
             log_output: None,
             email_to: None,
             tmux_session: None,
+            workdir: None,
+            prompt: None,
+            llm_provider: None,
+            llm_model: None,
         };
         let result = handle(WebSocketMessage::CreateCronJob { job }, &tx).await;
         assert!(result.is_ok());

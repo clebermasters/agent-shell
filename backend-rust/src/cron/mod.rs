@@ -233,6 +233,10 @@ impl CronManager {
                                     log_output: None,
                                     email_to: None,
                                     tmux_session: None,
+                                    workdir: None,
+                                    prompt: None,
+                                    llm_provider: None,
+                                    llm_model: None,
                                 };
 
                                 jobs.insert(job_id.to_string(), job);
@@ -469,6 +473,10 @@ mod tests {
             log_output: None,
             email_to: None,
             tmux_session: None,
+            workdir: None,
+            prompt: None,
+            llm_provider: None,
+            llm_model: None,
         };
         let result = mgr.create_job(job).await;
         assert!(result.is_err());
@@ -493,6 +501,10 @@ mod tests {
             log_output: None,
             email_to: None,
             tmux_session: None,
+            workdir: None,
+            prompt: None,
+            llm_provider: None,
+            llm_model: None,
         };
         let result = mgr.update_job("update-test".to_string(), job).await;
         assert!(result.is_err());
@@ -533,6 +545,10 @@ mod tests {
             log_output: None,
             email_to: None,
             tmux_session: None,
+            workdir: None,
+            prompt: None,
+            llm_provider: None,
+            llm_model: None,
         };
         let result = mgr.create_job(job).await;
         // May fail due to crontab access, but if it succeeds, ID should be non-empty
@@ -573,6 +589,10 @@ mod tests {
                 log_output: None,
                 email_to: None,
                 tmux_session: None,
+                workdir: None,
+                prompt: None,
+                llm_provider: None,
+                llm_model: None,
             });
         }
         // Try to create another job with the same name
@@ -591,6 +611,10 @@ mod tests {
             log_output: None,
             email_to: None,
             tmux_session: None,
+            workdir: None,
+            prompt: None,
+            llm_provider: None,
+            llm_model: None,
         };
         let result = mgr.create_job(job).await;
         assert!(result.is_err());
@@ -618,6 +642,10 @@ mod tests {
                 log_output: None,
                 email_to: None,
                 tmux_session: None,
+                workdir: None,
+                prompt: None,
+                llm_provider: None,
+                llm_model: None,
             });
             jobs.insert("id-2".to_string(), crate::types::CronJob {
                 id: "id-2".to_string(),
@@ -634,6 +662,10 @@ mod tests {
                 log_output: None,
                 email_to: None,
                 tmux_session: None,
+                workdir: None,
+                prompt: None,
+                llm_provider: None,
+                llm_model: None,
             });
         }
         // Try to update id-2 with name "job-one" (duplicate)
@@ -652,6 +684,10 @@ mod tests {
             log_output: None,
             email_to: None,
             tmux_session: None,
+            workdir: None,
+            prompt: None,
+            llm_provider: None,
+            llm_model: None,
         };
         let result = mgr.update_job("id-2".to_string(), updated_job).await;
         assert!(result.is_err());
@@ -676,6 +712,10 @@ mod tests {
             log_output: None,
             email_to: None,
             tmux_session: None,
+            workdir: None,
+            prompt: None,
+            llm_provider: None,
+            llm_model: None,
         };
         let result = mgr.create_job(job).await;
         if let Ok(created) = result {

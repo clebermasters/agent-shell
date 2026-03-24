@@ -101,6 +101,14 @@ pub struct CronJob {
     pub email_to: Option<String>,
     #[serde(alias = "tmuxSession")]
     pub tmux_session: Option<String>,
+    #[serde(alias = "workdir", default)]
+    pub workdir: Option<String>,
+    #[serde(alias = "prompt", default)]
+    pub prompt: Option<String>,
+    #[serde(alias = "llmProvider", default)]
+    pub llm_provider: Option<String>,
+    #[serde(alias = "llmModel", default)]
+    pub llm_model: Option<String>,
 }
 
 fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>

@@ -43,6 +43,9 @@ axum-server = { version = "0.6", features = ["tls-rustls"] }
 rustls = "0.22"
 rustls-pemfile = "2.0"
 
+# HTTP client for REST API calls
+reqwest = { version = "0.11", features = ["json"] }
+
 # UUID generation
 uuid = { version = "1.6", features = ["v4", "serde"] }
 

@@ -20,9 +20,37 @@ pub struct ListQuery {
     before: Option<i64>,
 }
 
+/// File metadata exposed to clients — omits stored_path.
+#[derive(Debug, Serialize)]
+pub struct FileMeta {
+    pub id: String,
+    pub filename: String,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    pub size: i64,
+}
+
+impl From<NotificationFile> for FileMeta {
+    fn from(f: NotificationFile) -> Self {
+        FileMeta {
+            id: f.id,
+            filename: f.filename,
+            mime_type: f.mime_type,
+            size: f.size,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct NotificationListItem {
+    #[serde(flatten)]
+    pub notification: Notification,
+    pub files: Vec<FileMeta>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ListResponse {
-    notifications: Vec<Notification>,
+    notifications: Vec<NotificationListItem>,
     #[serde(rename = "hasMore")]
     has_more: bool,
 }
@@ -45,7 +73,25 @@ pub async fn list_notifications(
     let limit = query.limit.unwrap_or(50);
     let notifications = state.notification_store.list(limit + 1, query.before).unwrap_or_default();
     let has_more = notifications.len() > limit;
-    let notifications: Vec<Notification> = notifications.into_iter().take(limit).collect();
+
+    let notifications: Vec<NotificationListItem> = notifications
+        .into_iter()
+        .take(limit)
+        .map(|n| {
+            let files = if n.file_count > 0 {
+                state
+                    .notification_store
+                    .list_files_for_notification(&n.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(FileMeta::from)
+                    .collect()
+            } else {
+                vec![]
+            };
+            NotificationListItem { notification: n, files }
+        })
+        .collect();
 
     Json(ListResponse {
         notifications,

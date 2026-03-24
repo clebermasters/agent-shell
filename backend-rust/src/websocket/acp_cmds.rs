@@ -875,6 +875,40 @@ mod tests {
         (ws_state, rx, app_state)
     }
 
+    fn make_state_with_acp_client(dir: &std::path::Path) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>, Arc<crate::AppState>) {
+        let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
+        let (broadcast_tx, _) = mpsc::unbounded_channel();
+        let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
+        let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
+        let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
+        let client_manager = Arc::new(ClientManager::new());
+        let (acp_client, _event_tx, _event_rx) = crate::acp::AcpClient::new_for_test();
+        let ws_state = WsState {
+            client_id: "test-client".to_string(),
+            current_pty: Arc::new(Mutex::new(None)),
+            current_session: Arc::new(Mutex::new(None)),
+            current_window: Arc::new(Mutex::new(None)),
+            audio_tx: None,
+            message_tx: tx,
+            chat_log_handle: Arc::new(Mutex::new(None)),
+            chat_file_storage: chat_file_storage.clone(),
+            chat_event_store: chat_event_store.clone(),
+            chat_clear_store: chat_clear_store.clone(),
+            client_manager: client_manager.clone(),
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        };
+        let app_state = Arc::new(crate::AppState {
+            enable_audio_logs: false,
+            broadcast_tx,
+            client_manager,
+            chat_file_storage,
+            chat_event_store,
+            chat_clear_store,
+            acp_client: Arc::new(tokio::sync::RwLock::new(Some(acp_client))),
+        });
+        (ws_state, rx, app_state)
+    }
+
     #[test]
     fn test_write_acp_session_file() {
         // Just ensure it doesn't panic
@@ -1189,5 +1223,254 @@ mod tests {
         // Verify file was persisted to chat event store
         let messages = ws_state.chat_event_store.list_messages("acp_test-sid", 0);
         assert!(messages.is_ok());
+    }
+
+    // ===== Phase 1: write_acp_session_file error paths =====
+
+    #[test]
+    fn test_write_acp_session_file_no_home() {
+        let old_home = std::env::var("HOME").ok();
+        std::env::remove_var("HOME");
+        write_acp_session_file("test-session-id", "/tmp");
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    // ===== Phase 2: SendFileToAcpChat mime type and prompt variations =====
+
+    #[tokio::test]
+    async fn test_send_file_to_acp_chat_invalid_base64() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SendFileToAcpChat {
+            session_id: "test-sid".to_string(),
+            file: crate::types::FileAttachment {
+                filename: "test.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data: "NOT_VALID_BASE64!!!".to_string(),
+            },
+            prompt: None,
+            cwd: None,
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_acp_chat_image() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SendFileToAcpChat {
+            session_id: "test-sid".to_string(),
+            file: crate::types::FileAttachment {
+                filename: "test.png".to_string(),
+                mime_type: "image/png".to_string(),
+                data: "iVBORw0KGgo=".to_string(),
+            },
+            prompt: None,
+            cwd: None,
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_acp_chat_audio() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SendFileToAcpChat {
+            session_id: "test-sid".to_string(),
+            file: crate::types::FileAttachment {
+                filename: "test.mp3".to_string(),
+                mime_type: "audio/mpeg".to_string(),
+                data: "SUQzBAAAAAA=".to_string(),
+            },
+            prompt: None,
+            cwd: None,
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_acp_chat_no_prompt() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SendFileToAcpChat {
+            session_id: "test-sid".to_string(),
+            file: crate::types::FileAttachment {
+                filename: "test.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data: "SGVsbG8=".to_string(),
+            },
+            prompt: None,
+            cwd: None,
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_acp_chat_empty_prompt() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SendFileToAcpChat {
+            session_id: "test-sid".to_string(),
+            file: crate::types::FileAttachment {
+                filename: "test.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data: "SGVsbG8=".to_string(),
+            },
+            prompt: Some("   ".to_string()),
+            cwd: None,
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_file_to_acp_chat_with_cwd_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::SendFileToAcpChat {
+            session_id: "test-sid".to_string(),
+            file: crate::types::FileAttachment {
+                filename: "test.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data: "SGVsbG8=".to_string(),
+            },
+            prompt: Some("Look at this".to_string()),
+            cwd: Some(dir.path().to_string_lossy().to_string()),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    // ===== Phase 3: Client-initialized tests =====
+
+    #[tokio::test]
+    async fn test_select_backend_acp_client_already_initialized() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state_with_acp_client(dir.path());
+        let result = handle(WebSocketMessage::SelectBackend {
+            backend: "acp".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+        let msg = rx.try_recv().unwrap();
+        let json = match msg {
+            BroadcastMessage::Text(s) => s.as_ref().clone(),
+            _ => panic!("Expected text"),
+        };
+        assert!(json.contains("BackendSelected") || json.contains("acp"));
+    }
+
+    // ===== Additional error path tests =====
+
+    #[tokio::test]
+    async fn test_acp_send_prompt_empty_message() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpSendPrompt {
+            session_id: "test-sid".to_string(),
+            message: "".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_list_sessions_auto_init_start_failure() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpListSessions, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_list_sessions_no_client_v2() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpListSessions, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_clear_history_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpClearHistory {
+            session_id: "test-sid".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_delete_session_no_client_v2() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpDeleteSession {
+            session_id: "test-sid".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_load_history_no_client() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpLoadHistory {
+            session_id: "test-sid".to_string(),
+            offset: Some(0),
+            limit: Some(20),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_resume_session_no_client_v2() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpResumeSession {
+            session_id: "test-sid".to_string(),
+            cwd: "/tmp".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_set_model_no_client_v2() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpSetModel {
+            session_id: "test-sid".to_string(),
+            model_id: "gpt-4".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_set_mode_no_client_v2() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpSetMode {
+            session_id: "test-sid".to_string(),
+            mode_id: "code".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_respond_permission_no_client_v2() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpRespondPermission {
+            request_id: "req-1".to_string(),
+            option_id: "allow".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_acp_cancel_prompt_no_client_v2() {
+        let dir = TempDir::new().unwrap();
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
+        let result = handle(WebSocketMessage::AcpCancelPrompt {
+            session_id: "test-sid".to_string(),
+        }, &mut ws_state, app_state).await;
+        assert!(result.is_ok());
     }
 }

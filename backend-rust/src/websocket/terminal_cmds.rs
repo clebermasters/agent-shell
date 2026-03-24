@@ -684,4 +684,23 @@ mod tests {
         // After cleanup, handle should be taken (None)
         assert!(ws_state.chat_log_handle.lock().await.is_none());
     }
+
+    #[tokio::test]
+    async fn test_handle_input_via_tmux_with_session() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ws_state, _rx) = make_ws_state(dir.path());
+        // With a session but no window - should still handle gracefully
+        let result = handle_input_via_tmux(&ws_state, Some("AgentShell".to_string()), Some(0), "test".to_string()).await;
+        // May succeed or fail depending on tmux state - just verify no panic
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_send_enter_key_via_tmux() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ws_state, _rx) = make_ws_state(dir.path());
+        // Without a session, it should handle gracefully
+        let result = handle_send_enter_key(&ws_state).await;
+        assert!(result.is_ok());
+    }
 }

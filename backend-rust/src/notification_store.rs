@@ -223,6 +223,37 @@ impl NotificationStore {
         Ok(file)
     }
 
+    pub fn list_files_for_notification(&self, notification_id: &str) -> Result<Vec<NotificationFile>> {
+        let conn = Connection::open(&self.db_path).with_context(|| {
+            format!(
+                "failed to open notifications db: {}",
+                self.db_path.display()
+            )
+        })?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, notification_id, filename, mime_type, size, stored_path \
+             FROM notification_files WHERE notification_id = ?1 ORDER BY rowid",
+        )?;
+
+        let files = stmt
+            .query_map(params![notification_id], |row| {
+                Ok(NotificationFile {
+                    id: row.get(0)?,
+                    notification_id: row.get(1)?,
+                    filename: row.get(2)?,
+                    mime_type: row.get(3)?,
+                    size: row.get(4)?,
+                    stored_path: row.get(5)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(files)
+    }
+
     pub fn base_dir(&self) -> &PathBuf {
         &self.base_dir
     }

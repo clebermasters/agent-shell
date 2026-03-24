@@ -29,9 +29,10 @@ pub async fn list_jobs() -> Json<Vec<CronJob>> {
 }
 
 pub async fn create_job(Json(req): Json<CreateJobRequest>) -> Json<CronJob> {
+    let escaped_prompt = req.prompt.replace('\'', "'\\''");
     let command = format!(
-        "cd {} && skill-agent --streaming --llm-provider {} --llm-model {} agent \"{}\"",
-        req.workdir, req.llm_provider, req.llm_model, req.prompt
+        "cd {} && skill-agent --streaming --llm-provider {} --llm-model {} agent '{}'",
+        req.workdir, req.llm_provider, req.llm_model, escaped_prompt
     );
     let job = CronJob {
         id: String::new(),
@@ -64,9 +65,10 @@ pub async fn get_job(Path(id): Path<String>) -> Json<CronJob> {
 }
 
 pub async fn update_job(Path(id): Path<String>, Json(req): Json<CreateJobRequest>) -> Json<CronJob> {
+    let escaped_prompt = req.prompt.replace('\'', "'\\''");
     let command = format!(
-        "cd {} && skill-agent --streaming --llm-provider {} --llm-model {} agent \"{}\"",
-        req.workdir, req.llm_provider, req.llm_model, req.prompt
+        "cd {} && skill-agent --streaming --llm-provider {} --llm-model {} agent '{}'",
+        req.workdir, req.llm_provider, req.llm_model, escaped_prompt
     );
     let job = CronJob {
         id: id.clone(),

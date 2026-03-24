@@ -790,4 +790,34 @@ mod tests {
         // The result depends on whether the file exists on the test machine
         let _ = result;
     }
+
+    #[test]
+    fn test_read_all_messages_multiple_invalid_lines() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("multi.jsonl");
+        std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let mut reader = std::io::BufReader::new(file);
+        let messages = read_all_messages(&mut reader, &AiTool::Claude);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn test_parse_line_with_various_inputs() {
+        // Test that parse_line handles various inputs without panicking
+        let result1 = parse_line("", &AiTool::Claude);
+        assert!(result1.is_none());
+
+        let result2 = parse_line("   ", &AiTool::Claude);
+        assert!(result2.is_none());
+
+        let result3 = parse_line("{}", &AiTool::Claude);
+        assert!(result3.is_none());
+
+        let result4 = parse_line("", &AiTool::Codex);
+        assert!(result4.is_none());
+
+        let result5 = parse_line("not json", &AiTool::Codex);
+        assert!(result5.is_none());
+    }
 }

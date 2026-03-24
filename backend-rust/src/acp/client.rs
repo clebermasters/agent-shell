@@ -560,6 +560,36 @@ impl AcpClient {
             let _ = child.kill().await;
         }
     }
+
+    #[cfg(test)]
+    pub fn new_for_test() -> (Self, mpsc::Sender<AcpEvent>, mpsc::Receiver<AcpEvent>) {
+        let (event_tx, event_rx) = mpsc::channel::<AcpEvent>(100);
+        let client = Self {
+            child: Arc::new(Mutex::new(None)),
+            request_id: Arc::new(Mutex::new(1)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            event_tx: event_tx.clone(),
+            initialized: Arc::new(RwLock::new(true)),
+            stdin: Arc::new(Mutex::new(None)),
+            active_session_id: Arc::new(Mutex::new(None)),
+        };
+        (client, event_tx, event_rx)
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_channel() -> (Self, mpsc::Sender<AcpEvent>) {
+        let (event_tx, event_rx) = mpsc::channel::<AcpEvent>(100);
+        let client = Self {
+            child: Arc::new(Mutex::new(None)),
+            request_id: Arc::new(Mutex::new(1)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            event_tx: event_tx.clone(),
+            initialized: Arc::new(RwLock::new(true)),
+            stdin: Arc::new(Mutex::new(None)),
+            active_session_id: Arc::new(Mutex::new(None)),
+        };
+        (client, event_tx)
+    }
 }
 
 #[derive(Debug, Deserialize)]

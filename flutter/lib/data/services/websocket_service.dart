@@ -25,11 +25,13 @@ class WebSocketService {
   final _connectionController = StreamController<bool>.broadcast();
   final _logController = StreamController<String>.broadcast();
   final _statusController = StreamController<ConnectionStatus>.broadcast();
+  final _notificationController = StreamController<Notification>.broadcast();
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
   Stream<bool> get connectionState => _connectionController.stream;
   Stream<String> get logs => _logController.stream;
   Stream<ConnectionStatus> get connectionStatus => _statusController.stream;
+  Stream<Notification> get notificationStream => _notificationController.stream;
   bool get isConnected => _isConnected;
   String? get currentUrl => _currentUrl;
 
@@ -130,6 +132,12 @@ class WebSocketService {
           type != 'pong' &&
           type != 'stats') {
         // print('WS RECV TYPE: $type');
+      }
+      if (type == 'notification-event') {
+        final notificationData = message['notification'] as Map<String, dynamic>;
+        final notification = Notification.fromJson(notificationData);
+        _notificationController.add(notification);
+        return;
       }
       _messageController.add(message);
     } catch (e) {
@@ -555,5 +563,6 @@ class WebSocketService {
     _connectionController.close();
     _logController.close();
     _statusController.close();
+    _notificationController.close();
   }
 }

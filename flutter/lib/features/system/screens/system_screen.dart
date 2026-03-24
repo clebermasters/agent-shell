@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/system_stats.dart';
 import '../providers/system_provider.dart';
+import '../../alerts/widgets/alerts_bell_button.dart';
 
 class SystemScreen extends ConsumerWidget {
   const SystemScreen({super.key});
@@ -14,6 +15,7 @@ class SystemScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('System'),
         actions: [
+          const AlertsBellButton(),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () => ref.read(systemProvider.notifier).refresh(),

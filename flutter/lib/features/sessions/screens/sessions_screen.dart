@@ -9,6 +9,7 @@ import '../../chat/screens/chat_screen.dart';
 import '../../hosts/screens/host_selection_screen.dart';
 import '../../hosts/providers/hosts_provider.dart';
 import '../../system/widgets/system_mini_bar.dart';
+import '../../alerts/widgets/alerts_bell_button.dart';
 
 final selectedBackendProvider = StateProvider<String>((ref) => 'tmux');
 
@@ -135,6 +136,7 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
           ],
         ),
         actions: [
+          const AlertsBellButton(),
           IconButton(
             icon: const Icon(Icons.dns),
             onPressed: () {

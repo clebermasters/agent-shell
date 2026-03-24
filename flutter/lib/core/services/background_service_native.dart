@@ -12,13 +12,6 @@ Future<void> initializeBackgroundService() async {
 
   final service = FlutterBackgroundService();
 
-  const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'agentshell_background',
-    'AgentShell Background Service',
-    description: 'This channel is used for maintaining the terminal connection.',
-    importance: Importance.low,
-  );
-
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
@@ -28,11 +21,40 @@ Future<void> initializeBackgroundService() async {
     ),
   );
 
-  await flutterLocalNotificationsPlugin
+  final androidPlugin = flutterLocalNotificationsPlugin
       .resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin
-      >()
-      ?.createNotificationChannel(channel);
+          AndroidFlutterLocalNotificationsPlugin>();
+
+  await androidPlugin?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      'agentshell_background',
+      'AgentShell Background Service',
+      description: 'This channel is used for maintaining the terminal connection.',
+      importance: Importance.low,
+    ),
+  );
+
+  await androidPlugin?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      'agentshell_alerts',
+      'AI Task Alerts',
+      description: 'Notifications for AI agent task completions.',
+      importance: Importance.high,
+    ),
+  );
+
+  await androidPlugin?.createNotificationChannel(
+    const AndroidNotificationChannel(
+      'agentshell_chat',
+      'Chat Notifications',
+      description: 'Notifications from chat messages.',
+      importance: Importance.high,
+    ),
+  );
+
+  if (Platform.isAndroid) {
+    await Permission.notification.request();
+  }
 
   await service.configure(
     androidConfiguration: AndroidConfiguration(

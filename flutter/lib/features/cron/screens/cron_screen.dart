@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/cron_job.dart';
 import '../providers/cron_provider.dart';
 import 'cron_job_editor_screen.dart';
+import '../../alerts/widgets/alerts_bell_button.dart';
 
 class CronScreen extends ConsumerStatefulWidget {
   const CronScreen({super.key});
@@ -28,6 +29,7 @@ class _CronScreenState extends ConsumerState<CronScreen> {
       appBar: AppBar(
         title: const Text('Cron Jobs'),
         actions: [
+          const AlertsBellButton(),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () => ref.read(cronProvider.notifier).refresh(),

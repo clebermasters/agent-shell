@@ -30,6 +30,9 @@ class WebSocketService {
   Stream<bool> get connectionState => _connectionController.stream;
   Stream<String> get logs => _logController.stream;
   Stream<ConnectionStatus> get connectionStatus => _statusController.stream;
+  Stream<Notification> get notificationStream => messages
+      .where((m) => m['type'] == 'notification-event')
+      .map((m) => Notification.fromJson(m['notification'] as Map<String, dynamic>));
   bool get isConnected => _isConnected;
   String? get currentUrl => _currentUrl;
 

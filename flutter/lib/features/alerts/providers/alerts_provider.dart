@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -88,23 +89,29 @@ class AlertsNotifier extends StateNotifier<AlertsState> {
       title: notification.title,
       body: notification.body,
       notificationDetails: notificationDetails,
+      payload: 'alert:${notification.id}',
     );
+  }
+
+  String _authToken() {
+    if (BuildConfig.authToken.isNotEmpty) return BuildConfig.authToken;
+    if (_host == null) return '';
+    final ws = _host!.wsUrl;
+    if (ws.contains('?token=')) return ws.split('?token=')[1];
+    return '';
   }
 
   Future<void> fetchNotifications() async {
     if (_host == null) return;
     state = state.copyWith(isLoading: true);
-    
+
     try {
       final baseUrl = _host!.httpUrl;
-      final token = _host.wsUrl.contains('?token=') 
-          ? _host.wsUrl.split('?token=')[1] 
-          : '';
       final url = '$baseUrl/api/notifications?limit=50';
-      
+
       final response = await _dio.get(
         url,
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
+        options: Options(headers: {'X-Auth-Token': _authToken()}),
       );
       
       if (response.statusCode == 200) {
@@ -124,18 +131,33 @@ class AlertsNotifier extends StateNotifier<AlertsState> {
     }
   }
 
+  Future<Uint8List?> downloadFile(String fileId) async {
+    if (_host == null) return null;
+    try {
+      final url = '${_host!.httpUrl}/api/notifications/files/$fileId';
+      final response = await _dio.get<List<int>>(
+        url,
+        options: Options(
+          headers: {'X-Auth-Token': _authToken()},
+          responseType: ResponseType.bytes,
+        ),
+      );
+      if (response.statusCode == 200 && response.data != null) {
+        return Uint8List.fromList(response.data!);
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> markRead(String id) async {
     if (_host == null) return;
-    
+
     try {
       final baseUrl = _host!.httpUrl;
-      final token = _host.wsUrl.contains('?token=') 
-          ? _host.wsUrl.split('?token=')[1] 
-          : '';
-      
+
       await _dio.post(
         '$baseUrl/api/notifications/$id/read',
-        options: Options(headers: {'Authorization': 'Bearer $token'}),
+        options: Options(headers: {'X-Auth-Token': _authToken()}),
       );
       
       final newList = state.notifications.map((n) {

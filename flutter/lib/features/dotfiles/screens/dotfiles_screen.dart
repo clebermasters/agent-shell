@@ -6,6 +6,7 @@ import '../../../data/models/dotfile.dart';
 import '../providers/dotfiles_provider.dart';
 import 'dotfile_editor_screen.dart';
 import 'dotfiles_templates_screen.dart';
+import '../../alerts/widgets/alerts_bell_button.dart';
 
 class DotfilesScreen extends ConsumerStatefulWidget {
   const DotfilesScreen({super.key});
@@ -53,6 +54,7 @@ class _DotfilesScreenState extends ConsumerState<DotfilesScreen> {
           ),
         ),
         actions: [
+          const AlertsBellButton(),
           IconButton(
             icon: Icon(
               Icons.refresh,

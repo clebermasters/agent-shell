@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:dio/dio.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/models/notification.dart';
 import '../../../data/models/host.dart';
@@ -66,6 +67,28 @@ class AlertsNotifier extends StateNotifier<AlertsState> {
     final newList = [notification, ...state.notifications];
     final newUnread = state.unreadCount + 1;
     state = state.copyWith(notifications: newList, unreadCount: newUnread);
+    _triggerPushNotification(notification);
+  }
+
+  Future<void> _triggerPushNotification(Notification notification) async {
+    const androidDetails = AndroidNotificationDetails(
+      'agentshell_alerts',
+      'AI Task Alerts',
+      channelDescription: 'Notifications for AI agent task completions',
+      importance: Importance.high,
+      priority: Priority.high,
+      showWhen: true,
+    );
+
+    const notificationDetails = NotificationDetails(android: androidDetails);
+
+    final plugin = FlutterLocalNotificationsPlugin();
+    await plugin.show(
+      id: notification.id.hashCode,
+      title: notification.title,
+      body: notification.body,
+      notificationDetails: notificationDetails,
+    );
   }
 
   Future<void> fetchNotifications() async {

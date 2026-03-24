@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{
     extract::State,
     middleware,
-    routing::get,
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
@@ -31,6 +31,7 @@ mod chat_event_store;
 mod chat_file_storage;
 mod chat_log;
 mod cron;
+mod cron_handler;
 mod dotfiles;
 mod monitor;
 mod notification;
@@ -242,6 +243,14 @@ async fn main() -> Result<()> {
                 }
             }),
         )
+        // API: Cron jobs
+        .route("/api/cron/jobs", get(cron_handler::list_jobs))
+        .route("/api/cron/jobs", post(cron_handler::create_job))
+        .route("/api/cron/jobs/:id", get(cron_handler::get_job))
+        .route("/api/cron/jobs/:id", put(cron_handler::update_job))
+        .route("/api/cron/jobs/:id", delete(cron_handler::delete_job))
+        .route("/api/cron/jobs/:id/toggle", post(cron_handler::toggle_job))
+        .route("/api/cron/jobs/:id/test", post(cron_handler::test_job))
         // WebSocket endpoint
         .route("/ws", get(websocket::ws_handler))
         // Apply auth middleware to all protected routes

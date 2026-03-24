@@ -33,6 +33,8 @@ mod chat_log;
 mod cron;
 mod dotfiles;
 mod monitor;
+mod notification;
+mod notification_store;
 mod terminal_buffer;
 mod tmux;
 mod types;
@@ -64,6 +66,7 @@ pub struct AppState {
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
     pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
     pub acp_client: Arc<tokio::sync::RwLock<Option<acp::AcpClient>>>,
+    pub notification_store: Arc<notification_store::NotificationStore>,
 }
 
 #[tokio::main]
@@ -108,6 +111,7 @@ async fn main() -> Result<()> {
         chat_file_storage: Arc::new(chat_file_storage::ChatFileStorage::new(base_dir.clone())),
         chat_event_store: Arc::new(chat_event_store::ChatEventStore::new(base_dir.clone())?),
         chat_clear_store: Arc::new(chat_clear_store::ChatClearStore::new(&base_dir)),
+        notification_store: Arc::new(notification_store::NotificationStore::new(base_dir.clone())?),
         acp_client: Arc::new(tokio::sync::RwLock::new(None)),
     };
 

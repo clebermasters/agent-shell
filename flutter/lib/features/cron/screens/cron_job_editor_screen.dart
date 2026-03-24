@@ -20,9 +20,14 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
   late TextEditingController _commandController;
   late TextEditingController _emailController;
   late TextEditingController _tmuxController;
+  late TextEditingController _workdirController;
+  late TextEditingController _promptController;
+  late TextEditingController _llmModelController;
   bool _logOutput = false;
   bool _showAdvanced = false;
+  bool _showAiOptions = false;
   List<MapEntry<TextEditingController, TextEditingController>> _envEntries = [];
+  String _llmProvider = 'openai';
 
   bool get isEditing => widget.job != null;
 
@@ -34,6 +39,13 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
     {'label': 'Every 5 min', 'value': '*/5 * * * *'},
     {'label': 'Every 30 min', 'value': '*/30 * * * *'},
     {'label': 'Weekdays 9am', 'value': '0 9 * * 1-5'},
+  ];
+
+  static const llmProviders = [
+    {'label': 'OpenAI', 'value': 'openai'},
+    {'label': 'MiniMax', 'value': 'minimax'},
+    {'label': 'Bedrock', 'value': 'bedrock'},
+    {'label': 'Ollama', 'value': 'ollama'},
   ];
 
   static final scheduleDescriptions = {
@@ -63,7 +75,12 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
     _tmuxController = TextEditingController(
       text: widget.job?.tmuxSession ?? '',
     );
+    _workdirController = TextEditingController(text: widget.job?.workdir ?? '');
+    _promptController = TextEditingController(text: widget.job?.prompt ?? '');
+    _llmModelController = TextEditingController(text: widget.job?.llmModel ?? '');
+    _llmProvider = widget.job?.llmProvider ?? 'openai';
     _logOutput = widget.job?.logOutput ?? false;
+    _showAiOptions = widget.job?.prompt != null && widget.job!.prompt!.isNotEmpty;
     final env = widget.job?.environment ?? {};
     _envEntries = env.entries
         .map((e) => MapEntry(
@@ -80,6 +97,9 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
     _commandController.dispose();
     _emailController.dispose();
     _tmuxController.dispose();
+    _workdirController.dispose();
+    _promptController.dispose();
+    _llmModelController.dispose();
     for (final entry in _envEntries) {
       entry.key.dispose();
       entry.value.dispose();
@@ -118,6 +138,16 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
           ? null
           : _tmuxController.text.trim(),
       environment: _buildEnvironmentMap(),
+      workdir: _showAiOptions && _workdirController.text.trim().isNotEmpty
+          ? _workdirController.text.trim()
+          : null,
+      prompt: _showAiOptions && _promptController.text.trim().isNotEmpty
+          ? _promptController.text.trim()
+          : null,
+      llmProvider: _showAiOptions ? _llmProvider : null,
+      llmModel: _showAiOptions && _llmModelController.text.trim().isNotEmpty
+          ? _llmModelController.text.trim()
+          : null,
     );
 
     if (isEditing) {
@@ -273,6 +303,72 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
                     fontSize: 12,
                     color: Colors.white,
                   ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () => setState(() => _showAiOptions = !_showAiOptions),
+              child: Row(
+                children: [
+                  Icon(
+                    _showAiOptions
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 4),
+                  const Text('AI Options'),
+                ],
+              ),
+            ),
+            if (_showAiOptions) ...[
+              const SizedBox(height: 16),
+              TextField(
+                controller: _workdirController,
+                decoration: const InputDecoration(
+                  labelText: 'Working Directory',
+                  hintText: '/home/user/project',
+                  border: OutlineInputBorder(),
+                ),
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _promptController,
+                decoration: const InputDecoration(
+                  labelText: 'AI Prompt',
+                  hintText: 'What should the AI agent do?',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 4,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _llmProvider,
+                decoration: const InputDecoration(
+                  labelText: 'LLM Provider',
+                  border: OutlineInputBorder(),
+                ),
+                items: llmProviders.map((p) {
+                  return DropdownMenuItem(
+                    value: p['value'],
+                    child: Text(p['label']!),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _llmProvider = value);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _llmModelController,
+                decoration: const InputDecoration(
+                  labelText: 'LLM Model',
+                  hintText: 'claude-sonnet-4-6',
+                  border: OutlineInputBorder(),
                 ),
               ),
             ],

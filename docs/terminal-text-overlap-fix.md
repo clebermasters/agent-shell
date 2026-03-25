@@ -422,6 +422,66 @@ This prevents a resize during history streaming from discarding buffered history
 
 ---
 
+## Round 5: Zoom Resize Not Firing (Phase 16)
+
+After the Round 4 redesign, text corruption was resolved but zooming via volume keys showed a new symptom: **the terminal font size changed visually but the content did not reflow** — the backend was not notified of the new column/row count. Content only reflowed when the keyboard was opened or closed afterward.
+
+### Root Cause
+
+xterm's `_updateViewportSize()` only calls `_resizeTerminalIfNeeded()` when the computed `viewportSize` differs from the cached `_viewportSize`:
+
+```dart
+if (_viewportSize != viewportSize) {
+  _viewportSize = viewportSize;
+  _resizeTerminalIfNeeded();
+}
+```
+
+When a font size change via zoom is the first resize operation (or when the previous zoom already computed the same integer cols/rows due to rounding), `_viewportSize` already equals `viewportSize` and `_resizeTerminalIfNeeded()` is skipped silently. This does not happen with keyboard show/hide because those events change the widget's pixel height, which always produces a different `viewportSize`.
+
+### Phase 16 — Force Resize After Zoom
+
+**Files**: `flutter/packages/xterm/lib/src/ui/render.dart`, `flutter/packages/xterm/lib/src/terminal_view.dart`, `flutter/lib/features/terminal/widgets/terminal_view_widget.dart`
+
+Added a `forceResize()` method to `RenderTerminal` that clears `_viewportSize = null` and calls `markNeedsLayout()`. Because `_viewportSize` is null, the `_viewportSize != viewportSize` check is always true on the next layout pass and `_resizeTerminalIfNeeded()` always fires.
+
+```dart
+// render.dart
+void forceResize() {
+  _viewportSize = null;
+  markNeedsLayout();
+}
+```
+
+Exposed via `TerminalViewState`:
+```dart
+// terminal_view.dart
+void forceResize() {
+  if (_viewportKey.currentContext != null) {
+    renderTerminal.forceResize();
+  }
+}
+```
+
+Called from `_zoomIn()`/`_zoomOut()` using a `GlobalKey<TerminalViewState>` and a post-frame callback (so the font style is already applied to the render object before `forceResize()` runs):
+
+```dart
+// terminal_view_widget.dart
+final GlobalKey<TerminalViewState> _terminalViewKey = GlobalKey<TerminalViewState>();
+
+void _zoomIn() {
+  setState(() => _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0));
+  widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
+  _lastCols = 0;
+  _lastRows = 0;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (mounted) _terminalViewKey.currentState?.forceResize();
+  });
+}
+```
+
+---
+
 ## Verification
 
 Build and install the debug APK:
@@ -433,7 +493,7 @@ cd flutter && ./build.sh debug --install
 Test scenarios:
 
 1. **Heavy output without any resize** — text must stay clean (primary test for Phases 12–13)
-2. **Zoom in/out via volume keys** — text must reflow to fit the new dimensions (primary test for Phase 14)
+2. **Zoom in/out via volume keys** — text must reflow to fit the new dimensions (primary test for Phases 14, 16)
 3. **Rapid zoom in/out** — terminal stays readable throughout
 4. **Keyboard show/hide during heavy output** — no corruption
 5. **Colored output (ls --color, htop)** — no garbled characters; validates Phase 13 colon subparam fix
@@ -447,8 +507,9 @@ Test scenarios:
 | File | Phases | Change |
 |------|--------|--------|
 | `flutter/lib/data/services/terminal_service.dart` | 1, 5, 14–15 | `reflowEnabled: false`; resize buffering; debounced resize; separate hydration queues |
-| `flutter/packages/xterm/lib/src/ui/render.dart` | 2 | Clear paragraph cache after resize |
-| `flutter/lib/features/terminal/widgets/terminal_view_widget.dart` | 3, 14 | Removed `_zooming` flag; simplified zoom flow |
+| `flutter/packages/xterm/lib/src/ui/render.dart` | 2, 16 | Clear paragraph cache after resize; `forceResize()` method |
+| `flutter/lib/features/terminal/widgets/terminal_view_widget.dart` | 3, 14, 16 | Removed `_zooming` flag; simplified zoom flow; call `forceResize()` after zoom |
 | `flutter/packages/xterm/lib/src/ui/painter.dart` | 4 | Ceil cell width measurement |
 | `flutter/packages/xterm/lib/src/core/escape/parser.dart` | 6–11, 12–13 | DCS handler; CSI 1-param cursor fix; SGR bounds check; OSC ESC fix; CSI non-ASCII termination; DCS ESC validation; try/catch + reset(); colon subparams; intermediate bytes; SGR unknown sub-mode fix |
 | `flutter/packages/xterm/lib/src/terminal.dart` | 12 | try/catch in `write()`, reset parser on error |
+| `flutter/packages/xterm/lib/src/terminal_view.dart` | 16 | `forceResize()` exposed on `TerminalViewState` |

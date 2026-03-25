@@ -7,17 +7,17 @@
 
 ### Layout Fix
 
-- [ ] **FIX-01**: User can tap the add (+) FAB on the Cron tab without it being obscured by the search/command FAB
-- [ ] **FIX-02**: User can tap the add (+) FAB on the Dotfiles tab without it being obscured by the search/command FAB
-- [ ] **FIX-03**: The search/command FAB remains functional and visible on the Sessions tab after the fix
-- [ ] **FIX-04**: The search/command FAB remains functional and visible on the System tab after the fix
+- [x] **FIX-01**: User can tap the add (+) FAB on the Cron tab without it being obscured by the search/command FAB
+- [x] **FIX-02**: User can tap the add (+) FAB on the Dotfiles tab without it being obscured by the search/command FAB
+- [x] **FIX-03**: The search/command FAB remains functional and visible on the Sessions tab after the fix
+- [x] **FIX-04**: The search/command FAB remains functional and visible on the System tab after the fix
 
 ### Regression Protection
 
-- [ ] **REG-01**: Existing Cron CRUD operations (add, edit, enable/disable, delete) continue to work after the fix
-- [ ] **REG-02**: Existing Dotfile CRUD operations (add, edit, delete) continue to work after the fix
-- [ ] **REG-03**: Layout is correct on a narrow Android phone viewport (≤360dp wide)
-- [ ] **REG-04**: Layout is correct on a web viewport (desktop browser)
+- [x] **REG-01**: Existing Cron CRUD operations (add, edit, enable/disable, delete) continue to work after the fix
+- [x] **REG-02**: Existing Dotfile CRUD operations (add, edit, delete) continue to work after the fix
+- [x] **REG-03**: Layout is correct on a narrow Android phone viewport (≤360dp wide)
+- [x] **REG-04**: Layout is correct on a web viewport (desktop browser)
 
 ## v2 Requirements
 
@@ -40,14 +40,14 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FIX-01 | Phase 1 | Pending |
-| FIX-02 | Phase 1 | Pending |
-| FIX-03 | Phase 1 | Pending |
-| FIX-04 | Phase 1 | Pending |
-| REG-01 | Phase 1 | Pending |
-| REG-02 | Phase 1 | Pending |
-| REG-03 | Phase 1 | Pending |
-| REG-04 | Phase 1 | Pending |
+| FIX-01 | Phase 1 | Complete |
+| FIX-02 | Phase 1 | Complete |
+| FIX-03 | Phase 1 | Complete |
+| FIX-04 | Phase 1 | Complete |
+| REG-01 | Phase 1 | Complete |
+| REG-02 | Phase 1 | Complete |
+| REG-03 | Phase 1 | Complete |
+| REG-04 | Phase 1 | Complete |
 
 **Coverage:**
 - v1 requirements: 8 total

@@ -52,12 +52,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   double _lastWidth = 0;
   double _lastHeight = 0;
   Timer? _resizeDebounce;
-  Timer? _zoomResizeDebounce;
-  // While the user is actively zooming (volume key pressed within debounce
-  // window), suppress autoResize so the terminal keeps its current dimensions
-  // and stays in sync with the backend.  Once zoom settles, autoResize is
-  // re-enabled and a single resize is sent to the backend.
-  bool _zooming = false;
   int _lastEnterMs = 0; // dedup Enter from onKey + onChanged
 
   late FocusNode _wrapperFocusNode;
@@ -110,12 +104,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
       if (cols != _lastCols || rows != _lastRows) {
         _lastCols = cols;
         _lastRows = rows;
-        // During zoom the debounce timer handles sending; only send here
-        // when the resize was NOT triggered by a zoom (e.g. keyboard show/hide,
-        // orientation change).
-        if (_zoomResizeDebounce == null || !_zoomResizeDebounce!.isActive) {
-          widget.onResize(cols, rows);
-        }
+        widget.onResize(cols, rows);
       }
     };
     _fontSize =
@@ -126,7 +115,6 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   @override
   void dispose() {
     _resizeDebounce?.cancel();
-    _zoomResizeDebounce?.cancel();
     _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     if (!kIsWeb) {
@@ -442,38 +430,19 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   }
 
   void _zoomIn() {
-    setState(() {
-      _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0);
-      _zooming = true;
-    });
+    setState(() => _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0));
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
-    _scheduleZoomResize();
+    // Reset dimension guard so the next layout pass always fires onResize.
+    _lastCols = 0;
+    _lastRows = 0;
   }
 
   void _zoomOut() {
-    setState(() {
-      _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0);
-      _zooming = true;
-    });
+    setState(() => _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0));
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
-    _scheduleZoomResize();
-  }
-
-  /// Debounce zoom resize: wait until the user stops pressing volume keys
-  /// (500ms of inactivity) before re-enabling autoResize and sending ONE
-  /// resize to the backend.  While _zooming is true, TerminalView has
-  /// autoResize=false so the terminal buffer keeps its current dimensions
-  /// and stays in sync with the backend during the zoom animation.
-  void _scheduleZoomResize() {
-    _zoomResizeDebounce?.cancel();
-    _zoomResizeDebounce = Timer(const Duration(milliseconds: 500), () {
-      if (!mounted) return;
-      // Re-enable autoResize; the subsequent build+layout will compute the
-      // new cols/rows and fire onResize to sync the backend.
-      _lastCols = 0;
-      _lastRows = 0;
-      setState(() => _zooming = false);
-    });
+    // Reset dimension guard so the next layout pass always fires onResize.
+    _lastCols = 0;
+    _lastRows = 0;
   }
 
   @override
@@ -586,10 +555,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
                         readOnly: true,
                         cursorType: TerminalCursorType.block,
                         alwaysShowCursor: true,
-                        // Suppress autoResize while the user is actively
-                        // zooming so the terminal buffer stays in sync with
-                        // the backend during the volume-key debounce window.
-                        autoResize: !_zooming,
+                        autoResize: true,
                         textStyle: TerminalStyle(
                           fontSize: _fontSize,
                           fontFamily: 'JetBrains Mono',

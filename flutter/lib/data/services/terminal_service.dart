@@ -19,12 +19,18 @@ class TerminalService {
   // Custom input processor to handle modifiers globally
   Function(String session, String data)? _inputProcessor;
 
-  // Per-session hydration state for history bootstrap AND resize guard
-  final Map<String, bool> _hydrating = {};
-  final Map<String, List<String>> _hydrationQueue = {};
+  // ── History bootstrap state ──────────────────────────────────────────────
+  // Tracks whether the history-start/end protocol is in progress.
+  final Map<String, bool> _historyHydrating = {};
 
-  // Per-session resize guard timers: after sending a resize to the backend,
-  // buffer incoming data until tmux processes SIGWINCH and redraws.
+  // ── Resize guard state ───────────────────────────────────────────────────
+  // Tracks whether we are waiting for tmux to process a SIGWINCH.
+  final Map<String, bool> _resizeGuarding = {};
+
+  // Shared queue: data is held here whenever EITHER mechanism is active.
+  final Map<String, List<String>> _pendingQueue = {};
+
+  // Per-session resize guard timers.
   final Map<String, Timer> _resizeGuardTimers = {};
 
   TerminalService(this._wsService);
@@ -33,6 +39,34 @@ class TerminalService {
 
   void setInputProcessor(Function(String session, String data) processor) {
     _inputProcessor = processor;
+  }
+
+  /// Returns true if either the history bootstrap or the resize guard is
+  /// blocking writes for [sessionName].
+  bool _isBlocking(String sessionName) =>
+      _historyHydrating[sessionName] == true ||
+      _resizeGuarding[sessionName] == true;
+
+  /// Write [data] to the terminal, or queue it if a blocking state is active.
+  void _writeOrQueue(String sessionName, String data) {
+    if (_isBlocking(sessionName)) {
+      _pendingQueue[sessionName]?.add(data);
+    } else {
+      _terminals[sessionName]?.write(data);
+    }
+  }
+
+  /// Flush the pending queue to the terminal if neither blocking state is
+  /// active. Safe to call when only one of the two states has cleared.
+  void _flushIfReady(String sessionName) {
+    if (_isBlocking(sessionName)) return;
+    final terminal = _terminals[sessionName];
+    if (terminal == null) return;
+    final queue = _pendingQueue[sessionName] ?? [];
+    for (final data in queue) {
+      terminal.write(data);
+    }
+    _pendingQueue[sessionName] = [];
   }
 
   Terminal createTerminal(String sessionName, {int cols = 80, int rows = 24}) {
@@ -46,8 +80,9 @@ class TerminalService {
     final terminal = Terminal(maxLines: 50000, reflowEnabled: false);
 
     _terminals[sessionName] = terminal;
-    _hydrating[sessionName] = false;
-    _hydrationQueue[sessionName] = [];
+    _historyHydrating[sessionName] = false;
+    _resizeGuarding[sessionName] = false;
+    _pendingQueue[sessionName] = [];
 
     // Set up terminal callbacks.
     // Filter out terminal query responses (Device Attributes, cursor position
@@ -74,8 +109,8 @@ class TerminalService {
       // ── History bootstrap protocol ──────────────────────────────────────
       if (type == 'terminal-history-start') {
         if (msgSession == null || msgSession == sessionName) {
-          _hydrating[sessionName] = true;
-          _hydrationQueue[sessionName] = [];
+          _historyHydrating[sessionName] = true;
+          // Do NOT clear pendingQueue here — resize guard may have data there.
         }
         return;
       }
@@ -97,13 +132,9 @@ class TerminalService {
 
       if (type == 'terminal-history-end') {
         if (msgSession == null || msgSession == sessionName) {
-          _hydrating[sessionName] = false;
-          // Flush any live output that arrived during history streaming
-          final queue = _hydrationQueue[sessionName] ?? [];
-          for (final data in queue) {
-            terminal.write(data);
-          }
-          _hydrationQueue[sessionName] = [];
+          _historyHydrating[sessionName] = false;
+          // Flush the shared queue only if resize guard is also done.
+          _flushIfReady(sessionName);
         }
         return;
       }
@@ -114,11 +145,7 @@ class TerminalService {
         if (msgSession != null && msgSession != sessionName) return;
         final data = message['data'] as String?;
         if (data != null) {
-          if (_hydrating[sessionName] == true) {
-            _hydrationQueue[sessionName]?.add(data);
-          } else {
-            terminal.write(data);
-          }
+          _writeOrQueue(sessionName, data);
         }
       }
     });
@@ -140,38 +167,34 @@ class TerminalService {
   }
 
   void resizeTerminal(String sessionName, int cols, int rows) {
-    // Notify the backend — the Terminal object is already resized
-    // by xterm's autoResize or the caller.
-    _wsService.resizeTerminal(sessionName, cols, rows);
-
-    // Buffer incoming data for 300ms after a resize to avoid rendering content
-    // formatted for the old terminal dimensions.  When the viewport shrinks
-    // (e.g. keyboard appears), tmux keeps sending output for the old (larger)
-    // size for ~50-200ms.  Cursor positions that exceed the new viewport height
-    // get clamped to the last row, stacking multiple lines on top of each
-    // other.  Buffering gives tmux time to receive SIGWINCH and send a full
-    // screen redraw for the new dimensions; that redraw is always the last item
-    // in the queue and provides the correct content when flushed.
+    // Cancel any pending resize — rapid calls (e.g. during zoom) coalesce
+    // into a single backend message with the latest dimensions.
     _resizeGuardTimers[sessionName]?.cancel();
 
-    // Reuse the existing hydration queue mechanism.
-    _hydrating[sessionName] = true;
-    _hydrationQueue[sessionName] = [];
+    // Start guarding immediately so output formatted for the old dimensions
+    // does not reach the terminal.
+    _resizeGuarding[sessionName] = true;
+    _pendingQueue[sessionName] ??= [];
 
+    // Phase 1 (debounce): wait 300ms of stability before sending to backend.
+    // This coalesces rapid zoom presses into a single WebSocket message.
     _resizeGuardTimers[sessionName] = Timer(
       const Duration(milliseconds: 300),
       () {
-        final terminal = _terminals[sessionName];
-        if (terminal == null) return;
+        _wsService.resizeTerminal(sessionName, cols, rows);
 
-        _hydrating[sessionName] = false;
-        final queue = _hydrationQueue[sessionName] ?? [];
-        // All writes happen synchronously; the UI paints only the final state.
-        for (final data in queue) {
-          terminal.write(data);
-        }
-        _hydrationQueue[sessionName] = [];
-        _resizeGuardTimers.remove(sessionName);
+        // Phase 2 (SIGWINCH guard): buffer data for another 300ms to cover
+        // tmux SIGWINCH propagation latency (~50-200ms).  tmux sends a full
+        // screen redraw after processing SIGWINCH; that redraw is the last
+        // item in the queue and provides correct content when flushed.
+        _resizeGuardTimers[sessionName] = Timer(
+          const Duration(milliseconds: 300),
+          () {
+            _resizeGuarding[sessionName] = false;
+            _flushIfReady(sessionName);
+            _resizeGuardTimers.remove(sessionName);
+          },
+        );
       },
     );
   }
@@ -187,8 +210,9 @@ class TerminalService {
     _subscriptions[sessionName]?.cancel();
     _subscriptions.remove(sessionName);
     _terminals.remove(sessionName);
-    _hydrating.remove(sessionName);
-    _hydrationQueue.remove(sessionName);
+    _historyHydrating.remove(sessionName);
+    _resizeGuarding.remove(sessionName);
+    _pendingQueue.remove(sessionName);
     _ptys[sessionName]?.kill();
     _ptys.remove(sessionName);
   }
@@ -207,8 +231,9 @@ class TerminalService {
     }
     _terminals.clear();
     _ptys.clear();
-    _hydrating.clear();
-    _hydrationQueue.clear();
+    _historyHydrating.clear();
+    _resizeGuarding.clear();
+    _pendingQueue.clear();
     _outputController.close();
   }
 }

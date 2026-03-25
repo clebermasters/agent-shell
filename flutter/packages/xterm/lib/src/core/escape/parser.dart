@@ -31,6 +31,17 @@ class EscapeParser {
     _process();
   }
 
+  /// Resets all parser state. Called by Terminal.write() after an unhandled
+  /// exception to prevent the parser from being stuck in a bad state.
+  void reset() {
+    _queue.reset();
+    _csi.params.clear();
+    _csi.prefix = null;
+    _csi.finalByte = 0;
+    _csi.intermediate = 0;
+    _osc.clear();
+  }
+
   void _process() {
     while (_queue.isNotEmpty) {
       tokenBegin = _queue.totalConsumed;
@@ -238,10 +249,13 @@ class EscapeParser {
     }
 
     _csi.params.clear();
+    _csi.intermediate = 0;
 
-    // test whether the csi is a `CSI ? Ps ...` or `CSI Ps ...`
+    // test whether the csi is a `CSI ? Ps ...` or `CSI > Ps ...` etc.
+    // Prefix bytes are in range 0x3C-0x3F (<=>?), excluding colon (0x3A)
+    // and semicolon (0x3B) which are parameter bytes.
     final prefix = _queue.peek();
-    if (prefix >= Ascii.colon && prefix <= Ascii.questionMark) {
+    if (prefix >= Ascii.lessThan && prefix <= Ascii.questionMark) {
       _csi.prefix = prefix;
       _queue.consume();
     } else {
@@ -251,18 +265,21 @@ class EscapeParser {
     var param = 0;
     var hasParam = false;
     while (true) {
-      // The sequence isn't completed, just ignore it.
+      // The sequence isn't completed, wait for more data.
       if (_queue.isEmpty) {
         return false;
       }
 
       final char = _queue.consume();
 
-      if (char == Ascii.semicolon) {
-        if (hasParam) {
-          _csi.params.add(param);
-        }
+      // Semicolon (0x3B) and colon (0x3A) are both parameter separators.
+      // Colon is used in modern ITU T.416 sub-parameter syntax (e.g.
+      // `38:2::R:G:B`). We flatten colons into the main params list so
+      // existing SGR handlers work without modification.
+      if (char == Ascii.semicolon || char == Ascii.colon) {
+        _csi.params.add(hasParam ? param : 0);
         param = 0;
+        hasParam = false;
         continue;
       }
 
@@ -273,16 +290,17 @@ class EscapeParser {
         continue;
       }
 
-      if (char > Ascii.NULL && char < Ascii.num0) {
-        // intermediates.add(char);
+      // Intermediate bytes: 0x20-0x2F (space through '/')
+      if (char >= Ascii.space && char < Ascii.num0) {
+        _csi.intermediate = char;
         continue;
       }
 
+      // Final byte: 0x40-0x7E ('@' through '~')
       if (char >= Ascii.atSign && char <= Ascii.tilde) {
         if (hasParam) {
           _csi.params.add(param);
         }
-
         _csi.finalByte = char;
         return true;
       }
@@ -555,6 +573,10 @@ class EscapeParser {
               handler.setForegroundColor256(index);
               i += 2;
               break;
+            default:
+              // Unknown sub-mode: skip mode byte to avoid re-interpreting it.
+              i += 1;
+              break;
           }
           continue;
         case 39:
@@ -608,6 +630,10 @@ class EscapeParser {
               final index = params[i + 2];
               handler.setBackgroundColor256(index);
               i += 2;
+              break;
+            default:
+              // Unknown sub-mode: skip mode byte to avoid re-interpreting it.
+              i += 1;
               break;
           }
           continue;
@@ -1188,7 +1214,6 @@ class _Csi {
   _Csi({
     required this.params,
     required this.finalByte,
-    // required this.intermediates,
   });
 
   int? prefix;
@@ -1196,7 +1221,9 @@ class _Csi {
   List<int> params;
 
   int finalByte;
-  // final List<int> intermediates;
+
+  /// Accumulated intermediate byte (0x20-0x2F), or 0 if none.
+  int intermediate = 0;
 
   @override
   String toString() {

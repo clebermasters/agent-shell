@@ -67,7 +67,9 @@ class TerminalPainter {
     paragraph.layout(ParagraphConstraints(width: double.infinity));
 
     final result = Size(
-      paragraph.maxIntrinsicWidth / test.length,
+      // Ceil to nearest pixel so cells are never narrower than rendered glyphs,
+      // preventing characters from bleeding into adjacent cells.
+      (paragraph.maxIntrinsicWidth / test.length).ceilToDouble(),
       paragraph.height,
     );
 

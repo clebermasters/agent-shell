@@ -35,8 +35,11 @@ class TerminalService {
     // Cancel any previous listener for this session to prevent duplicates.
     _subscriptions[sessionName]?.cancel();
 
-    // 50,000 lines so streamed tmux history is not trimmed
-    final terminal = Terminal(maxLines: 50000);
+    // 50,000 lines so streamed tmux history is not trimmed.
+    // Disable client-side reflow: tmux handles reflow server-side and redraws
+    // the screen after resize.  Local reflow conflicts with the tmux redraw
+    // and produces mixed/overlapping text.
+    final terminal = Terminal(maxLines: 50000, reflowEnabled: false);
 
     _terminals[sessionName] = terminal;
     _hydrating[sessionName] = false;

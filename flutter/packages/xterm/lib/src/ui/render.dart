@@ -359,6 +359,9 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         _painter.cellSize.width.round(),
         _painter.cellSize.height.round(),
       );
+      // Force paragraph cache invalidation so stale glyphs from the previous
+      // layout are never painted at new cell positions.
+      _painter.clearFontCache();
     }
   }
 

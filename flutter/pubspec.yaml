@@ -18,7 +18,8 @@ dependencies:
   web_socket_channel: ^3.0.3
 
   # Terminal
-  xterm: ^4.0.0
+  shellterm:
+    path: packages/shellterm
   flutter_pty: ^0.4.0
 
   # Local Storage
@@ -56,9 +57,6 @@ dependencies:
   file_picker: ^8.0.0
   mime: ^1.0.5
 
-dependency_overrides:
-  xterm:
-    path: packages/xterm
 
 dev_dependencies:
   flutter_test:

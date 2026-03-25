@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:ui';
-import 'package:xterm/xterm.dart';
+import 'package:shellterm/shellterm.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/config/app_config.dart';
 import 'package:volume_key_board/volume_key_board.dart'
@@ -99,7 +99,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     if (!kIsWeb) {
       VolumeKeyBoard.instance.addListener(_handleVolumeKey);
     }
-    // Use xterm's own resize callback (based on actual font metrics)
+    // Use shellterm's own resize callback (based on actual font metrics)
     // to notify the backend of the correct terminal dimensions.
     widget.terminal.onResize = (cols, rows, pixelWidth, pixelHeight) {
       if (cols != _lastCols || rows != _lastRows) {
@@ -154,7 +154,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   void didChangeMetrics() {
     if (!mounted) return;
     // Debounce to avoid rapid-fire resizes during browser zoom animation.
-    // Resetting _lastCols/_lastRows ensures xterm's onResize callback always
+    // Resetting _lastCols/_lastRows ensures shellterm's onResize callback always
     // propagates to the backend even if the computed integer cols/rows are the
     // same as before (can happen due to rounding at certain zoom levels).
     _resizeDebounce?.cancel();
@@ -473,7 +473,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     return LayoutBuilder(
       builder: (context, constraints) {
         // When the available space changes (browser zoom, window resize, keyboard),
-        // reset the dimension guard so xterm's onResize always reaches the backend.
+        // reset the dimension guard so shellterm's onResize always reaches the backend.
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
         if (w != _lastWidth || h != _lastHeight) {

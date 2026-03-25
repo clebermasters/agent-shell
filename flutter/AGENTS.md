@@ -202,7 +202,7 @@ lib/
 
 - **State**: `flutter_riverpod`
 - **HTTP**: `dio`, `web_socket_channel`
-- **Terminal**: `xterm`, `flutter_pty`
+- **Terminal**: `shellterm`, `flutter_pty`
 - **Storage**: `shared_preferences`, `hive`
 - **UI**: `flutter_svg`, `flutter_markdown`
 

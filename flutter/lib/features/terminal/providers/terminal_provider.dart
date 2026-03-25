@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:xterm/xterm.dart';
+import 'package:shellterm/shellterm.dart';
 import 'package:flutter_background_service/flutter_background_service.dart'
     if (dart.library.html) '../../../core/utils/background_service_stub.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -162,7 +162,7 @@ class TerminalNotifier extends StateNotifier<TerminalState> {
     // Force a resize after the initial attach settles.  The backend's
     // attach_to_session uses max(tmux_window_size, requested) which can
     // create a PTY larger than our terminal.  During the attach, multiple
-    // resize events fire as xterm's layout stabilizes, but tmux may still
+    // resize events fire as shellterm's layout stabilizes, but tmux may still
     // hold a stale size.  Sending the definitive resize after everything
     // settles ensures tmux has the exact dimensions of our terminal.
     Future.delayed(const Duration(seconds: 2), () {

@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:xterm/xterm.dart';
+import 'package:shellterm/shellterm.dart';
 import 'websocket_service.dart';
 
 // flutter_pty uses dart:ffi which is not available on web
@@ -44,7 +44,7 @@ class TerminalService {
 
     // Set up terminal callbacks.
     // Filter out terminal query responses (Device Attributes, cursor position
-    // reports, etc.) that xterm generates internally.  These escape sequences
+    // reports, etc.) that shellterm generates internally.  These escape sequences
     // must NOT be forwarded to the backend because the backend echoes them as
     // visible text (the ">0;0;0c" artefacts).
     terminal.onOutput = (data) {
@@ -134,7 +134,7 @@ class TerminalService {
 
   void resizeTerminal(String sessionName, int cols, int rows) {
     // Just notify the backend — the Terminal object is already resized
-    // by xterm's autoResize or the caller.
+    // by shellterm's autoResize or the caller.
     _wsService.resizeTerminal(sessionName, cols, rows);
   }
 

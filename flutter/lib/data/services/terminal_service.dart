@@ -19,9 +19,13 @@ class TerminalService {
   // Custom input processor to handle modifiers globally
   Function(String session, String data)? _inputProcessor;
 
-  // Per-session hydration state for history bootstrap
+  // Per-session hydration state for history bootstrap AND resize guard
   final Map<String, bool> _hydrating = {};
   final Map<String, List<String>> _hydrationQueue = {};
+
+  // Per-session resize guard timers: after sending a resize to the backend,
+  // buffer incoming data until tmux processes SIGWINCH and redraws.
+  final Map<String, Timer> _resizeGuardTimers = {};
 
   TerminalService(this._wsService);
 
@@ -136,9 +140,40 @@ class TerminalService {
   }
 
   void resizeTerminal(String sessionName, int cols, int rows) {
-    // Just notify the backend — the Terminal object is already resized
+    // Notify the backend — the Terminal object is already resized
     // by xterm's autoResize or the caller.
     _wsService.resizeTerminal(sessionName, cols, rows);
+
+    // Buffer incoming data for 300ms after a resize to avoid rendering content
+    // formatted for the old terminal dimensions.  When the viewport shrinks
+    // (e.g. keyboard appears), tmux keeps sending output for the old (larger)
+    // size for ~50-200ms.  Cursor positions that exceed the new viewport height
+    // get clamped to the last row, stacking multiple lines on top of each
+    // other.  Buffering gives tmux time to receive SIGWINCH and send a full
+    // screen redraw for the new dimensions; that redraw is always the last item
+    // in the queue and provides the correct content when flushed.
+    _resizeGuardTimers[sessionName]?.cancel();
+
+    // Reuse the existing hydration queue mechanism.
+    _hydrating[sessionName] = true;
+    _hydrationQueue[sessionName] = [];
+
+    _resizeGuardTimers[sessionName] = Timer(
+      const Duration(milliseconds: 300),
+      () {
+        final terminal = _terminals[sessionName];
+        if (terminal == null) return;
+
+        _hydrating[sessionName] = false;
+        final queue = _hydrationQueue[sessionName] ?? [];
+        // All writes happen synchronously; the UI paints only the final state.
+        for (final data in queue) {
+          terminal.write(data);
+        }
+        _hydrationQueue[sessionName] = [];
+        _resizeGuardTimers.remove(sessionName);
+      },
+    );
   }
 
   void writeToTerminal(String sessionName, String data) {
@@ -147,6 +182,8 @@ class TerminalService {
   }
 
   void closeTerminal(String sessionName) {
+    _resizeGuardTimers[sessionName]?.cancel();
+    _resizeGuardTimers.remove(sessionName);
     _subscriptions[sessionName]?.cancel();
     _subscriptions.remove(sessionName);
     _terminals.remove(sessionName);
@@ -157,6 +194,10 @@ class TerminalService {
   }
 
   void dispose() {
+    for (final timer in _resizeGuardTimers.values) {
+      timer.cancel();
+    }
+    _resizeGuardTimers.clear();
     for (final sub in _subscriptions.values) {
       sub.cancel();
     }

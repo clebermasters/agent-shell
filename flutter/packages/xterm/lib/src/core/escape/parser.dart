@@ -100,7 +100,7 @@ class EscapeParser {
     'E'.charCode: _escHandleNextLine,
     'H'.charCode: _escHandleTabSet,
     'M'.charCode: _escHandleReverseIndex,
-    // 'P'.charCode: _unsupportedHandler, // Sixel
+    'P'.charCode: _escHandleDCS, // DCS - Device Control String (Sixel, etc.)
     // 'c'.charCode: _unsupportedHandler,
     // '#'.charCode: _unsupportedHandler,
     '('.charCode: _escHandleDesignateCharset0, //  SCS - G0
@@ -157,6 +157,22 @@ class EscapeParser {
   bool _escHandleReverseIndex() {
     handler.reverseIndex();
     return true;
+  }
+
+  /// `ESC P` DCS - Device Control String
+  /// Silently consumes the entire DCS payload until ST (ESC \) or BEL.
+  /// Without this, the DCS payload is interpreted as regular text/escapes.
+  bool _escHandleDCS() {
+    while (true) {
+      if (_queue.isEmpty) return false;
+      final char = _queue.consume();
+      if (char == Ascii.ESC) {
+        if (_queue.isEmpty) return false;
+        _queue.consume(); // consume the terminating char (usually backslash)
+        return true;
+      }
+      if (char == Ascii.BEL) return true;
+    }
   }
 
   bool _escHandleDesignateCharset0() {
@@ -358,9 +374,11 @@ class EscapeParser {
     var row = 1;
     var col = 1;
 
-    if (_csi.params.length == 2) {
+    if (_csi.params.isNotEmpty) {
       row = _csi.params[0];
-      col = _csi.params[1];
+      if (_csi.params.length >= 2) {
+        col = _csi.params[1];
+      }
     }
 
     handler.setCursor(col - 1, row - 1);

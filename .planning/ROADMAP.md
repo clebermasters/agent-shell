@@ -12,7 +12,7 @@ A single-phase bug fix. The root cause is a dual FloatingActionButton collision 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: FAB Collision Fix** - Suppress the outer HomeScreen command-palette FAB on Cron and Dotfiles tabs so each tab has exactly one tappable FAB
+- [x] **Phase 1: FAB Collision Fix** - Suppress the outer HomeScreen command-palette FAB on Cron and Dotfiles tabs so each tab has exactly one tappable FAB (completed 2026-03-25)
 
 ## Phase Details
 
@@ -26,10 +26,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User can tap the command-palette FAB (search icon) on the Sessions tab and the palette opens
   4. User can tap the command-palette FAB (search icon) on the System tab and the palette opens
   5. All existing Cron and Dotfile CRUD operations (add, edit, enable/disable, delete) complete without error, and the layout is correct on both a narrow Android phone (<=360dp) and a desktop web viewport
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 01-01-PLAN.md — Suppress outer FAB on Cron/Dotfiles tabs and verify on device
+- [x] 01-01-PLAN.md — Suppress outer FAB on Cron/Dotfiles tabs and verify on device
 
 **UI hint**: yes
 
@@ -40,4 +40,4 @@ Phases execute in numeric order: 1
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. FAB Collision Fix | 0/1 | Not started | - |
+| 1. FAB Collision Fix | 1/1 | Complete   | 2026-03-25 |

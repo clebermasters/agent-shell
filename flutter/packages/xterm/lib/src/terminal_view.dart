@@ -166,6 +166,15 @@ class TerminalViewState extends State<TerminalView> {
   RenderTerminal get renderTerminal =>
       _viewportKey.currentContext!.findRenderObject() as RenderTerminal;
 
+  /// Forces the terminal to recalculate its dimensions and send a resize
+  /// notification. Call this after an external font size change so that the
+  /// terminal immediately reflects the new column/row count.
+  void forceResize() {
+    if (_viewportKey.currentContext != null) {
+      renderTerminal.forceResize();
+    }
+  }
+
   @override
   void initState() {
     _focusNode = widget.focusNode ?? FocusNode();

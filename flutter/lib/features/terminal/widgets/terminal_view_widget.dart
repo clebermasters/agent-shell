@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:ui';
 import 'package:xterm/xterm.dart';
+import 'package:xterm/src/terminal_view.dart' show TerminalViewState;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/config/app_config.dart';
 import 'package:volume_key_board/volume_key_board.dart'
@@ -53,6 +54,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   double _lastHeight = 0;
   Timer? _resizeDebounce;
   int _lastEnterMs = 0; // dedup Enter from onKey + onChanged
+  final GlobalKey<TerminalViewState> _terminalViewKey = GlobalKey<TerminalViewState>();
 
   late FocusNode _wrapperFocusNode;
   late TextEditingController _inputController;
@@ -435,6 +437,12 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     // Reset dimension guard so the next layout pass always fires onResize.
     _lastCols = 0;
     _lastRows = 0;
+    // Force xterm to recalculate cols/rows after the font change.
+    // Without this, _updateViewportSize() may see the same cached _viewportSize
+    // and skip the resize notification to the backend.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _terminalViewKey.currentState?.forceResize();
+    });
   }
 
   void _zoomOut() {
@@ -443,6 +451,10 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
     // Reset dimension guard so the next layout pass always fires onResize.
     _lastCols = 0;
     _lastRows = 0;
+    // Force xterm to recalculate cols/rows after the font change.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _terminalViewKey.currentState?.forceResize();
+    });
   }
 
   @override
@@ -550,6 +562,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
                       ),
                       child: TerminalView(
                         widget.terminal,
+                        key: _terminalViewKey,
                         scrollController: _scrollController,
                         controller: widget.controller,
                         readOnly: true,

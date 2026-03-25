@@ -149,6 +149,15 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   TerminalSize? _viewportSize;
 
+  /// Forces a resize recalculation on the next layout pass by clearing the
+  /// cached viewport size. Call this after a font size change so that
+  /// [_updateViewportSize] always sees a difference and fires
+  /// [_resizeTerminalIfNeeded].
+  void forceResize() {
+    _viewportSize = null;
+    markNeedsLayout();
+  }
+
   final TerminalPainter _painter;
 
 

@@ -128,9 +128,8 @@ pub(crate) async fn send_message(
     tx: &mpsc::UnboundedSender<BroadcastMessage>,
     msg: crate::types::ServerMessage,
 ) -> anyhow::Result<()> {
-    if let Ok(json) = serde_json::to_string(&msg) {
-        tx.send(BroadcastMessage::Text(Arc::new(json)))?;
-    }
+    let json = serde_json::to_string(&msg)?;
+    tx.send(BroadcastMessage::Text(Arc::new(json)))?;
     Ok(())
 }
 

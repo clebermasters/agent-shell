@@ -39,10 +39,13 @@ class _FloatingVoiceButtonState extends State<FloatingVoiceButton> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final size = MediaQuery.of(context).size;
     if (_posX < 0 || _posY < 0) {
-      final size = MediaQuery.of(context).size;
       _posX = size.width - 64;
       _posY = size.height - 150;
+    } else {
+      _posX = _posX.clamp(0, size.width - 48);
+      _posY = _posY.clamp(0, size.height - 48);
     }
   }
 

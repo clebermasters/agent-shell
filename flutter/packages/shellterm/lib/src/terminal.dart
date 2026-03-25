@@ -1,932 +1,589 @@
-import 'dart:math' show max;
+/// The central [Terminal] class — ties parser + buffer together and provides
+/// the public API consumed by the Flutter app.
+///
+/// Extends [ChangeNotifier] with microtask-coalesced notifications:
+/// multiple `write()` calls in the same frame produce ONE rebuild.
+library;
+
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:shellterm/src/core/buffer/buffer.dart';
-import 'package:shellterm/src/core/buffer/cell_offset.dart';
-import 'package:shellterm/src/core/buffer/line.dart';
-import 'package:shellterm/src/core/cursor.dart';
-import 'package:shellterm/src/core/escape/emitter.dart';
-import 'package:shellterm/src/core/escape/handler.dart';
-import 'package:shellterm/src/core/escape/parser.dart';
-import 'package:shellterm/src/core/input/handler.dart';
-import 'package:shellterm/src/core/input/keys.dart';
-import 'package:shellterm/src/core/mouse/button.dart';
-import 'package:shellterm/src/core/mouse/button_state.dart';
-import 'package:shellterm/src/core/mouse/handler.dart';
-import 'package:shellterm/src/core/mouse/mode.dart';
-import 'package:shellterm/src/core/platform.dart';
-import 'package:shellterm/src/core/state.dart';
-import 'package:shellterm/src/core/tabs.dart';
-import 'package:shellterm/src/utils/ascii.dart';
-import 'package:shellterm/src/utils/circular_buffer.dart';
 
-/// [Terminal] is an interface to interact with command line applications. It
-/// translates escape sequences from the application into updates to the
-/// [buffer] and events such as [onTitleChange] or [onBell], as well as
-/// translating user input into escape sequences that the application can
-/// understand.
-class Terminal extends ChangeNotifier implements TerminalState, EscapeHandler {
-  /// The number of lines that the scrollback buffer can hold. If the buffer
-  /// exceeds this size, the lines at the top of the buffer will be removed.
-  final int maxLines;
+import 'buffer.dart';
+import 'cell.dart';
+import 'emitter.dart';
+import 'handler.dart';
+import 'parser.dart';
 
-  /// Function that is called when the program requests the terminal to ring
-  /// the bell. If not set, the terminal will do nothing.
-  void Function()? onBell;
+class Terminal extends ChangeNotifier implements EscapeHandler {
+  Terminal({int maxLines = 1000})
+      : _mainBuffer = Buffer(cols: 80, rows: 24, maxLines: maxLines),
+        _altBuffer = Buffer(cols: 80, rows: 24, maxLines: 24, isAlt: true) {
+    _parser = EscapeParser(this);
+    _activeBuffer = _mainBuffer;
+  }
 
-  /// Function that is called when the program requests the terminal to change
-  /// the title of the window to [title].
-  void Function(String title)? onTitleChange;
+  late final EscapeParser _parser;
+  Buffer _mainBuffer;
+  Buffer _altBuffer;
+  late Buffer _activeBuffer;
 
-  /// Function that is called when the program requests the terminal to change
-  /// the icon of the window. [icon] is the name of the icon.
-  void Function(String icon)? onIconChange;
+  // ── Public API (matches app contract) ──────────────────────────────────
 
-  /// Function that is called when the terminal emits data to the underlying
-  /// program. This is typically caused by user inputs from [textInput],
-  /// [keyInput], [mouseInput], or [paste].
-  void Function(String data)? onOutput;
+  int get viewWidth => _activeBuffer.cols;
+  int get viewHeight => _activeBuffer.rows;
 
-  /// Function that is called when the dimensions of the terminal change.
-  void Function(int width, int height, int pixelWidth, int pixelHeight)?
-      onResize;
+  /// The active buffer — used by the selection overlay to read lines.
+  Buffer get buffer => _activeBuffer;
 
-  /// The [TerminalInputHandler] used by this terminal. [defaultInputHandler] is
-  /// used when not specified. User of this class can provide their own
-  /// implementation of [TerminalInputHandler] or extend [defaultInputHandler]
-  /// with [CascadeInputHandler].
-  TerminalInputHandler? inputHandler;
+  /// Called when the terminal generates output (DA responses, cursor reports).
+  Function(String)? onOutput;
 
-  TerminalMouseHandler? mouseHandler;
+  /// Called when the terminal is resized.
+  Function(int cols, int rows, double pixelWidth, double pixelHeight)? onResize;
 
-  /// The callback that is called when the terminal receives a unrecognized
-  /// escape sequence.
-  void Function(String code, List<String> args)? onPrivateOSC;
-
-  /// Flag to toggle os specific behaviors.
-  final TerminalTargetPlatform platform;
-
-  /// Characters that break selection when double clicking. If not set, the
-  /// [Buffer.defaultWordSeparators] will be used.
-  final Set<int>? wordSeparators;
-
-  Terminal({
-    this.maxLines = 1000,
-    this.onBell,
-    this.onTitleChange,
-    this.onIconChange,
-    this.onOutput,
-    this.onResize,
-    this.platform = TerminalTargetPlatform.unknown,
-    this.inputHandler = defaultInputHandler,
-    this.mouseHandler = defaultMouseHandler,
-    this.onPrivateOSC,
-    this.reflowEnabled = true,
-    this.wordSeparators,
-  });
-
-  late final _parser = EscapeParser(this);
-
-  final _emitter = const EscapeEmitter();
-
-  late var _buffer = _mainBuffer;
-
-  late final _mainBuffer = Buffer(
-    this,
-    maxLines: maxLines,
-    isAltBuffer: false,
-    wordSeparators: wordSeparators,
-  );
-
-  late final _altBuffer = Buffer(
-    this,
-    maxLines: maxLines,
-    isAltBuffer: true,
-    wordSeparators: wordSeparators,
-  );
-
-  final _tabStops = TabStops();
-
-  /// The last character written to the buffer. Used to implement some escape
-  /// sequences that repeat the last character.
-  var _precedingCodepoint = 0;
-
-  /* TerminalState */
-
-  int _viewWidth = 80;
-
-  int _viewHeight = 24;
-
-  final _cursorStyle = CursorStyle();
-
-  bool _insertMode = false;
-
-  bool _lineFeedMode = false;
-
-  bool _cursorKeysMode = false;
-
-  bool _reverseDisplayMode = false;
-
-  bool _originMode = false;
-
-  bool _autoWrapMode = true;
-
-  MouseMode _mouseMode = MouseMode.none;
-
-  MouseReportMode _mouseReportMode = MouseReportMode.normal;
-
-  bool _cursorBlinkMode = false;
-
-  bool _cursorVisibleMode = true;
-
-  bool _appKeypadMode = false;
-
-  bool _reportFocusMode = false;
-
-  bool _altBufferMouseScrollMode = false;
-
-  bool _bracketedPasteMode = false;
-
-  /* State getters */
-
-  /// Number of cells in a terminal row.
-  @override
-  int get viewWidth => _viewWidth;
-
-  /// Number of rows in this terminal.
-  @override
-  int get viewHeight => _viewHeight;
-
-  @override
-  CursorStyle get cursor => _cursorStyle;
-
-  @override
-  bool get insertMode => _insertMode;
-
-  @override
-  bool get lineFeedMode => _lineFeedMode;
-
-  @override
-  bool get cursorKeysMode => _cursorKeysMode;
-
-  @override
-  bool get reverseDisplayMode => _reverseDisplayMode;
-
-  @override
-  bool get originMode => _originMode;
-
-  @override
-  bool get autoWrapMode => _autoWrapMode;
-
-  @override
-  MouseMode get mouseMode => _mouseMode;
-
-  @override
-  MouseReportMode get mouseReportMode => _mouseReportMode;
-
-  @override
-  bool get cursorBlinkMode => _cursorBlinkMode;
-
-  @override
-  bool get cursorVisibleMode => _cursorVisibleMode;
-
-  @override
-  bool get appKeypadMode => _appKeypadMode;
-
-  @override
-  bool get reportFocusMode => _reportFocusMode;
-
-  @override
-  bool get altBufferMouseScrollMode => _altBufferMouseScrollMode;
-
-  @override
-  bool get bracketedPasteMode => _bracketedPasteMode;
-
-  /// Current active buffer of the terminal. This is initially [mainBuffer] and
-  /// can be switched back and forth from [altBuffer] to [mainBuffer] when
-  /// the underlying program requests it.
-  Buffer get buffer => _buffer;
-
-  Buffer get mainBuffer => _mainBuffer;
-
-  Buffer get altBuffer => _altBuffer;
-
-  bool get isUsingAltBuffer => _buffer == _altBuffer;
-
-  /// Lines of the active buffer.
-  IndexAwareCircularBuffer<BufferLine> get lines => _buffer.lines;
-
-  /// Whether the terminal performs reflow when the viewport size changes or
-  /// simply truncates lines. true by default.
-  @override
-  bool reflowEnabled;
-
-  /// Writes the data from the underlying program to the terminal. Calling this
-  /// updates the states of the terminal and emits events such as [onBell] or
-  /// [onTitleChange] when the escape sequences in [data] request it.
+  /// Feed VT data from the backend into the terminal.
+  ///
+  /// Uses microtask coalescing: multiple calls in the same frame produce
+  /// ONE [notifyListeners] call, preventing rebuild storms during
+  /// high-frequency data arrival (e.g., history hydration).
   void write(String data) {
     _parser.write(data);
+    if (!_dirty) {
+      _dirty = true;
+      scheduleMicrotask(_flush);
+    }
+  }
+
+  bool _dirty = false;
+
+  void _flush() {
+    if (!_dirty) return;
+    _dirty = false;
     notifyListeners();
   }
 
-  /// Sends a key event to the underlying program.
-  ///
-  /// See also:
-  /// - [charInput]
-  /// - [textInput]
-  /// - [paste]
-  bool keyInput(
-    TerminalKey key, {
-    bool shift = false,
-    bool alt = false,
-    bool ctrl = false,
-  }) {
-    final output = inputHandler?.call(
-      TerminalKeyboardEvent(
-        key: key,
-        shift: shift,
-        alt: alt,
-        ctrl: ctrl,
-        state: this,
-        altBuffer: isUsingAltBuffer,
-        platform: platform,
-      ),
-    );
+  /// Resize the terminal to [cols] × [rows].
+  void resize(int cols, int rows, [double pixelWidth = 0, double pixelHeight = 0]) {
+    if (cols <= 0 || rows <= 0) return;
+    if (cols == _activeBuffer.cols && rows == _activeBuffer.rows) return;
 
-    if (output != null) {
-      onOutput?.call(output);
-      return true;
-    }
-
-    return false;
+    _mainBuffer.resize(cols, rows);
+    _altBuffer.resize(cols, rows);
+    onResize?.call(cols, rows, pixelWidth, pixelHeight);
+    notifyListeners();
   }
 
-  /// Similary to [keyInput], but takes a character as input instead of a
-  /// [TerminalKey].
-  ///
-  /// See also:
-  /// - [keyInput]
-  /// - [textInput]
-  /// - [paste]
-  bool charInput(
-    int charCode, {
-    bool alt = false,
-    bool ctrl = false,
-  }) {
-    if (ctrl) {
-      // a(97) ~ z(122)
-      if (charCode >= Ascii.a && charCode <= Ascii.z) {
-        final output = charCode - Ascii.a + 1;
-        onOutput?.call(String.fromCharCode(output));
-        return true;
-      }
+  // ── Terminal modes ─────────────────────────────────────────────────────
 
-      // [(91) ~ _(95)
-      if (charCode >= Ascii.openBracket && charCode <= Ascii.underscore) {
-        final output = charCode - Ascii.openBracket + 27;
-        onOutput?.call(String.fromCharCode(output));
-        return true;
-      }
-    }
+  bool _insertMode = false;
+  bool _autoWrapMode = true;
+  bool _originMode = false;
+  bool _appCursorKeys = false;
+  bool _appKeypadMode = false;
+  bool _bracketedPasteMode = false;
+  bool _altBufferActive = false;
+  bool _cursorVisible = true;
+  bool _reverseVideo = false;
+  int _mouseMode = 0; // 0=off, 9/1000/1002/1003/1006
+  int _mouseEncoding = 0; // 0=normal, 1006=SGR
 
-    if (alt && platform != TerminalTargetPlatform.macos) {
-      if (charCode >= Ascii.a && charCode <= Ascii.z) {
-        final code = charCode - Ascii.a + 65;
-        final input = [0x1b, code];
-        onOutput?.call(String.fromCharCodes(input));
-        return true;
-      }
-    }
+  bool get insertMode => _insertMode;
+  bool get autoWrapMode => _autoWrapMode;
+  bool get originMode => _originMode;
+  bool get appCursorKeys => _appCursorKeys;
+  bool get appKeypadMode => _appKeypadMode;
+  bool get bracketedPasteMode => _bracketedPasteMode;
+  bool get cursorVisible => _cursorVisible;
+  bool get reverseVideo => _reverseVideo;
+  int get mouseMode => _mouseMode;
+  int get mouseEncoding => _mouseEncoding;
 
-    return false;
-  }
+  // Charset state — used by shiftIn/shiftOut and designateCharset.
+  // Currently stored for protocol correctness; character mapping is TODO.
+  int activeCharset = 0; // 0=G0, 1=G1
+  final List<int> charsets = [0, 0, 0, 0]; // G0-G3 charset designations
 
-  /// Sends regular text input to the underlying program.
-  ///
-  /// See also:
-  /// - [keyInput]
-  /// - [charInput]
-  /// - [paste]
-  void textInput(String text) {
+  // Last printed character (for REP — CSI b)
+  int _lastChar = 0;
+
+  // ── Input methods ──────────────────────────────────────────────────────
+
+  /// Send a text string as terminal input (e.g., typed characters).
+  bool textInput(String text) {
+    if (text.isEmpty) return false;
     onOutput?.call(text);
+    return true;
   }
 
-  /// Similar to [textInput], except that when the program tells the terminal
-  /// that it supports [bracketedPasteMode], the text is wrapped in escape
-  /// sequences to indicate that it is a paste operation. Prefer this method
-  /// over [textInput] when pasting text.
-  ///
-  /// See also:
-  /// - [textInput]
+  /// Paste text, wrapping in bracketed paste markers if enabled.
   void paste(String text) {
-    if (_bracketedPasteMode) {
-      onOutput?.call(_emitter.bracketedPaste(text));
+    if (bracketedPasteMode) {
+      onOutput?.call(EscapeEmitter.bracketedPaste(text));
     } else {
-      textInput(text);
+      onOutput?.call(text);
     }
   }
 
-  // Handle a mouse event and return true if it was handled.
-  bool mouseInput(
-    TerminalMouseButton button,
-    TerminalMouseButtonState buttonState,
-    CellOffset position,
-  ) {
-    final output = mouseHandler?.call(TerminalMouseEvent(
-      button: button,
-      buttonState: buttonState,
-      position: position,
-      state: this,
-      platform: platform,
-    ));
-    if (output != null) {
-      onOutput?.call(output);
-      return true;
-    }
-    return false;
-  }
+  // ── EscapeHandler implementation ───────────────────────────────────────
 
-  /// Resize the terminal screen. [newWidth] and [newHeight] should be greater
-  /// than 0. Text reflow is currently not implemented and will be avaliable in
-  /// the future.
-  @override
-  void resize(
-    int newWidth,
-    int newHeight, [
-    int? pixelWidth,
-    int? pixelHeight,
-  ]) {
-    newWidth = max(newWidth, 1);
-    newHeight = max(newHeight, 1);
-
-    onResize?.call(newWidth, newHeight, pixelWidth ?? 0, pixelHeight ?? 0);
-
-    //we need to resize both buffers so that they are ready when we switch between them
-    _altBuffer.resize(_viewWidth, _viewHeight, newWidth, newHeight);
-    _mainBuffer.resize(_viewWidth, _viewHeight, newWidth, newHeight);
-
-    _viewWidth = newWidth;
-    _viewHeight = newHeight;
-
-    if (buffer == _altBuffer) {
-      buffer.clearScrollback();
-    }
-
-    _altBuffer.resetVerticalMargins();
-    _mainBuffer.resetVerticalMargins();
-  }
-
-  @override
-  String toString() {
-    return 'Terminal(#$hashCode, $_viewWidth x $_viewHeight, ${_buffer.height} lines)';
-  }
-
-  /* Handlers */
-
-  @override
-  void writeChar(int char) {
-    _precedingCodepoint = char;
-    _buffer.writeChar(char);
-  }
-
-  /* SBC */
+  // Single-byte controls
 
   @override
   void bell() {
-    onBell?.call();
+    // No audio on mobile — could trigger haptic feedback
   }
 
   @override
-  void backspaceReturn() {
-    _buffer.moveCursorX(-1);
+  void backspace() {
+    if (_activeBuffer.cursorX > 0) {
+      _activeBuffer.cursorX = _activeBuffer.cursorX - 1;
+    }
   }
 
   @override
   void tab() {
-    final nextStop = _tabStops.find(_buffer.cursorX + 1, _viewWidth);
-
-    if (nextStop != null) {
-      _buffer.setCursorX(nextStop);
-    } else {
-      _buffer.setCursorX(_viewWidth);
-      _buffer.cursorGoForward(); // Enter pending-wrap state
-    }
+    _activeBuffer.cursorX = _activeBuffer.nextTabStop(_activeBuffer.cursorX);
   }
 
   @override
-  void lineFeed() {
-    _buffer.lineFeed();
-  }
+  void lineFeed() => _activeBuffer.lineFeed();
 
   @override
-  void carriageReturn() {
-    _buffer.setCursorX(0);
-  }
+  void carriageReturn() => _activeBuffer.carriageReturn();
 
   @override
-  void shiftOut() {
-    _buffer.charset.use(1);
-  }
+  void shiftOut() => activeCharset = 1;
 
   @override
-  void shiftIn() {
-    _buffer.charset.use(0);
-  }
+  void shiftIn() => activeCharset = 0;
 
   @override
-  void unknownSBC(int char) {
-    // no-op
+  void writeChar(int codepoint) {
+    _lastChar = codepoint;
+    _activeBuffer.writeChar(codepoint,
+        autoWrap: _autoWrapMode, insertMode: _insertMode);
   }
 
-  /* ANSI sequence */
-
-  @override
-  void saveCursor() {
-    _buffer.saveCursor();
-  }
+  // ESC sequences
 
   @override
-  void restoreCursor() {
-    _buffer.restoreCursor();
-  }
+  void saveCursor() => _activeBuffer.saveCursor();
 
   @override
-  void index() {
-    _buffer.index();
-  }
+  void restoreCursor() => _activeBuffer.restoreCursor();
+
+  @override
+  void index() => _activeBuffer.lineFeed();
+
+  @override
+  void reverseIndex() => _activeBuffer.reverseIndex();
 
   @override
   void nextLine() {
-    _buffer.index();
-    _buffer.setCursorX(0);
+    _activeBuffer.carriageReturn();
+    _activeBuffer.lineFeed();
   }
 
   @override
-  void setTapStop() {
-    _tabStops.setAt(_buffer.cursorX);
-  }
+  void setTabStop() => _activeBuffer.setTabStop(_activeBuffer.cursorX);
 
   @override
-  void reverseIndex() {
-    _buffer.reverseIndex();
-  }
+  void resetState() {
+    _insertMode = false;
+    _autoWrapMode = true;
+    _originMode = false;
+    _appCursorKeys = false;
+    _appKeypadMode = false;
+    _bracketedPasteMode = false;
+    _cursorVisible = true;
+    _reverseVideo = false;
+    _mouseMode = 0;
+    _mouseEncoding = 0;
+    activeCharset = 0;
+    charsets.fillRange(0, 4, 0);
+    _activeBuffer.cursorFg = 0;
+    _activeBuffer.cursorBg = 0;
+    _activeBuffer.cursorAttrs = 0;
 
-  @override
-  void designateCharset(int charset, int name) {
-    _buffer.charset.designate(charset, name);
-  }
-
-  @override
-  void unkownEscape(int char) {
-    // no-op
-  }
-
-  /* CSI */
-
-  @override
-  void repeatPreviousCharacter(int count) {
-    if (_precedingCodepoint == 0) {
-      return;
+    if (_altBufferActive) {
+      _altBufferActive = false;
+      _activeBuffer = _mainBuffer;
     }
 
-    for (var i = 0; i < count; i++) {
-      _buffer.writeChar(_precedingCodepoint);
+    _mainBuffer.resize(_mainBuffer.cols, _mainBuffer.rows);
+    _altBuffer.resize(_altBuffer.cols, _altBuffer.rows);
+    notifyListeners();
+  }
+
+  @override
+  void setAppKeypadMode(bool enabled) => _appKeypadMode = enabled;
+
+  @override
+  void designateCharset(int slot, int charset) {
+    if (slot >= 0 && slot < 4) {
+      charsets[slot] = charset;
+    }
+  }
+
+  // CSI sequences
+
+  @override
+  void setCursorPosition(int row, int col) {
+    _activeBuffer.cursorY = _originMode ? row + _activeBuffer.scrollTop : row;
+    _activeBuffer.cursorX = col;
+  }
+
+  @override
+  void cursorUp(int n) =>
+      _activeBuffer.cursorY = _activeBuffer.cursorY - n;
+
+  @override
+  void cursorDown(int n) =>
+      _activeBuffer.cursorY = _activeBuffer.cursorY + n;
+
+  @override
+  void cursorForward(int n) =>
+      _activeBuffer.cursorX = _activeBuffer.cursorX + n;
+
+  @override
+  void cursorBackward(int n) =>
+      _activeBuffer.cursorX = _activeBuffer.cursorX - n;
+
+  @override
+  void cursorNextLine(int n) {
+    _activeBuffer.cursorY = _activeBuffer.cursorY + n;
+    _activeBuffer.cursorX = 0;
+  }
+
+  @override
+  void cursorPrevLine(int n) {
+    _activeBuffer.cursorY = _activeBuffer.cursorY - n;
+    _activeBuffer.cursorX = 0;
+  }
+
+  @override
+  void cursorToColumn(int col) => _activeBuffer.cursorX = col;
+
+  @override
+  void cursorToRow(int row) =>
+      _activeBuffer.cursorY = _originMode ? row + _activeBuffer.scrollTop : row;
+
+  @override
+  void eraseInDisplay(int mode) {
+    switch (mode) {
+      case 0:
+        _activeBuffer.eraseBelow();
+      case 1:
+        _activeBuffer.eraseAbove();
+      case 2:
+        _activeBuffer.eraseDisplay();
+      case 3:
+        // Erase scrollback (clear history)
+        if (!_activeBuffer.isAlt) {
+          _activeBuffer.eraseDisplay();
+        }
     }
   }
 
   @override
-  void setCursor(int x, int y) {
-    _buffer.setCursor(x, y);
+  void eraseInLine(int mode) {
+    switch (mode) {
+      case 0:
+        _activeBuffer.eraseRight();
+      case 1:
+        _activeBuffer.eraseLeft();
+      case 2:
+        _activeBuffer.eraseLine();
+    }
   }
 
   @override
-  void setCursorX(int x) {
-    _buffer.setCursorX(x);
+  void eraseChars(int n) => _activeBuffer.eraseChars(n);
+
+  @override
+  void insertLines(int n) => _activeBuffer.insertLines(n);
+
+  @override
+  void deleteLines(int n) => _activeBuffer.deleteLines(n);
+
+  @override
+  void insertChars(int n) => _activeBuffer.insertChars(n);
+
+  @override
+  void deleteChars(int n) => _activeBuffer.deleteChars(n);
+
+  @override
+  void scrollUp(int n) => _activeBuffer.scrollUp(n);
+
+  @override
+  void scrollDown(int n) => _activeBuffer.scrollDown(n);
+
+  @override
+  void setScrollMargins(int top, int bottom) {
+    _activeBuffer.setScrollMargins(top, bottom);
+    _activeBuffer.cursorX = 0;
+    _activeBuffer.cursorY = _originMode ? _activeBuffer.scrollTop : 0;
   }
 
   @override
-  void setCursorY(int y) {
-    _buffer.setCursorY(y);
+  void tabForward(int n) {
+    for (var i = 0; i < n; i++) {
+      _activeBuffer.cursorX =
+          _activeBuffer.nextTabStop(_activeBuffer.cursorX);
+    }
   }
 
   @override
-  void moveCursorX(int offset) {
-    _buffer.moveCursorX(offset);
+  void tabBackward(int n) {
+    for (var i = 0; i < n; i++) {
+      _activeBuffer.cursorX =
+          _activeBuffer.prevTabStop(_activeBuffer.cursorX);
+    }
   }
 
   @override
-  void moveCursorY(int n) {
-    _buffer.moveCursorY(n);
+  void clearTabStop(int mode) {
+    switch (mode) {
+      case 0:
+        _activeBuffer.clearTabStop(_activeBuffer.cursorX);
+      case 3:
+        _activeBuffer.clearAllTabStops();
+    }
   }
 
   @override
-  void clearTabStopUnderCursor() {
-    _tabStops.clearAt(_buffer.cursorX);
+  void setMode(int mode, bool value) {
+    switch (mode) {
+      case 4: // IRM — insert/replace mode
+        _insertMode = value;
+      case 20: // LNM — linefeed/newline mode
+        // Auto-CR on LF — not commonly used
+        break;
+    }
   }
 
   @override
-  void clearAllTabStops() {
-    _tabStops.clearAll();
+  void setDecMode(int mode, bool value) {
+    switch (mode) {
+      case 1: // DECCKM — cursor keys mode
+        _appCursorKeys = value;
+      case 5: // DECSCNM — reverse video
+        _reverseVideo = value;
+      case 6: // DECOM — origin mode
+        _originMode = value;
+        if (value) {
+          _activeBuffer.cursorX = 0;
+          _activeBuffer.cursorY = _activeBuffer.scrollTop;
+        }
+      case 7: // DECAWM — auto-wrap mode
+        _autoWrapMode = value;
+      case 9: // X10 mouse
+        _mouseMode = value ? 9 : 0;
+      case 25: // DECTCEM — cursor visible
+        _cursorVisible = value;
+      case 47: // Alt buffer (no save cursor)
+        _switchBuffer(value, saveCursor: false);
+      case 1000: // VT200 mouse
+        _mouseMode = value ? 1000 : 0;
+      case 1002: // Button event mouse
+        _mouseMode = value ? 1002 : 0;
+      case 1003: // Any event mouse
+        _mouseMode = value ? 1003 : 0;
+      case 1004: // Focus events — not commonly used
+        break;
+      case 1005: // UTF-8 mouse encoding
+        _mouseEncoding = value ? 1005 : 0;
+      case 1006: // SGR mouse encoding
+        _mouseEncoding = value ? 1006 : 0;
+      case 1015: // URXVT mouse encoding
+        _mouseEncoding = value ? 1015 : 0;
+      case 1047: // Alt buffer
+        _switchBuffer(value, saveCursor: false);
+      case 1048: // Save/restore cursor
+        if (value) {
+          _mainBuffer.saveCursor();
+        } else {
+          _mainBuffer.restoreCursor();
+        }
+      case 1049: // Alt buffer + save cursor
+        _switchBuffer(value, saveCursor: true);
+      case 2004: // Bracketed paste
+        _bracketedPasteMode = value;
+    }
+  }
+
+  void _switchBuffer(bool toAlt, {required bool saveCursor}) {
+    if (toAlt && !_altBufferActive) {
+      if (saveCursor) _mainBuffer.saveCursor();
+      _altBufferActive = true;
+      _activeBuffer = _altBuffer;
+      _altBuffer.eraseDisplay();
+    } else if (!toAlt && _altBufferActive) {
+      _altBufferActive = false;
+      _activeBuffer = _mainBuffer;
+      if (saveCursor) _mainBuffer.restoreCursor();
+    }
   }
 
   @override
-  void sendPrimaryDeviceAttributes() {
-    onOutput?.call(_emitter.primaryDeviceAttributes());
+  void sendDeviceAttributes(int mode) {
+    if (mode == 0) {
+      onOutput?.call(EscapeEmitter.primaryDA);
+    } else {
+      onOutput?.call(EscapeEmitter.secondaryDA);
+    }
   }
 
   @override
-  void sendSecondaryDeviceAttributes() {
-    onOutput?.call(_emitter.secondaryDeviceAttributes());
-  }
-
-  @override
-  void sendTertiaryDeviceAttributes() {
-    onOutput?.call(_emitter.tertiaryDeviceAttributes());
-  }
-
-  @override
-  void sendOperatingStatus() {
-    onOutput?.call(_emitter.operatingStatus());
+  void sendDeviceStatus(int mode) {
+    if (mode == 5) {
+      onOutput?.call(EscapeEmitter.deviceStatusOk);
+    }
   }
 
   @override
   void sendCursorPosition() {
-    onOutput?.call(_emitter.cursorPosition(_buffer.cursorX, _buffer.cursorY));
+    onOutput?.call(
+        EscapeEmitter.cursorPosition(_activeBuffer.cursorY, _activeBuffer.cursorX));
   }
 
   @override
-  void setMargins(int top, [int? bottom]) {
-    _buffer.setVerticalMargins(top, bottom ?? viewHeight - 1);
+  void setCharacterProtection(int mode) {
+    // DECSCA — not commonly used
   }
 
   @override
-  void cursorNextLine(int amount) {
-    _buffer.moveCursorY(amount);
-    _buffer.setCursorX(0);
+  void setCursorStyle(int style) {
+    // CSI SP q — cursor shape. Could be exposed as a property.
   }
 
   @override
-  void cursorPrecedingLine(int amount) {
-    _buffer.moveCursorY(-amount);
-    _buffer.setCursorX(0);
+  void repeatChar(int n) {
+    if (_lastChar == 0) return;
+    for (var i = 0; i < n; i++) {
+      writeChar(_lastChar);
+    }
+  }
+
+  // SGR (Select Graphic Rendition)
+
+  @override
+  void resetStyle() {
+    _activeBuffer.cursorFg = 0;
+    _activeBuffer.cursorBg = 0;
+    _activeBuffer.cursorAttrs = 0;
   }
 
   @override
-  void eraseDisplayBelow() {
-    _buffer.eraseDisplayFromCursor();
-  }
+  void setBold(bool enabled) => _toggleAttr(CellAttr.bold, enabled);
 
   @override
-  void eraseDisplayAbove() {
-    _buffer.eraseDisplayToCursor();
-  }
+  void setFaint(bool enabled) => _toggleAttr(CellAttr.faint, enabled);
 
   @override
-  void eraseDisplay() {
-    _buffer.eraseDisplay();
-  }
+  void setItalic(bool enabled) => _toggleAttr(CellAttr.italic, enabled);
 
   @override
-  void eraseScrollbackOnly() {
-    _buffer.clearScrollback();
-  }
+  void setUnderline(bool enabled) => _toggleAttr(CellAttr.underline, enabled);
 
   @override
-  void eraseLineRight() {
-    _buffer.eraseLineFromCursor();
-  }
+  void setBlink(bool enabled) => _toggleAttr(CellAttr.blink, enabled);
 
   @override
-  void eraseLineLeft() {
-    _buffer.eraseLineToCursor();
-  }
+  void setInverse(bool enabled) => _toggleAttr(CellAttr.inverse, enabled);
 
   @override
-  void eraseLine() {
-    _buffer.eraseLine();
-  }
+  void setInvisible(bool enabled) => _toggleAttr(CellAttr.invisible, enabled);
 
   @override
-  void insertLines(int amount) {
-    _buffer.insertLines(amount);
-  }
+  void setStrikethrough(bool enabled) =>
+      _toggleAttr(CellAttr.strikethrough, enabled);
 
-  @override
-  void deleteLines(int amount) {
-    _buffer.deleteLines(amount);
-  }
-
-  @override
-  void deleteChars(int amount) {
-    _buffer.deleteChars(amount);
-  }
-
-  @override
-  void scrollUp(int amount) {
-    _buffer.scrollUp(amount);
-  }
-
-  @override
-  void scrollDown(int amount) {
-    _buffer.scrollDown(amount);
-  }
-
-  @override
-  void eraseChars(int amount) {
-    _buffer.eraseChars(amount);
-  }
-
-  @override
-  void insertBlankChars(int amount) {
-    _buffer.insertBlankChars(amount);
-  }
-
-  @override
-  void sendSize() {
-    onOutput?.call(_emitter.size(viewHeight, viewWidth));
-  }
-
-  @override
-  void unknownCSI(int finalByte) {
-    // no-op
-  }
-
-  /* Modes */
-
-  @override
-  void setInsertMode(bool enabled) {
-    _insertMode = enabled;
-  }
-
-  @override
-  void setLineFeedMode(bool enabled) {
-    _lineFeedMode = enabled;
-  }
-
-  @override
-  void setUnknownMode(int mode, bool enabled) {
-    // no-op
-  }
-
-  /* DEC Private modes */
-
-  @override
-  void setCursorKeysMode(bool enabled) {
-    _cursorKeysMode = enabled;
-  }
-
-  @override
-  void setReverseDisplayMode(bool enabled) {
-    _reverseDisplayMode = enabled;
-  }
-
-  @override
-  void setOriginMode(bool enabled) {
-    _originMode = enabled;
-  }
-
-  @override
-  void setColumnMode(bool enabled) {
-    // no-op
-  }
-
-  @override
-  void setAutoWrapMode(bool enabled) {
-    _autoWrapMode = enabled;
-  }
-
-  @override
-  void setMouseMode(MouseMode mode) {
-    _mouseMode = mode;
-  }
-
-  @override
-  void setCursorBlinkMode(bool enabled) {
-    _cursorBlinkMode = enabled;
-  }
-
-  @override
-  void setCursorVisibleMode(bool enabled) {
-    _cursorVisibleMode = enabled;
-  }
-
-  @override
-  void useAltBuffer() {
-    _buffer = _altBuffer;
-  }
-
-  @override
-  void useMainBuffer() {
-    _buffer = _mainBuffer;
-  }
-
-  @override
-  void clearAltBuffer() {
-    _altBuffer.clear();
-  }
-
-  @override
-  void setAppKeypadMode(bool enabled) {
-    _appKeypadMode = enabled;
-  }
-
-  @override
-  void setReportFocusMode(bool enabled) {
-    _reportFocusMode = enabled;
-  }
-
-  @override
-  void setMouseReportMode(MouseReportMode mode) {
-    _mouseReportMode = mode;
-  }
-
-  @override
-  void setAltBufferMouseScrollMode(bool enabled) {
-    _altBufferMouseScrollMode = enabled;
-  }
-
-  @override
-  void setBracketedPasteMode(bool enabled) {
-    _bracketedPasteMode = enabled;
-  }
-
-  @override
-  void setUnknownDecMode(int mode, bool enabled) {
-    // no-op
-  }
-
-  /* Select Graphic Rendition (SGR) */
-
-  @override
-  void resetCursorStyle() {
-    _cursorStyle.reset();
-  }
-
-  @override
-  void setCursorBold() {
-    _cursorStyle.setBold();
-  }
-
-  @override
-  void setCursorFaint() {
-    _cursorStyle.setFaint();
-  }
-
-  @override
-  void setCursorItalic() {
-    _cursorStyle.setItalic();
-  }
-
-  @override
-  void setCursorUnderline() {
-    _cursorStyle.setUnderline();
-  }
-
-  @override
-  void setCursorBlink() {
-    _cursorStyle.setBlink();
-  }
-
-  @override
-  void setCursorInverse() {
-    _cursorStyle.setInverse();
-  }
-
-  @override
-  void setCursorInvisible() {
-    _cursorStyle.setInvisible();
-  }
-
-  @override
-  void setCursorStrikethrough() {
-    _cursorStyle.setStrikethrough();
-  }
-
-  @override
-  void unsetCursorBold() {
-    _cursorStyle.unsetBold();
-  }
-
-  @override
-  void unsetCursorFaint() {
-    _cursorStyle.unsetFaint();
-  }
-
-  @override
-  void unsetCursorItalic() {
-    _cursorStyle.unsetItalic();
-  }
-
-  @override
-  void unsetCursorUnderline() {
-    _cursorStyle.unsetUnderline();
-  }
-
-  @override
-  void unsetCursorBlink() {
-    _cursorStyle.unsetBlink();
-  }
-
-  @override
-  void unsetCursorInverse() {
-    _cursorStyle.unsetInverse();
-  }
-
-  @override
-  void unsetCursorInvisible() {
-    _cursorStyle.unsetInvisible();
-  }
-
-  @override
-  void unsetCursorStrikethrough() {
-    _cursorStyle.unsetStrikethrough();
+  void _toggleAttr(int flag, bool enabled) {
+    if (enabled) {
+      _activeBuffer.cursorAttrs |= flag;
+    } else {
+      _activeBuffer.cursorAttrs &= ~flag;
+    }
   }
 
   @override
   void setForegroundColor16(int color) {
-    _cursorStyle.setForegroundColor16(color);
-  }
-
-  @override
-  void setForegroundColor256(int index) {
-    _cursorStyle.setForegroundColor256(index);
-  }
-
-  @override
-  void setForegroundColorRgb(int r, int g, int b) {
-    _cursorStyle.setForegroundColorRgb(r, g, b);
-  }
-
-  @override
-  void resetForeground() {
-    _cursorStyle.resetForegroundColor();
+    _activeBuffer.cursorFg = CellColor.pack(ColorType.named, color);
   }
 
   @override
   void setBackgroundColor16(int color) {
-    _cursorStyle.setBackgroundColor16(color);
+    _activeBuffer.cursorBg = CellColor.pack(ColorType.named, color);
+  }
+
+  @override
+  void setForegroundColor256(int index) {
+    _activeBuffer.cursorFg = CellColor.pack(ColorType.palette, index);
   }
 
   @override
   void setBackgroundColor256(int index) {
-    _cursorStyle.setBackgroundColor256(index);
+    _activeBuffer.cursorBg = CellColor.pack(ColorType.palette, index);
+  }
+
+  @override
+  void setForegroundColorRgb(int r, int g, int b) {
+    _activeBuffer.cursorFg =
+        CellColor.pack(ColorType.truecolor, (r << 16) | (g << 8) | b);
   }
 
   @override
   void setBackgroundColorRgb(int r, int g, int b) {
-    _cursorStyle.setBackgroundColorRgb(r, g, b);
+    _activeBuffer.cursorBg =
+        CellColor.pack(ColorType.truecolor, (r << 16) | (g << 8) | b);
   }
 
   @override
-  void resetBackground() {
-    _cursorStyle.resetBackgroundColor();
-  }
+  void resetForeground() => _activeBuffer.cursorFg = 0;
 
   @override
-  void unsupportedStyle(int param) {
-    // no-op
-  }
+  void resetBackground() => _activeBuffer.cursorBg = 0;
 
-  /* OSC */
+  // OSC
 
   @override
-  void setTitle(String name) {
-    onTitleChange?.call(name);
+  void setTitle(String title) {
+    // Could be exposed as a notifier property
   }
 
   @override
   void setIconName(String name) {
-    onIconChange?.call(name);
+    // Not used in mobile context
   }
 
-  @override
-  void unknownOSC(String ps, List<String> pt) {
-    onPrivateOSC?.call(ps, pt);
-  }
-
-  /* DCS */
+  // DCS
 
   @override
   void dcsHook(List<int> params, List<int> intermediates) {
-    onDcsHook?.call(params, intermediates);
+    // DCS hook — placeholder for Sixel/image protocol
   }
 
   @override
   void dcsPut(int byte) {
-    onDcsPut?.call(byte);
+    // DCS put — placeholder for Sixel/image protocol
   }
 
   @override
   void dcsUnhook() {
-    onDcsUnhook?.call();
+    // DCS unhook — placeholder for Sixel/image protocol
   }
 
-  /// Callback for DCS hook events.
-  void Function(List<int> params, List<int> intermediates)? onDcsHook;
+  // Fallback
 
-  /// Callback for DCS data bytes.
-  void Function(int byte)? onDcsPut;
+  @override
+  void unknownEscape(int char) {
+    // Silently ignore unrecognized sequences
+  }
 
-  /// Callback for DCS sequence termination.
-  void Function()? onDcsUnhook;
+  @override
+  void unknownCsi(int finalByte, List<int> params) {
+    // Silently ignore unrecognized CSI sequences
+  }
 }

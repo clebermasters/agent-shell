@@ -1,18 +1,11 @@
 name: shellterm
-description: ShellTerm — a high-performance, zero-dependency terminal emulator for Flutter. Supports Android, Web, and Linux desktop with 256-color/true-color, VT500 escape sequences, and hybrid glyph-atlas rendering.
-version: 1.0.0
+description: High-performance terminal emulator for Flutter. Zero dependencies.
+version: 2.0.0
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
-  flutter: ">=3.19.0"
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.10.0'
 
 dependencies:
-  meta: ^1.3.0
   flutter:
     sdk: flutter
-
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  test: ^1.6.5
-  lints: ^3.0.0

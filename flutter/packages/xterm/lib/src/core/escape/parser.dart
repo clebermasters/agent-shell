@@ -168,7 +168,13 @@ class EscapeParser {
       final char = _queue.consume();
       if (char == Ascii.ESC) {
         if (_queue.isEmpty) return false;
-        _queue.consume(); // consume the terminating char (usually backslash)
+        final next = _queue.consume();
+        if (next == Ascii.backslash) {
+          return true; // Proper ST (ESC \)
+        }
+        // Not ST — roll back ESC and the consumed byte so the following
+        // escape sequence (e.g. ESC [) is not destroyed.
+        _queue.rollback(2);
         return true;
       }
       if (char == Ascii.BEL) return true;
@@ -280,6 +286,17 @@ class EscapeParser {
         _csi.finalByte = char;
         return true;
       }
+
+      // Invalid byte for a CSI sequence (NULL or non-ASCII code point).
+      // Treat the CSI as malformed: mark it with finalByte 0 (no handler
+      // will match) and put the invalid character back so it is processed
+      // as normal text by the next _process() iteration.
+      if (hasParam) {
+        _csi.params.add(param);
+      }
+      _csi.finalByte = 0;
+      _queue.rollback(1);
+      return true;
     }
   }
 
@@ -515,9 +532,14 @@ class EscapeParser {
           handler.setForegroundColor16(NamedColor.white);
           continue;
         case 38:
+          if (i + 1 >= params.length) continue;
           final mode = params[i + 1];
           switch (mode) {
             case 2:
+              if (i + 4 >= params.length) {
+                i = params.length - 1;
+                break;
+              }
               final r = params[i + 2];
               final g = params[i + 3];
               final b = params[i + 4];
@@ -525,6 +547,10 @@ class EscapeParser {
               i += 4;
               break;
             case 5:
+              if (i + 2 >= params.length) {
+                i = params.length - 1;
+                break;
+              }
               final index = params[i + 2];
               handler.setForegroundColor256(index);
               i += 2;
@@ -560,9 +586,14 @@ class EscapeParser {
           handler.setBackgroundColor16(NamedColor.white);
           continue;
         case 48:
+          if (i + 1 >= params.length) continue;
           final mode = params[i + 1];
           switch (mode) {
             case 2:
+              if (i + 4 >= params.length) {
+                i = params.length - 1;
+                break;
+              }
               final r = params[i + 2];
               final g = params[i + 3];
               final b = params[i + 4];
@@ -570,6 +601,10 @@ class EscapeParser {
               i += 4;
               break;
             case 5:
+              if (i + 2 >= params.length) {
+                i = params.length - 1;
+                break;
+              }
               final index = params[i + 2];
               handler.setBackgroundColor256(index);
               i += 2;
@@ -1124,8 +1159,14 @@ class EscapeParser {
           return false;
         }
 
-        if (_queue.consume() == Ascii.backslash) {
+        final next = _queue.consume();
+        if (next == Ascii.backslash) {
           _osc.add(param.toString());
+        } else {
+          // Not ST (ESC \) — roll back ESC and the consumed byte so the
+          // next _process() iteration handles them as a new escape sequence.
+          _osc.add(param.toString());
+          _queue.rollback(2);
         }
 
         return true;

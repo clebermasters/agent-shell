@@ -12,6 +12,8 @@ import '../../terminal/screens/terminal_screen.dart';
 import '../../system/widgets/alert_banner.dart';
 import '../../../core/widgets/connection_status_banner.dart';
 import '../widgets/command_palette.dart';
+import '../../alerts/providers/alerts_provider.dart';
+import '../../alerts/screens/alerts_screen.dart';
 
 // Tab indices for HomeScreen NavigationBar
 const _kTabSessions = 0;
@@ -104,11 +106,58 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       body: Column(
         children: [
-          AlertBanner(
-            onTap: () {
-              setState(() => _currentIndex = _kTabSystem);
-              _saveIndex(_kTabSystem);
-            },
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: AlertBanner(
+                    onTap: () {
+                      setState(() => _currentIndex = _kTabSystem);
+                      _saveIndex(_kTabSystem);
+                    },
+                  ),
+                ),
+                Consumer(
+                  builder: (context, ref, _) {
+                    final alertsState = ref.watch(alertsProvider);
+                    final unread = alertsState.unreadCount;
+                    return Stack(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.notifications_outlined),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const AlertsScreen()),
+                            );
+                          },
+                        ),
+                        if (unread > 0)
+                          Positioned(
+                            right: 8,
+                            top: 8,
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Colors.red,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Text(
+                                unread > 99 ? '99+' : '$unread',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
           const ConnectionStatusBanner(),
           Expanded(child: IndexedStack(index: _currentIndex, children: _screens)),

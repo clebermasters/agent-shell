@@ -150,14 +150,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               onPressed: _openSettingsScreen,
               child: const Icon(Icons.settings),
             )
-          : FloatingActionButton.small(
-              heroTag: 'command_palette_fab',
-              onPressed: () => showCommandPalette(context, (index) {
-                setState(() => _currentIndex = index);
-                _saveIndex(index);
-              }),
-              child: const Icon(Icons.search),
-            ),
+          : (_currentIndex == _kTabCron || _currentIndex == _kTabDotfiles)
+              ? null
+              : FloatingActionButton.small(
+                  heroTag: 'command_palette_fab',
+                  onPressed: () => showCommandPalette(context, (index) {
+                    setState(() => _currentIndex = index);
+                    _saveIndex(index);
+                  }),
+                  child: const Icon(Icons.search),
+                ),
     );
   }
 }

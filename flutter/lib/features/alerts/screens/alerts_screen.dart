@@ -5,6 +5,7 @@ import '../../../data/models/notification.dart';
 import '../providers/alerts_provider.dart';
 import '../widgets/alert_audio_sheet.dart';
 import '../widgets/notification_card.dart';
+import 'alert_html_screen.dart';
 import 'alert_image_viewer_screen.dart';
 import 'alert_markdown_screen.dart';
 
@@ -123,6 +124,8 @@ class AlertsScreen extends ConsumerWidget {
       _openImageViewer(context, bytes, file.filename);
     } else if (mime.contains('markdown') || mime == 'text/plain') {
       _openMarkdownViewer(context, bytes, file.filename);
+    } else if (mime == 'text/html') {
+      _openHtmlViewer(context, bytes, file.filename);
     } else if (mime.startsWith('audio/')) {
       _openAudioSheet(context, bytes, file.filename, mime);
     } else {
@@ -146,6 +149,15 @@ class AlertsScreen extends ConsumerWidget {
       MaterialPageRoute(
         builder: (_) =>
             AlertMarkdownScreen(bytes: bytes, filename: filename),
+      ),
+    );
+  }
+
+  void _openHtmlViewer(
+      BuildContext context, Uint8List bytes, String filename) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AlertHtmlScreen(bytes: bytes, filename: filename),
       ),
     );
   }

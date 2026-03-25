@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../main.dart' show navigatorKey;
+import '../../features/alerts/screens/alerts_screen.dart';
 
 Future<void> initializeBackgroundService() async {
   // Background service is only supported on Android and iOS
@@ -19,6 +21,14 @@ Future<void> initializeBackgroundService() async {
     settings: const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     ),
+    onDidReceiveNotificationResponse: (response) {
+      final payload = response.payload ?? '';
+      if (payload.startsWith('alert:')) {
+        navigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (_) => const AlertsScreen()),
+        );
+      }
+    },
   );
 
   final androidPlugin = flutterLocalNotificationsPlugin

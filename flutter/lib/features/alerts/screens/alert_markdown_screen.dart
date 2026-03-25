@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class AlertMarkdownScreen extends StatelessWidget {
   final Uint8List bytes;
@@ -25,6 +26,9 @@ class AlertMarkdownScreen extends StatelessWidget {
         data: text,
         padding: const EdgeInsets.all(16),
         selectable: true,
+        onTapLink: (text, href, title) {
+          if (href != null) launchUrl(Uri.parse(href));
+        },
       ),
     );
   }

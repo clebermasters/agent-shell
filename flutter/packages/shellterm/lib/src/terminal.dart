@@ -66,12 +66,18 @@ class Terminal extends ChangeNotifier implements EscapeHandler {
   /// Resize the terminal to [cols] × [rows].
   void resize(int cols, int rows, [double pixelWidth = 0, double pixelHeight = 0]) {
     if (cols <= 0 || rows <= 0) return;
-    if (cols == _activeBuffer.cols && rows == _activeBuffer.rows) return;
+    if (cols == _mainBuffer.cols && rows == _mainBuffer.rows) return;
 
     _mainBuffer.resize(cols, rows);
     _altBuffer.resize(cols, rows);
     onResize?.call(cols, rows, pixelWidth, pixelHeight);
-    notifyListeners();
+
+    // Use coalesced notification — keyboard show/hide can fire multiple
+    // resize events in rapid succession.
+    if (!_dirty) {
+      _dirty = true;
+      scheduleMicrotask(_flush);
+    }
   }
 
   // ── Terminal modes ─────────────────────────────────────────────────────

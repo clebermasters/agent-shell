@@ -1,6 +1,7 @@
 package com.agentshell.feature.chat
 
 import android.app.Application
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentshell.data.local.PreferencesDataStore
@@ -85,6 +86,7 @@ data class ChatUiState(
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
+    savedStateHandle: SavedStateHandle,
     private val chatRepository: ChatRepository,
     private val dataStore: PreferencesDataStore,
     private val audioService: AudioService,
@@ -94,7 +96,18 @@ class ChatViewModel @Inject constructor(
 
     private val webSocketService: WebSocketService get() = chatRepository.webSocketService
 
-    private val _uiState = MutableStateFlow(ChatUiState())
+    // Nav args available immediately — no race with LaunchedEffect
+    private val navSessionName: String = savedStateHandle["sessionName"] ?: ""
+    private val navWindowIndex: Int = savedStateHandle["windowIndex"] ?: 0
+    private val navIsAcp: Boolean = savedStateHandle["isAcp"] ?: false
+
+    private val _uiState = MutableStateFlow(
+        ChatUiState(
+            sessionName = navSessionName,
+            windowIndex = navWindowIndex,
+            isAcp = navIsAcp,
+        )
+    )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     private var messageCollectionJob: Job? = null
@@ -170,6 +183,9 @@ class ChatViewModel @Inject constructor(
         val state = _uiState.value
         val trimmed = text.trim()
 
+        // Guard: don't send to tmux with an empty session name
+        if (!state.isAcp && state.sessionName.isBlank()) return
+
         // Handle file attachment upload
         val file = state.attachedFile
         if (file != null) {
@@ -223,8 +239,9 @@ class ChatViewModel @Inject constructor(
             // For TMUX chat, send as terminal input via tmux (matches Flutter behavior).
             // The backend has no "chat-input" type — tmux chat works by typing into
             // the terminal session where the AI agent reads stdin.
+            // Don't append \n — the backend sends Enter as a separate tmux command.
             webSocketService.sendInputViaTmux(
-                data = trimmed + "\n",
+                data = trimmed,
                 sessionName = state.sessionName,
                 windowIndex = state.windowIndex,
             )

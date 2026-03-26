@@ -1,0 +1,153 @@
+package com.agentshell.feature.terminal
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.agentshell.core.config.AppConfig
+import com.agentshell.data.local.PreferencesDataStore
+import com.agentshell.data.model.ConnectionStatus
+import com.agentshell.data.remote.WebSocketService
+import com.agentshell.data.services.AudioService
+import com.agentshell.data.services.TerminalService
+import com.agentshell.data.services.WhisperService
+import com.agentshell.terminal.XTermController
+import android.app.Application
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+data class TerminalUiState(
+    val isConnected: Boolean = false,
+    val isLoading: Boolean = true,
+    val sessionName: String = "",
+    val windowIndex: Int = 0,
+    val fontSize: Float = AppConfig.DEFAULT_FONT_SIZE,
+    val isRecording: Boolean = false,
+    val recordingDuration: Int = 0,
+    val isTranscribing: Boolean = false,
+)
+
+@HiltViewModel
+class TerminalViewModel @Inject constructor(
+    private val app: Application,
+    private val terminalService: TerminalService,
+    private val webSocketService: WebSocketService,
+    private val audioService: AudioService,
+    private val whisperService: WhisperService,
+    private val prefs: PreferencesDataStore,
+) : ViewModel() {
+
+    private val density: Float = app.resources.displayMetrics.scaledDensity
+
+    private val _uiState = MutableStateFlow(TerminalUiState())
+    val uiState: StateFlow<TerminalUiState> = _uiState.asStateFlow()
+
+    val xTermController = XTermController()
+
+    init {
+        // Observe connection status
+        viewModelScope.launch {
+            webSocketService.connectionStatus.collect { status ->
+                _uiState.update { it.copy(isConnected = status == ConnectionStatus.CONNECTED) }
+            }
+        }
+
+        // Load saved font size
+        viewModelScope.launch {
+            val fontSize = prefs.terminalFontSize.first()
+            _uiState.update { it.copy(fontSize = fontSize) }
+        }
+
+        // Observe audio recording
+        viewModelScope.launch {
+            audioService.recordingDuration.collect { seconds ->
+                _uiState.update { it.copy(recordingDuration = seconds) }
+            }
+        }
+        viewModelScope.launch {
+            audioService.isRecording.collect { recording ->
+                _uiState.update { it.copy(isRecording = recording) }
+            }
+        }
+    }
+
+    /**
+     * Called when xterm.js is ready (WebView loaded).
+     * Attaches to the backend session and starts piping data.
+     */
+    fun onTerminalReady(sessionName: String, windowIndex: Int, cols: Int, rows: Int) {
+        _uiState.update {
+            it.copy(sessionName = sessionName, windowIndex = windowIndex, isLoading = false)
+        }
+
+        // Wire: TerminalService output → XTermController → xterm.js WebView
+        terminalService.onTerminalData = { data ->
+            xTermController.writeData(data)
+        }
+
+        // Attach to backend (triggers history + live output)
+        terminalService.attachSession(sessionName, cols, rows, windowIndex)
+    }
+
+    /** Called when user types in xterm.js. */
+    fun onTerminalInput(data: String) {
+        terminalService.sendInput(data)
+    }
+
+    /** Called when xterm.js resizes (e.g. screen rotation). */
+    fun onTerminalResize(cols: Int, rows: Int) {
+        terminalService.resize(cols, rows)
+    }
+
+    fun detachSession() {
+        terminalService.detach()
+    }
+
+    // ── Zoom ────────────────────────────────────────────────────────────────
+
+    fun zoomIn() {
+        val newSize = (_uiState.value.fontSize + AppConfig.FONT_SIZE_STEP)
+            .coerceAtMost(AppConfig.MAX_FONT_SIZE)
+        _uiState.update { it.copy(fontSize = newSize) }
+        // xterm.js fontSize is in CSS pixels — pass sp value directly (WebView handles scaling)
+        xTermController.setFontSize(newSize)
+        viewModelScope.launch { prefs.setTerminalFontSize(newSize) }
+    }
+
+    fun zoomOut() {
+        val newSize = (_uiState.value.fontSize - AppConfig.FONT_SIZE_STEP)
+            .coerceAtLeast(AppConfig.MIN_FONT_SIZE)
+        _uiState.update { it.copy(fontSize = newSize) }
+        xTermController.setFontSize(newSize)
+        viewModelScope.launch { prefs.setTerminalFontSize(newSize) }
+    }
+
+    // ── Voice ───────────────────────────────────────────────────────────────
+
+    fun startRecording() {
+        viewModelScope.launch {
+            audioService.startRecording()
+        }
+    }
+
+    fun stopRecording() {
+        viewModelScope.launch {
+            val path = audioService.stopRecording() ?: return@launch
+            _uiState.update { it.copy(isTranscribing = true) }
+            val apiKey = prefs.openaiApiKey.first()
+            val text = whisperService.transcribe(path, apiKey)
+            _uiState.update { it.copy(isTranscribing = false) }
+            if (!text.isNullOrBlank()) {
+                terminalService.sendInput(text)
+            }
+        }
+    }
+
+    fun cancelRecording() {
+        viewModelScope.launch { audioService.cancelRecording() }
+    }
+}

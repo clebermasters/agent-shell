@@ -1,0 +1,250 @@
+package com.agentshell.terminal
+
+import android.annotation.SuppressLint
+import android.util.Base64
+import android.util.Log
+import android.view.ViewGroup
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+
+private const val TAG = "XTermView"
+
+/**
+ * Compose wrapper for an xterm.js-based terminal running in a WebView.
+ *
+ * @param onInput   Called when the user types in the terminal (base64-decoded UTF-8).
+ * @param onResize  Called when xterm.js reports a new terminal size.
+ * @param onReady   Called when xterm.js is initialized (with initial cols/rows).
+ * @param modifier  Standard Compose modifier.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun XTermView(
+    onInput: (String) -> Unit,
+    onResize: (cols: Int, rows: Int) -> Unit,
+    onReady: (cols: Int, rows: Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+
+    // Remember the bridge so callbacks update without recreating the WebView
+    val bridge = remember { XTermBridge(onInput, onResize, onReady) }
+    bridge.onInput = onInput
+    bridge.onResize = onResize
+    bridge.onReady = onReady
+
+    val webView = remember {
+        WebView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            setBackgroundColor(0xFF1E1E1E.toInt())
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.allowFileAccess = true
+            settings.loadWithOverviewMode = true
+            settings.useWideViewPort = false
+            settings.setSupportZoom(false)
+            settings.builtInZoomControls = false
+            settings.displayZoomControls = false
+
+            webViewClient = WebViewClient()
+            webChromeClient = WebChromeClient()
+
+            addJavascriptInterface(bridge, "Android")
+            loadUrl("file:///android_asset/terminal.html")
+        }
+    }
+
+    // Store webView reference in bridge for calling JS from Kotlin
+    bridge.webView = webView
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webView.removeJavascriptInterface("Android")
+            webView.destroy()
+        }
+    }
+
+    AndroidView(
+        factory = { webView },
+        modifier = modifier,
+    )
+}
+
+/**
+ * Controller for sending commands to xterm.js from Kotlin code.
+ * Obtain via [rememberXTermController].
+ */
+class XTermController {
+    internal var bridge: XTermBridge? = null
+
+    /** Write terminal data (raw UTF-8 string — will be base64-encoded for JS bridge). */
+    fun writeData(data: String) {
+        bridge?.writeData(data)
+    }
+
+    /** Request xterm.js to fit to its container. */
+    fun fit() {
+        bridge?.callJs("termBridge.fit()")
+    }
+
+    /** Set font size in pixels. */
+    fun setFontSize(px: Float) {
+        bridge?.callJs("termBridge.setFontSize(${px.toInt()})")
+    }
+
+    /** Clear the terminal. */
+    fun clear() {
+        bridge?.callJs("termBridge.clear()")
+    }
+
+    /** Focus the terminal. */
+    fun focus() {
+        bridge?.callJs("termBridge.focus()")
+    }
+}
+
+@Composable
+fun rememberXTermController(): XTermController = remember { XTermController() }
+
+/**
+ * Overload that also accepts an [XTermController] for sending data to the terminal.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun XTermView(
+    controller: XTermController,
+    onInput: (String) -> Unit,
+    onResize: (cols: Int, rows: Int) -> Unit,
+    onReady: (cols: Int, rows: Int) -> Unit,
+    onVolumeUp: (() -> Unit)? = null,
+    onVolumeDown: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+
+    val bridge = remember { XTermBridge(onInput, onResize, onReady) }
+    bridge.onInput = onInput
+    bridge.onResize = onResize
+    bridge.onReady = onReady
+    controller.bridge = bridge
+
+    // Store volume callbacks in bridge so the WebView can access them
+    bridge.onVolumeUp = onVolumeUp
+    bridge.onVolumeDown = onVolumeDown
+
+    val webView = remember {
+        object : WebView(context) {
+            override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+                if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                    when (event.keyCode) {
+                        android.view.KeyEvent.KEYCODE_VOLUME_UP -> {
+                            bridge.onVolumeUp?.invoke(); return true
+                        }
+                        android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                            bridge.onVolumeDown?.invoke(); return true
+                        }
+                    }
+                } else if (event.action == android.view.KeyEvent.ACTION_UP) {
+                    when (event.keyCode) {
+                        android.view.KeyEvent.KEYCODE_VOLUME_UP,
+                        android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> return true
+                    }
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }.apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            setBackgroundColor(0xFF1E1E1E.toInt())
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.allowFileAccess = true
+            settings.loadWithOverviewMode = true
+            settings.useWideViewPort = false
+            settings.setSupportZoom(false)
+            settings.builtInZoomControls = false
+            settings.displayZoomControls = false
+
+            webViewClient = WebViewClient()
+            webChromeClient = WebChromeClient()
+
+            addJavascriptInterface(bridge, "Android")
+            loadUrl("file:///android_asset/terminal.html")
+        }
+    }
+
+    bridge.webView = webView
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webView.removeJavascriptInterface("Android")
+            webView.destroy()
+        }
+    }
+
+    AndroidView(
+        factory = { webView },
+        modifier = modifier,
+    )
+}
+
+// ── Internal bridge ────────────────────────────────────────────────────────
+
+internal class XTermBridge(
+    var onInput: (String) -> Unit,
+    var onResize: (cols: Int, rows: Int) -> Unit,
+    var onReady: (cols: Int, rows: Int) -> Unit,
+) {
+    var webView: WebView? = null
+    var onVolumeUp: (() -> Unit)? = null
+    var onVolumeDown: (() -> Unit)? = null
+
+    // ── JS → Android (called from JavaScript) ─────────────────────────────
+
+    @JavascriptInterface
+    fun onTerminalInput(b64data: String) {
+        try {
+            val decoded = String(Base64.decode(b64data, Base64.DEFAULT), Charsets.UTF_8)
+            onInput(decoded)
+        } catch (e: Exception) {
+            Log.e(TAG, "onTerminalInput decode error", e)
+        }
+    }
+
+    @JavascriptInterface
+    fun onTerminalResize(cols: Int, rows: Int) {
+        Log.d(TAG, "onTerminalResize: ${cols}x${rows}")
+        onResize(cols, rows)
+    }
+
+    @JavascriptInterface
+    fun onTerminalReady(cols: Int, rows: Int) {
+        Log.d(TAG, "onTerminalReady: ${cols}x${rows}")
+        onReady(cols, rows)
+    }
+
+    // ── Android → JS ──────────────────────────────────────────────────────
+
+    fun writeData(data: String) {
+        val b64 = Base64.encodeToString(data.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        callJs("termBridge.write('$b64')")
+    }
+
+    fun callJs(script: String) {
+        val wv = webView ?: return
+        wv.post { wv.evaluateJavascript(script, null) }
+    }
+}

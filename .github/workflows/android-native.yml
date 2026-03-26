@@ -1,0 +1,79 @@
+name: Build Android Native
+
+on:
+  push:
+    branches: [main]
+    paths: [android-native/**, docker/android-native/**, docker/android-native-base/**]
+  pull_request:
+    paths: [android-native/**, docker/android-native/**, docker/android-native-base/**]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  base-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push base image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/android-native-base/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/agentshell-android-native-base:latest
+          cache-from: type=gha,scope=android-native-base
+          cache-to: type=gha,mode=max,scope=android-native-base
+
+  build-apk:
+    needs: base-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and tag base image
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/agentshell-android-native-base:latest
+          docker tag ghcr.io/${{ github.repository_owner }}/agentshell-android-native-base:latest agentshell-android-native-base:latest
+
+      - name: Build APK
+        run: ./build.sh release
+        working-directory: android-native
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshell-native-release
+          path: agentshell-native-release.apk
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agentshell-native-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

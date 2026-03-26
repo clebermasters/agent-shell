@@ -1,0 +1,19 @@
+package com.agentshell.core.config
+
+/**
+ * Build-time configuration placeholder.
+ *
+ * This file is auto-generated from ../.env by the Gradle [generateBuildConfig] task.
+ * Copy this to BuildConfig.kt for local development, or let Gradle generate it:
+ *   ./gradlew generateBuildConfig
+ *
+ * Docker builds generate BuildConfig.kt via the Dockerfile.
+ * DO NOT commit BuildConfig.kt — it contains secrets.
+ */
+object BuildConfig {
+    const val DEFAULT_SERVER_LIST = ""
+    const val DEFAULT_API_KEY = ""
+    const val DEFAULT_SHOW_THINKING = true
+    const val DEFAULT_SHOW_TOOL_CALLS = true
+    const val AUTH_TOKEN = ""
+}

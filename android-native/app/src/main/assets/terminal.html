@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Terminal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1E1E1E; }
+  #terminal { width: 100%; height: 100%; }
+  .xterm { height: 100%; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+<script>
+(function() {
+  'use strict';
+
+  var term = new Terminal({
+    fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", "Menlo", "Consolas", monospace',
+    fontSize: 14,
+    lineHeight: 1.2,
+    cursorBlink: true,
+    cursorStyle: 'block',
+    scrollback: 50000,
+    allowProposedApi: true,
+    theme: {
+      background: '#1E1E1E',
+      foreground: '#D4D4D4',
+      cursor: '#FFFFFF',
+      cursorAccent: '#1E1E1E',
+      selectionBackground: '#264F78',
+      black: '#000000',
+      red: '#CD3131',
+      green: '#0DBC79',
+      yellow: '#E5E510',
+      blue: '#2472C8',
+      magenta: '#BC3FBC',
+      cyan: '#11A8CD',
+      white: '#E5E5E5',
+      brightBlack: '#666666',
+      brightRed: '#F14C4C',
+      brightGreen: '#23D18B',
+      brightYellow: '#F5F543',
+      brightBlue: '#3B8EEA',
+      brightMagenta: '#D670D6',
+      brightCyan: '#29B8DB',
+      brightWhite: '#FFFFFF'
+    }
+  });
+
+  var fitAddon = new FitAddon.FitAddon();
+  var webLinksAddon = new WebLinksAddon.WebLinksAddon();
+
+  term.loadAddon(fitAddon);
+  term.loadAddon(webLinksAddon);
+  term.open(document.getElementById('terminal'));
+
+  // Initial fit
+  try { fitAddon.fit(); } catch(e) {}
+
+  // Re-fit on window resize
+  var resizeTimer = null;
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function() {
+      try { fitAddon.fit(); } catch(e) {}
+    }, 100);
+  });
+
+  // ── Bridge: xterm.js → Android ──────────────────────────────────────────
+
+  // User types in terminal → send to Android
+  term.onData(function(data) {
+    try {
+      if (window.Android) {
+        window.Android.onTerminalInput(btoa(unescape(encodeURIComponent(data))));
+      }
+    } catch(e) { console.error('onData bridge error:', e); }
+  });
+
+  // Terminal resized → notify Android
+  term.onResize(function(size) {
+    try {
+      if (window.Android) {
+        window.Android.onTerminalResize(size.cols, size.rows);
+      }
+    } catch(e) { console.error('onResize bridge error:', e); }
+  });
+
+  // Notify Android that terminal is ready
+  setTimeout(function() {
+    try {
+      if (window.Android) {
+        var dims = fitAddon.proposeDimensions();
+        var cols = dims ? dims.cols : term.cols;
+        var rows = dims ? dims.rows : term.rows;
+        window.Android.onTerminalReady(cols, rows);
+      }
+    } catch(e) { console.error('onReady bridge error:', e); }
+  }, 200);
+
+  // ── Bridge: Android → xterm.js ──────────────────────────────────────────
+
+  window.termBridge = {
+    // Write base64-encoded UTF-8 data to terminal
+    write: function(b64data) {
+      try {
+        var decoded = decodeURIComponent(escape(atob(b64data)));
+        term.write(decoded);
+      } catch(e) { console.error('write bridge error:', e); }
+    },
+
+    // Resize terminal
+    resize: function(cols, rows) {
+      try {
+        term.resize(cols, rows);
+      } catch(e) {}
+    },
+
+    // Fit terminal to container
+    fit: function() {
+      try { fitAddon.fit(); } catch(e) {}
+    },
+
+    // Set font size in pixels
+    setFontSize: function(px) {
+      try {
+        term.options.fontSize = px;
+        fitAddon.fit();
+      } catch(e) {}
+    },
+
+    // Clear terminal
+    clear: function() {
+      try { term.clear(); } catch(e) {}
+    },
+
+    // Focus terminal
+    focus: function() {
+      try { term.focus(); } catch(e) {}
+    },
+
+    // Get current dimensions
+    getDimensions: function() {
+      return JSON.stringify({ cols: term.cols, rows: term.rows });
+    }
+  };
+
+})();
+</script>
+</body>
+</html>

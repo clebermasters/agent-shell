@@ -67,8 +67,13 @@ import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatBlockType
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
+import android.annotation.SuppressLint
+import android.graphics.Typeface
+import android.text.method.LinkMovementMethod
 import io.noties.markwon.Markwon
+import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
+import io.noties.markwon.ext.tables.TablePlugin
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -296,29 +301,65 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val markwon = remember(context) {
+    val isDark = MaterialTheme.colorScheme.background.let {
+        (it.red * 255).roundToInt() < 128
+    }
+
+    val textColorInt = android.graphics.Color.argb(
+        (color.alpha * 255).roundToInt(),
+        (color.red * 255).roundToInt(),
+        (color.green * 255).roundToInt(),
+        (color.blue * 255).roundToInt(),
+    )
+
+    val codeBg = if (isDark) 0xFF282C34.toInt() else 0xFFF1F5F9.toInt()
+    val codeText = if (isDark) 0xFF67E8F9.toInt() else 0xFF0369A1.toInt()
+    val codeBlockText = if (isDark) 0xFFD4D4D4.toInt() else 0xFF1E293B.toInt()
+    val linkCol = if (isDark) 0xFF67E8F9.toInt() else 0xFF0369A1.toInt()
+    val density = context.resources.displayMetrics.density
+    val scaledDensity = context.resources.displayMetrics.scaledDensity
+
+    // Build Markwon once per theme — TablePlugin.create(context) enables scroll-wrapping for wide tables
+    val markwon = remember(isDark) {
         Markwon.builder(context)
             .usePlugin(StrikethroughPlugin.create())
+            .usePlugin(TablePlugin.create(context))
+            .usePlugin(object : AbstractMarkwonPlugin() {
+                override fun configureTheme(builder: io.noties.markwon.core.MarkwonTheme.Builder) {
+                    builder
+                        .codeBackgroundColor(codeBg)
+                        .codeTextColor(codeText)
+                        .codeTextSize((13 * scaledDensity).toInt())
+                        .codeBlockBackgroundColor(codeBg)
+                        .codeBlockTextColor(codeBlockText)
+                        .codeBlockTextSize((13 * scaledDensity).toInt())
+                        .codeBlockMargin((8 * density).toInt())
+                        .codeTypeface(Typeface.MONOSPACE)
+                        .linkColor(linkCol)
+                        .headingBreakHeight(0)
+                        .blockMargin((8 * density).toInt())
+                        .bulletWidth((6 * density).toInt())
+                        .blockQuoteWidth((3 * density).toInt())
+                }
+            })
             .build()
     }
-    val textColor = color.copy(alpha = 1f)
-    val colorInt = android.graphics.Color.argb(
-        (textColor.alpha * 255).roundToInt(),
-        (textColor.red * 255).roundToInt(),
-        (textColor.green * 255).roundToInt(),
-        (textColor.blue * 255).roundToInt(),
-    )
+
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.fillMaxWidth(),
         factory = { ctx ->
             TextView(ctx).apply {
-                setTextColor(colorInt)
-                textSize = 14f
+                setTextColor(textColorInt)
+                textSize = 15f
+                setLineSpacing(4 * density, 1f)
+                setTextIsSelectable(true)
+                movementMethod = LinkMovementMethod.getInstance()
+                linksClickable = true
             }
         },
-        update = { textView ->
-            textView.setTextColor(colorInt)
-            markwon.setMarkdown(textView, text)
+        update = { tv ->
+            tv.setTextColor(textColorInt)
+            markwon.setMarkdown(tv, text)
         },
     )
 }

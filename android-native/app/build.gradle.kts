@@ -168,6 +168,9 @@ dependencies {
     implementation("io.noties.markwon:ext-strikethrough:4.6.2") {
         exclude(group = "org.jetbrains", module = "annotations-java5")
     }
+    implementation("io.noties.markwon:ext-tables:4.6.2") {
+        exclude(group = "org.jetbrains", module = "annotations-java5")
+    }
     implementation("io.noties.markwon:syntax-highlight:4.6.2") {
         exclude(group = "org.jetbrains", module = "annotations-java5")
     }

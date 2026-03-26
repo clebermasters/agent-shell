@@ -187,14 +187,24 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   }
 
   void _measureCellSize() {
+    // Measure using multiple characters and divide by count to get an
+    // accurate average advance width.  A single character's
+    // maxIntrinsicWidth can drift from the true advance at large font
+    // sizes due to hinting/rounding, causing cursor-to-grid misalignment.
+    const probe = 'mmmmmmmmmm';
     final builder = ui.ParagraphBuilder(ui.ParagraphStyle(
       fontFamily: _style.fontFamily,
       fontSize: _style.fontSize,
     ))
-      ..addText('M');
+      ..pushStyle(ui.TextStyle(
+        fontFamily: _style.fontFamily,
+        fontFamilyFallback: _style.fontFamilyFallback,
+        fontSize: _style.fontSize,
+      ))
+      ..addText(probe);
     final para = builder.build()
       ..layout(const ui.ParagraphConstraints(width: double.infinity));
-    _cellWidth = para.maxIntrinsicWidth;
+    _cellWidth = para.maxIntrinsicWidth / probe.length;
     _cellHeight = para.height * _style.fontHeightFactor;
     para.dispose();
   }
@@ -343,8 +353,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// Paragraphs are always rendered at the native screen resolution.
   void _paintCellParagraph(
       ui.Canvas canvas, double x, int cp, ui.Color fgColor, CellData cell) {
-    // Hash: codepoint(21 bits) + fg color(32 bits) + attrs(8 bits)
-    final key = cp ^ (cell.foreground * 31) ^ (cell.attributes * 127);
+    // Cache key must uniquely identify the visual appearance of a cell.
+    // Previous hash `cp ^ (fg * 31) ^ (attrs * 127)` caused collisions:
+    // bold 'M' (0x4D ^ 0x7F = 0x32) collided with normal '2' (0x32).
+    // Use bit-shifting to keep the fields from overlapping.
+    final key = cp | (cell.foreground << 21) | (cell.attributes << 53);
 
     var para = _paraCache.get(key);
     if (para == null) {

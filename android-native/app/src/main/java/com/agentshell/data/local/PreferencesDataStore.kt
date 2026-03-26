@@ -34,6 +34,8 @@ class PreferencesDataStore @Inject constructor(
         val FILE_SHOW_HIDDEN = booleanPreferencesKey("file_show_hidden")
         val FILE_EDITOR_FONT_SIZE = floatPreferencesKey("file_editor_font_size")
         val HOME_TAB_INDEX = intPreferencesKey("home_tab_index")
+        val VOICE_BUTTON_POS_X = floatPreferencesKey("voice_button_pos_x")
+        val VOICE_BUTTON_POS_Y = floatPreferencesKey("voice_button_pos_y")
     }
 
     // ─── selectedHostId ──────────────────────────────────────────────────────
@@ -157,6 +159,21 @@ class PreferencesDataStore @Inject constructor(
 
     suspend fun setHomeTabIndex(value: Int) {
         dataStore.edit { it[Keys.HOME_TAB_INDEX] = value }
+    }
+
+    // ─── voiceButtonPos ──────────────────────────────────────────────────
+
+    val voiceButtonPosX: Flow<Float>
+        get() = dataStore.data.map { it[Keys.VOICE_BUTTON_POS_X] ?: -1f }
+
+    val voiceButtonPosY: Flow<Float>
+        get() = dataStore.data.map { it[Keys.VOICE_BUTTON_POS_Y] ?: -1f }
+
+    suspend fun setVoiceButtonPos(x: Float, y: Float) {
+        dataStore.edit { prefs ->
+            prefs[Keys.VOICE_BUTTON_POS_X] = x
+            prefs[Keys.VOICE_BUTTON_POS_Y] = y
+        }
     }
 
     // ─── chat draft messages ─────────────────────────────────────────────────

@@ -111,6 +111,9 @@ fun AgentShellNavHost() {
                 onSwitchToChat = { name, idx ->
                     navController.navigate(Routes.chat(name, idx)) { popUpTo(Routes.HOME) }
                 },
+                onNavigateToFileBrowser = { path ->
+                    navController.navigate(Routes.fileBrowser(path))
+                },
             )
         }
 

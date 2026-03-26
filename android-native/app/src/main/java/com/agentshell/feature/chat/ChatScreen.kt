@@ -74,6 +74,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import android.Manifest
+import android.content.pm.PackageManager
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.core.content.ContextCompat
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -94,6 +106,54 @@ fun ChatScreen(
     var autoScroll by remember { mutableStateOf(true) }
     var showMenu by remember { mutableStateOf(false) }
     var swipeDx by remember { mutableFloatStateOf(0f) }
+    var showVoiceButton by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    // Load voice button preference
+    LaunchedEffect(Unit) {
+        showVoiceButton = viewModel.isVoiceButtonVisible()
+    }
+
+    // Mic permission launcher
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) viewModel.startVoiceRecording()
+    }
+
+    // File picker launcher
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val cr = context.contentResolver
+        val mimeType = cr.getType(uri) ?: "application/octet-stream"
+        var filename = "file"
+        var size = 0L
+        cr.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (nameIdx >= 0) filename = cursor.getString(nameIdx) ?: "file"
+                if (sizeIdx >= 0) size = cursor.getLong(sizeIdx)
+            }
+        }
+        viewModel.attachFile(uri.toString(), filename, mimeType, size)
+    }
+
+    // Auto-insert transcribed voice text into draft
+    LaunchedEffect(uiState.transcribedText) {
+        val text = uiState.transcribedText ?: return@LaunchedEffect
+        if (text.isNotBlank()) {
+            val current = uiState.draftMessage
+            val newDraft = if (current.isBlank()) text else "$current $text"
+            viewModel.updateDraft(newDraft)
+            viewModel.clearTranscribedText()
+            if (viewModel.isVoiceAutoEnter()) {
+                viewModel.sendMessage(newDraft)
+            }
+        }
+    }
 
     // Initialise the chat watch on first composition
     LaunchedEffect(sessionName, windowIndex, isAcp) {
@@ -275,6 +335,28 @@ fun ChatScreen(
                     onValueChange = viewModel::updateDraft,
                     onSend = { viewModel.sendMessage(uiState.draftMessage) },
                     isStreaming = uiState.isStreaming,
+                    showVoiceButton = showVoiceButton,
+                    isRecording = uiState.isRecording,
+                    isTranscribing = uiState.isTranscribing,
+                    recordingDuration = uiState.recordingDuration,
+                    onMicPressed = {
+                        if (uiState.isRecording) {
+                            viewModel.stopVoiceRecording()
+                        } else {
+                            if (ContextCompat.checkSelfPermission(
+                                    context, Manifest.permission.RECORD_AUDIO,
+                                ) == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                viewModel.startVoiceRecording()
+                            } else {
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        }
+                    },
+                    attachedFile = uiState.attachedFile,
+                    isUploading = uiState.isUploading,
+                    onAttachClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                    onRemoveAttachment = viewModel::removeAttachedFile,
                 )
             }
 
@@ -359,6 +441,15 @@ private fun ChatInputBar(
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
     isStreaming: Boolean,
+    showVoiceButton: Boolean = false,
+    isRecording: Boolean = false,
+    isTranscribing: Boolean = false,
+    recordingDuration: Int = 0,
+    onMicPressed: () -> Unit = {},
+    attachedFile: AttachedFile? = null,
+    isUploading: Boolean = false,
+    onAttachClick: () -> Unit = {},
+    onRemoveAttachment: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -366,54 +457,182 @@ private fun ChatInputBar(
         tonalElevation = 3.dp,
         shadowElevation = 4.dp,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            IconButton(onClick = { /* file attach — future */ }) {
-                Icon(
-                    Icons.Default.AttachFile,
-                    contentDescription = "Attach file",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // File preview strip
+            AnimatedVisibility(visible = attachedFile != null) {
+                attachedFile?.let { file ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Default.InsertDriveFile,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = file.filename,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = formatFileSize(file.sizeBytes),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(
+                                onClick = onRemoveAttachment,
+                                modifier = Modifier.size(24.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Remove attachment",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
-            OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message…") },
-                maxLines = 6,
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                shape = RoundedCornerShape(24.dp),
-            )
+            // Recording indicator strip
+            AnimatedVisibility(visible = isRecording || isTranscribing) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isRecording) Color(0x20EF4444) else Color(0x206366F1),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (isTranscribing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFF6366F1),
+                            )
+                            Text(
+                                text = "Transcribing…",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFF6366F1),
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(Color(0xFFEF4444), CircleShape),
+                            )
+                            Text(
+                                text = "Recording %d:%02d".format(
+                                    recordingDuration / 60, recordingDuration % 60,
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFEF4444),
+                            )
+                        }
+                    }
+                }
+            }
 
-            Spacer(Modifier.width(4.dp))
-
-            IconButton(
-                onClick = onSend,
-                enabled = value.isNotBlank() && !isStreaming,
+            // Input row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.Bottom,
             ) {
-                if (isStreaming) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                    )
-                } else {
+                IconButton(onClick = onAttachClick) {
                     Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send",
-                        tint = if (value.isNotBlank())
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant,
+                        Icons.Default.AttachFile,
+                        contentDescription = "Attach file",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Message…") },
+                    maxLines = 6,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                    shape = RoundedCornerShape(24.dp),
+                )
+
+                // Mic button
+                if (showVoiceButton) {
+                    IconButton(
+                        onClick = onMicPressed,
+                        enabled = !isTranscribing,
+                    ) {
+                        when {
+                            isTranscribing -> CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            isRecording -> Icon(
+                                Icons.Default.Stop,
+                                contentDescription = "Stop recording",
+                                tint = Color(0xFFEF4444),
+                            )
+                            else -> Icon(
+                                Icons.Default.Mic,
+                                contentDescription = "Voice input",
+                                tint = Color(0xFF6366F1),
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                IconButton(
+                    onClick = onSend,
+                    enabled = (value.isNotBlank() || attachedFile != null) && !isStreaming && !isUploading,
+                ) {
+                    if (isStreaming || isUploading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            tint = if (value.isNotBlank() || attachedFile != null)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+private fun formatFileSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
+    bytes < 1024 * 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    else -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
 }
 
 // ---------------------------------------------------------------------------

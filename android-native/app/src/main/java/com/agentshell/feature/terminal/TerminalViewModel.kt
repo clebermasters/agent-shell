@@ -6,14 +6,19 @@ import com.agentshell.core.config.AppConfig
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.remote.WebSocketService
+import com.agentshell.data.remote.getSessionCwd
+import com.agentshell.data.remote.renameSession
 import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.TerminalService
 import com.agentshell.data.services.WhisperService
 import com.agentshell.terminal.XTermController
 import android.app.Application
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -48,6 +53,9 @@ class TerminalViewModel @Inject constructor(
 
     val xTermController = XTermController()
 
+    private val _cwdResult = MutableSharedFlow<String>(replay = 1)
+    val cwdResult: SharedFlow<String> = _cwdResult.asSharedFlow()
+
     init {
         // Observe connection status
         viewModelScope.launch {
@@ -71,6 +79,17 @@ class TerminalViewModel @Inject constructor(
         viewModelScope.launch {
             audioService.isRecording.collect { recording ->
                 _uiState.update { it.copy(isRecording = recording) }
+            }
+        }
+
+        // Listen for session-cwd responses from the backend
+        viewModelScope.launch {
+            webSocketService.messages.collect { message ->
+                val type = message["type"] as? String ?: return@collect
+                if (type == "session-cwd") {
+                    val path = message["cwd"] as? String ?: return@collect
+                    _cwdResult.emit(path)
+                }
             }
         }
     }
@@ -149,5 +168,26 @@ class TerminalViewModel @Inject constructor(
 
     fun cancelRecording() {
         viewModelScope.launch { audioService.cancelRecording() }
+    }
+
+    suspend fun getShowVoiceButton(): Boolean = prefs.showVoiceButton.first()
+
+    // ── Session rename ────────────────────────────────────────────────────
+
+    fun renameSession(newName: String) {
+        val currentName = _uiState.value.sessionName
+        if (currentName.isNotBlank() && newName.isNotBlank()) {
+            webSocketService.renameSession(currentName, newName)
+            _uiState.update { it.copy(sessionName = newName) }
+        }
+    }
+
+    // ── File browser CWD ──────────────────────────────────────────────────
+
+    fun requestSessionCwd() {
+        val currentName = _uiState.value.sessionName
+        if (currentName.isNotBlank()) {
+            webSocketService.getSessionCwd(currentName)
+        }
     }
 }

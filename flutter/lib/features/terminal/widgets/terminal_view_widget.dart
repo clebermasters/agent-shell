@@ -53,6 +53,8 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   double _lastHeight = 0;
   Timer? _resizeDebounce;
   Timer? _zoomResizeDebounce;
+  Timer? _zoomInfoTimer;
+  bool _showZoomInfo = false;
   int _lastEnterMs = 0; // dedup Enter from onKey + onChanged
 
   late FocusNode _wrapperFocusNode;
@@ -122,6 +124,7 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   void dispose() {
     _resizeDebounce?.cancel();
     _zoomResizeDebounce?.cancel();
+    _zoomInfoTimer?.cancel();
     _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     if (!kIsWeb) {
@@ -439,17 +442,32 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
   void _zoomIn() {
     _lastCols = 0;
     _lastRows = 0;
-    setState(() => _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0));
+    setState(() {
+      _fontSize = (_fontSize * 1.2).clamp(8.0, 32.0);
+      _showZoomInfo = true;
+    });
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
     _scheduleZoomResize();
+    _scheduleZoomInfoHide();
   }
 
   void _zoomOut() {
     _lastCols = 0;
     _lastRows = 0;
-    setState(() => _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0));
+    setState(() {
+      _fontSize = (_fontSize / 1.2).clamp(8.0, 32.0);
+      _showZoomInfo = true;
+    });
     widget.prefs.setDouble(AppConfig.keyTerminalFontSize, _fontSize);
     _scheduleZoomResize();
+    _scheduleZoomInfoHide();
+  }
+
+  void _scheduleZoomInfoHide() {
+    _zoomInfoTimer?.cancel();
+    _zoomInfoTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _showZoomInfo = false);
+    });
   }
 
   /// Debounce zoom resize: wait until the user stops pressing volume keys
@@ -615,6 +633,40 @@ class _TerminalViewWidgetState extends State<TerminalViewWidget>
                                   color: Colors.white,
                                   fontSize: 10,
                                   fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        // Zoom info overlay
+                        if (_showZoomInfo)
+                          Positioned(
+                            bottom: 12,
+                            left: 0,
+                            right: 0,
+                            child: Center(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.85),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.white24,
+                                    width: 0.5,
+                                  ),
+                                ),
+                                child: Text(
+                                  '${_fontSize.toStringAsFixed(1)}pt  '
+                                  '${widget.terminal.viewWidth}x${widget.terminal.viewHeight}  '
+                                  '${w.toInt()}x${h.toInt()}px',
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 11,
+                                    fontFamily: 'JetBrains Mono',
+                                    fontWeight: FontWeight.w500,
+                                  ),
                                 ),
                               ),
                             ),

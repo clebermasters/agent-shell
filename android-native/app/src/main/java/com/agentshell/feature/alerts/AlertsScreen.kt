@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -20,6 +21,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.agentshell.data.model.AppNotification
+import com.agentshell.data.model.NotificationFile
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -35,6 +38,7 @@ fun AlertsScreen(
     detailNotification?.let { notification ->
         AlertDetailDialog(
             notification = notification,
+            viewModel = viewModel,
             onDismiss = { detailNotification = null },
             onMarkRead = {
                 viewModel.markAsRead(notification.id)
@@ -170,9 +174,68 @@ private fun NotificationCard(
 @Composable
 private fun AlertDetailDialog(
     notification: AppNotification,
+    viewModel: AlertsViewModel,
     onDismiss: () -> Unit,
     onMarkRead: () -> Unit,
 ) {
+    val coroutineScope = rememberCoroutineScope()
+
+    // Viewer state: which file is being viewed, the downloaded bytes
+    var activeFile by remember { mutableStateOf<NotificationFile?>(null) }
+    var activeFileBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var isDownloading by remember { mutableStateOf(false) }
+
+    // Dispatch to the appropriate viewer when bytes are ready
+    activeFile?.let { file ->
+        activeFileBytes?.let { bytes ->
+            val mime = file.mimeType.lowercase()
+            val filename = file.filename
+            val dismissViewer = {
+                activeFile = null
+                activeFileBytes = null
+            }
+            when {
+                mime.startsWith("image/") -> {
+                    ImageViewer(
+                        imageBytes = bytes,
+                        filename = filename,
+                        onDismiss = dismissViewer,
+                    )
+                }
+                mime.startsWith("audio/") -> {
+                    AudioViewer(
+                        audioBytes = bytes,
+                        filename = filename,
+                        mimeType = mime,
+                        onDismiss = dismissViewer,
+                    )
+                }
+                mime == "text/markdown" || filename.endsWith(".md") -> {
+                    MarkdownViewer(
+                        markdownBytes = bytes,
+                        filename = filename,
+                        onDismiss = dismissViewer,
+                    )
+                }
+                mime == "text/html" || filename.endsWith(".html") || filename.endsWith(".htm") -> {
+                    HtmlViewer(
+                        htmlBytes = bytes,
+                        filename = filename,
+                        onDismiss = dismissViewer,
+                    )
+                }
+                else -> {
+                    FileInfoDialog(
+                        filename = filename,
+                        size = file.size,
+                        mimeType = file.mimeType,
+                        onDismiss = dismissViewer,
+                    )
+                }
+            }
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(notification.title) },
@@ -191,12 +254,65 @@ private fun AlertDetailDialog(
                     HorizontalDivider()
                     Text("Attachments:", style = MaterialTheme.typography.labelMedium)
                     files.forEach { file ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Attachment, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(file.filename, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable(enabled = !isDownloading) {
+                                    // For unsupported types, show info without downloading
+                                    val mime = file.mimeType.lowercase()
+                                    val fn = file.filename
+                                    val needsDownload = mime.startsWith("image/") ||
+                                        mime.startsWith("audio/") ||
+                                        mime == "text/markdown" || fn.endsWith(".md") ||
+                                        mime == "text/html" || fn.endsWith(".html") || fn.endsWith(".htm")
+                                    if (needsDownload) {
+                                        isDownloading = true
+                                        coroutineScope.launch {
+                                            val bytes = viewModel.downloadFile(file.id)
+                                            isDownloading = false
+                                            if (bytes != null) {
+                                                activeFileBytes = bytes
+                                                activeFile = file
+                                            }
+                                        }
+                                    } else {
+                                        activeFileBytes = ByteArray(0)
+                                        activeFile = file
+                                    }
+                                }
+                                .padding(vertical = 6.dp, horizontal = 4.dp),
+                        ) {
+                            Icon(
+                                imageVector = fileIcon(file.mimeType),
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                file.filename,
+                                fontSize = 12.sp,
+                                modifier = Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (isDownloading && activeFile == null) {
+                                // Show a small indicator while any file is downloading
+                            }
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                contentDescription = "Open",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.outline,
+                            )
                         }
                     }
+                }
+                if (isDownloading) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
             }
         },
@@ -209,6 +325,18 @@ private fun AlertDetailDialog(
             TextButton(onClick = onDismiss) { Text("Close") }
         },
     )
+}
+
+/** Returns an appropriate icon for a file based on its MIME type. */
+private fun fileIcon(mimeType: String): androidx.compose.ui.graphics.vector.ImageVector {
+    val mime = mimeType.lowercase()
+    return when {
+        mime.startsWith("image/") -> Icons.Default.Image
+        mime.startsWith("audio/") -> Icons.Default.AudioFile
+        mime == "text/markdown" -> Icons.Default.Description
+        mime == "text/html" -> Icons.Default.Language
+        else -> Icons.Default.Attachment
+    }
 }
 
 /**

@@ -2,16 +2,22 @@ package com.agentshell.feature.alerts
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.agentshell.core.config.BuildConfig
 import com.agentshell.data.model.AppNotification
 import com.agentshell.data.model.NotificationFile
 import com.agentshell.data.remote.WebSocketService
+import com.agentshell.data.repository.HostRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import javax.inject.Inject
 
 data class AlertsUiState(
@@ -24,6 +30,8 @@ data class AlertsUiState(
 @HiltViewModel
 class AlertsViewModel @Inject constructor(
     private val wsService: WebSocketService,
+    private val httpClient: OkHttpClient,
+    private val hostRepository: HostRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AlertsUiState())
@@ -123,5 +131,25 @@ class AlertsViewModel @Inject constructor(
             mimeType = m["mimeType"] as? String ?: "application/octet-stream",
             size = (m["size"] as? Number)?.toLong() ?: 0L,
         )
+    }
+
+    suspend fun downloadFile(fileId: String): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            val host = hostRepository.getSelectedHostOnce() ?: return@withContext null
+            val url = "${host.httpUrl}/api/notifications/files/$fileId"
+            val requestBuilder = Request.Builder().url(url).get()
+            val authToken = BuildConfig.AUTH_TOKEN
+            if (authToken.isNotBlank()) {
+                requestBuilder.addHeader("Authorization", "Bearer $authToken")
+            }
+            val response = httpClient.newCall(requestBuilder.build()).execute()
+            if (response.isSuccessful) {
+                response.body?.bytes()
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 }

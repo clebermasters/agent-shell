@@ -1,5 +1,6 @@
 package com.agentshell.feature.chat
 
+import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentshell.data.local.PreferencesDataStore
@@ -10,6 +11,8 @@ import com.agentshell.data.model.ChatMessageType
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.remote.acpRespondPermission
 import com.agentshell.data.remote.acpSendPrompt
+import com.agentshell.data.remote.sendFileToAcpChat
+import com.agentshell.data.remote.sendFileToChat
 import com.agentshell.data.remote.sendInputViaTmux
 import com.agentshell.data.remote.acpResumeSession
 import com.agentshell.data.remote.clearChatLog
@@ -19,6 +22,8 @@ import com.agentshell.data.remote.unwatchChatLog
 import com.agentshell.data.remote.watchAcpChatLog
 import com.agentshell.data.remote.watchChatLog
 import com.agentshell.data.repository.ChatRepository
+import com.agentshell.data.services.AudioService
+import com.agentshell.data.services.WhisperService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +49,13 @@ data class PendingPermission(
     val options: List<PermissionOption> = emptyList(),
 )
 
+data class AttachedFile(
+    val uri: String,
+    val filename: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+)
+
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val isLoading: Boolean = true,
@@ -57,6 +69,8 @@ data class ChatUiState(
     val recordingDuration: Int = 0,
     val isTranscribing: Boolean = false,
     val transcribedText: String? = null,
+    val attachedFile: AttachedFile? = null,
+    val isUploading: Boolean = false,
     val totalMessageCount: Int = 0,
     val hasMoreMessages: Boolean = false,
     val showThinking: Boolean = true,
@@ -73,6 +87,9 @@ data class ChatUiState(
 class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
     private val dataStore: PreferencesDataStore,
+    private val audioService: AudioService,
+    private val whisperService: WhisperService,
+    private val app: Application,
 ) : ViewModel() {
 
     private val webSocketService: WebSocketService get() = chatRepository.webSocketService
@@ -91,6 +108,16 @@ class ChatViewModel @Inject constructor(
             val showThinking = dataStore.showThinking.first()
             val showToolCalls = dataStore.showToolCalls.first()
             _uiState.update { it.copy(showThinking = showThinking, showToolCalls = showToolCalls) }
+        }
+        viewModelScope.launch {
+            audioService.isRecording.collect { recording ->
+                _uiState.update { it.copy(isRecording = recording) }
+            }
+        }
+        viewModelScope.launch {
+            audioService.recordingDuration.collect { seconds ->
+                _uiState.update { it.copy(recordingDuration = seconds) }
+            }
         }
         collectMessages()
     }
@@ -142,6 +169,46 @@ class ChatViewModel @Inject constructor(
     fun sendMessage(text: String) {
         val state = _uiState.value
         val trimmed = text.trim()
+
+        // Handle file attachment upload
+        val file = state.attachedFile
+        if (file != null) {
+            viewModelScope.launch {
+                _uiState.update { it.copy(isUploading = true) }
+                try {
+                    val bytes = app.contentResolver
+                        .openInputStream(android.net.Uri.parse(file.uri))
+                        ?.readBytes()
+                    if (bytes != null) {
+                        val base64 = android.util.Base64.encodeToString(
+                            bytes, android.util.Base64.NO_WRAP,
+                        )
+                        if (state.isAcp) {
+                            val sessionId = state.sessionName.removePrefix("acp_")
+                            webSocketService.sendFileToAcpChat(
+                                sessionId, file.filename, file.mimeType, base64,
+                                trimmed.ifEmpty { null }, "",
+                            )
+                        } else {
+                            webSocketService.sendFileToChat(
+                                state.sessionName, state.windowIndex,
+                                file.filename, file.mimeType, base64,
+                                trimmed.ifEmpty { null },
+                            )
+                        }
+                        // Optimistically add a user message for the file send
+                        val prompt = trimmed.ifEmpty { "[File: ${file.filename}]" }
+                        val userMsg = buildUserMessage(prompt)
+                        _uiState.update { it.copy(messages = it.messages + userMsg) }
+                    }
+                } finally {
+                    _uiState.update { it.copy(attachedFile = null, isUploading = false, draftMessage = "") }
+                    saveDraft(draftKey(state.sessionName, state.windowIndex), "")
+                }
+            }
+            return
+        }
+
         if (trimmed.isEmpty()) return
 
         // Optimistically add the user message locally
@@ -212,6 +279,48 @@ class ChatViewModel @Inject constructor(
         val state = _uiState.value
         _uiState.update { it.copy(draftMessage = text) }
         saveDraft(draftKey(state.sessionName, state.windowIndex), text)
+    }
+
+    // -------------------------------------------------------------------------
+    // Voice recording
+    // -------------------------------------------------------------------------
+
+    fun startVoiceRecording() {
+        viewModelScope.launch { audioService.startRecording() }
+    }
+
+    fun stopVoiceRecording() {
+        viewModelScope.launch {
+            val path = audioService.stopRecording() ?: return@launch
+            _uiState.update { it.copy(isTranscribing = true) }
+            val apiKey = dataStore.openaiApiKey.first()
+            val text = whisperService.transcribe(path, apiKey)
+            _uiState.update { it.copy(isTranscribing = false, transcribedText = text) }
+        }
+    }
+
+    fun cancelVoiceRecording() {
+        viewModelScope.launch { audioService.cancelRecording() }
+    }
+
+    fun clearTranscribedText() {
+        _uiState.update { it.copy(transcribedText = null) }
+    }
+
+    suspend fun isVoiceAutoEnter(): Boolean = dataStore.voiceAutoEnter.first()
+
+    suspend fun isVoiceButtonVisible(): Boolean = dataStore.showVoiceButton.first()
+
+    // -------------------------------------------------------------------------
+    // File attachment
+    // -------------------------------------------------------------------------
+
+    fun attachFile(uri: String, filename: String, mimeType: String, size: Long) {
+        _uiState.update { it.copy(attachedFile = AttachedFile(uri, filename, mimeType, size)) }
+    }
+
+    fun removeAttachedFile() {
+        _uiState.update { it.copy(attachedFile = null) }
     }
 
     private fun draftKey(sessionName: String, windowIndex: Int) =

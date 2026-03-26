@@ -3,7 +3,9 @@ package com.agentshell
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
+import com.agentshell.core.service.ConnectionService
 import com.agentshell.core.util.NotificationHelper
+import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.remote.WebSocketService
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -13,7 +15,9 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @HiltAndroidApp
@@ -36,6 +40,7 @@ class AgentShellApp : Application() {
         wsService = entryPoint.webSocketService()
 
         observeNotificationEvents()
+        manageForegroundService()
         registerForegroundReconnect()
     }
 
@@ -54,6 +59,25 @@ class AgentShellApp : Application() {
                     val body = notification["body"] as? String ?: ""
                     val id = notification["id"] as? String ?: return@collect
                     NotificationHelper.show(this@AgentShellApp, title, body, id)
+                }
+        }
+    }
+
+    /**
+     * Start/stop the foreground service based on WebSocket connection state.
+     * The service keeps the process alive so the WebSocket survives background.
+     */
+    private fun manageForegroundService() {
+        appScope.launch {
+            wsService.connectionStatus
+                .map { it == ConnectionStatus.CONNECTED }
+                .distinctUntilChanged()
+                .collect { connected ->
+                    if (connected) {
+                        ConnectionService.start(this@AgentShellApp)
+                    } else {
+                        ConnectionService.stop(this@AgentShellApp)
+                    }
                 }
         }
     }

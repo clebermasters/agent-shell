@@ -20,7 +20,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -57,11 +59,29 @@ class TerminalViewModel @Inject constructor(
     val cwdResult: SharedFlow<String> = _cwdResult.asSharedFlow()
 
     init {
-        // Observe connection status
+        // Observe connection status and re-attach terminal when reconnected
         viewModelScope.launch {
             webSocketService.connectionStatus.collect { status ->
                 _uiState.update { it.copy(isConnected = status == ConnectionStatus.CONNECTED) }
             }
+        }
+        viewModelScope.launch {
+            webSocketService.connectionStatus
+                .map { it == ConnectionStatus.CONNECTED }
+                .distinctUntilChanged()
+                .collect { connected ->
+                    if (connected) {
+                        val state = _uiState.value
+                        if (state.sessionName.isNotBlank() && !state.isLoading) {
+                            terminalService.attachSession(
+                                state.sessionName,
+                                /* use last known size — xterm.js will send a resize if needed */
+                                80, 24,
+                                state.windowIndex,
+                            )
+                        }
+                    }
+                }
         }
 
         // Load saved font size

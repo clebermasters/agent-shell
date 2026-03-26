@@ -173,6 +173,19 @@ class WebSocketService @Inject constructor(
         }
     }
 
+    /**
+     * Check connection health: if disconnected, force reconnect immediately;
+     * if connected, send a ping to verify the connection is still alive.
+     * Called when the app returns to foreground.
+     */
+    fun checkConnection() {
+        if (_isConnected) {
+            send(mapOf("type" to "ping"))
+        } else if (currentUrl != null) {
+            forceReconnect()
+        }
+    }
+
     /** Release all resources permanently. */
     fun dispose() {
         disconnect()
@@ -210,13 +223,8 @@ class WebSocketService @Inject constructor(
     private fun scheduleReconnect() {
         // Don't schedule if already connected (race with successful reconnect)
         if (_isConnected) return
-        // Stop retrying after too many failures
-        if (reconnectAttempts > 10) {
-            log("Max reconnect attempts reached, giving up")
-            _connectionStatus.value = ConnectionStatus.OFFLINE
-            return
-        }
-        val delayMs = if (reconnectAttempts <= 3) 5_000L else 10_000L
+        // Exponential backoff: 2s, 4s, 8s, 16s, cap at 30s — never give up
+        val delayMs = (2_000L * (1L shl reconnectAttempts.coerceAtMost(4))).coerceAtMost(30_000L)
         log("Scheduling reconnect #$reconnectAttempts in ${delayMs}ms...")
         reconnectJob?.cancel()
         reconnectJob = scope.launch {

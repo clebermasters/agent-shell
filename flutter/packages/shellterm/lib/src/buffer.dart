@@ -734,8 +734,15 @@ class Buffer {
     // 1. Record cursor's absolute buffer position before changing _rows
     final absCursorLine = scrollBack + _cursorY;
 
-    // 2. Ensure the buffer has enough lines to fill the new viewport.
-    //    Only needed when the buffer is short (e.g., fresh terminal).
+    // 2. Ensure the circular buffer can hold at least newRows lines.
+    //    The alt buffer starts with maxLines=24 (capacity 32) but the
+    //    viewport may need more rows — grow the capacity first to avoid
+    //    an infinite loop where push() evicts and length never reaches newRows.
+    if (_lines.maxLength < newRows) {
+      _lines.maxLength = newRows;
+    }
+
+    // Fill the buffer with empty lines until it covers the viewport.
     final effectiveCols = newCols > 0 ? newCols : _cols;
     while (_lines.length < newRows) {
       _lines.push(BufferLine(effectiveCols));

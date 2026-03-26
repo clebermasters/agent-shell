@@ -365,14 +365,17 @@ class BufferLine {
 
 /// Provides `[]` and `.length` for the selection overlay API requirement:
 ///   `terminal.buffer.lines[i].getText()`
+///
+/// Uses a getter function instead of a direct reference so it always
+/// accesses the current circular buffer, even after reflow rebuilds it.
 class BufferLines {
-  final CircularBuffer<BufferLine> _storage;
-  BufferLines(this._storage);
+  final CircularBuffer<BufferLine> Function() _getStorage;
+  BufferLines(this._getStorage);
 
-  int get length => _storage.length;
+  int get length => _getStorage().length;
 
   @pragma('vm:prefer-inline')
-  BufferLine operator [](int index) => _storage[index];
+  BufferLine operator [](int index) => _getStorage()[index];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -428,7 +431,8 @@ class Buffer {
   set cursorY(int v) => _cursorY = v.clamp(0, _rows - 1);
 
   /// Public read-only view for the selection overlay.
-  late final BufferLines lines = BufferLines(_lines);
+  /// Uses a getter so it always sees the current _lines, even after reflow.
+  late final BufferLines lines = BufferLines(() => _lines);
 
   /// Height of the scrollback (lines above the visible viewport).
   int get scrollBack => max(0, _lines.length - _rows);

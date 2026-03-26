@@ -10,6 +10,7 @@ import com.agentshell.data.model.ChatMessageType
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.remote.acpRespondPermission
 import com.agentshell.data.remote.acpSendPrompt
+import com.agentshell.data.remote.sendInputViaTmux
 import com.agentshell.data.remote.acpResumeSession
 import com.agentshell.data.remote.clearChatLog
 import com.agentshell.data.remote.loadMoreChatHistory
@@ -152,14 +153,13 @@ class ChatViewModel @Inject constructor(
             val rawId = state.sessionName.removePrefix("acp_")
             webSocketService.acpSendPrompt(rawId, trimmed)
         } else {
-            // For TMUX chat, send as a chat input message
-            webSocketService.send(
-                mapOf(
-                    "type" to "chat-input",
-                    "sessionName" to state.sessionName,
-                    "windowIndex" to state.windowIndex,
-                    "message" to trimmed,
-                )
+            // For TMUX chat, send as terminal input via tmux (matches Flutter behavior).
+            // The backend has no "chat-input" type — tmux chat works by typing into
+            // the terminal session where the AI agent reads stdin.
+            webSocketService.sendInputViaTmux(
+                data = trimmed + "\n",
+                sessionName = state.sessionName,
+                windowIndex = state.windowIndex,
             )
         }
     }

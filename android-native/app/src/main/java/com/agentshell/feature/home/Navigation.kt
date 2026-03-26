@@ -29,7 +29,7 @@ import com.agentshell.feature.terminal.TerminalScreen
 object Routes {
     const val HOME = "home"
     const val TERMINAL = "terminal/{sessionName}"
-    const val CHAT = "chat/{sessionName}/{windowIndex}"
+    const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}"
     const val SETTINGS = "settings"
     const val DEBUG = "debug"
     const val ALERTS = "alerts"
@@ -41,7 +41,7 @@ object Routes {
     const val LOGIN = "login"
 
     fun terminal(sessionName: String) = "terminal/$sessionName"
-    fun chat(sessionName: String, windowIndex: Int) = "chat/$sessionName/$windowIndex"
+    fun chat(sessionName: String, windowIndex: Int, isAcp: Boolean = false) = "chat/$sessionName/$windowIndex?isAcp=$isAcp"
     fun fileBrowser(path: String = "/") = "file_browser?path=$path"
     fun cronEditor(jobId: String? = null) = if (jobId != null) "cron_editor?jobId=$jobId" else "cron_editor"
     fun dotfileEditor() = DOTFILE_EDITOR
@@ -60,7 +60,7 @@ fun AgentShellNavHost() {
             HomeScreen(
                 onNavigateToTerminal = { name -> navController.navigate(Routes.terminal(name)) },
                 onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
-                onNavigateToAcpChat = { id, _ -> navController.navigate(Routes.chat(id, 0)) },
+                onNavigateToAcpChat = { id, _ -> navController.navigate(Routes.chat(id, 0, isAcp = true)) },
                 onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
                 onNavigateToAlerts = { navController.navigate(Routes.ALERTS) },
                 onNavigateToHosts = { navController.navigate(Routes.HOST_SELECTION) },
@@ -68,7 +68,7 @@ fun AgentShellNavHost() {
                     SessionsScreen(
                         onNavigateToTerminal = { name -> navController.navigate(Routes.terminal(name)) },
                         onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
-                        onNavigateToAcpChat = { id, _ -> navController.navigate(Routes.chat(id, 0)) },
+                        onNavigateToAcpChat = { id, _ -> navController.navigate(Routes.chat(id, 0, isAcp = true)) },
                         onNavigateToHosts = { navController.navigate(Routes.HOST_SELECTION) },
                     )
                 },
@@ -120,14 +120,16 @@ fun AgentShellNavHost() {
             arguments = listOf(
                 navArgument("sessionName") { type = NavType.StringType },
                 navArgument("windowIndex") { type = NavType.IntType; defaultValue = 0 },
+                navArgument("isAcp") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStackEntry ->
             val sessionName = backStackEntry.arguments?.getString("sessionName") ?: ""
             val windowIndex = backStackEntry.arguments?.getInt("windowIndex") ?: 0
+            val isAcp = backStackEntry.arguments?.getBoolean("isAcp") ?: false
             ChatScreen(
                 sessionName = sessionName,
                 windowIndex = windowIndex,
-                isAcp = false,
+                isAcp = isAcp,
                 onNavigateBack = { navController.popBackStack() },
                 onSwitchToTerminal = { name ->
                     navController.navigate(Routes.terminal(name)) { popUpTo(Routes.HOME) }

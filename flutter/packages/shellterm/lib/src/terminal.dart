@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 
 import 'buffer.dart';
 import 'cell.dart';
+import 'charset.dart';
 import 'emitter.dart';
 import 'handler.dart';
 import 'parser.dart';
@@ -106,9 +107,12 @@ class Terminal extends ChangeNotifier implements EscapeHandler {
   int get mouseEncoding => _mouseEncoding;
 
   // Charset state — used by shiftIn/shiftOut and designateCharset.
-  // Currently stored for protocol correctness; character mapping is TODO.
   int activeCharset = 0; // 0=G0, 1=G1
   final List<int> charsets = [0, 0, 0, 0]; // G0-G3 charset designations
+
+  // Saved charset state for cursor save/restore (DECSC/DECRC).
+  int _savedActiveCharset = 0;
+  List<int> _savedCharsets = [0, 0, 0, 0];
 
   // Last printed character (for REP — CSI b)
   int _lastChar = 0;
@@ -167,17 +171,28 @@ class Terminal extends ChangeNotifier implements EscapeHandler {
   @override
   void writeChar(int codepoint) {
     _lastChar = codepoint;
-    _activeBuffer.writeChar(codepoint,
+    // Translate through the active charset (e.g., DEC Special Graphics
+    // maps ASCII 0x6a-0x7e to Unicode box-drawing characters).
+    final translated = translateCharset(charsets[activeCharset], codepoint);
+    _activeBuffer.writeChar(translated,
         autoWrap: _autoWrapMode, insertMode: _insertMode);
   }
 
   // ESC sequences
 
   @override
-  void saveCursor() => _activeBuffer.saveCursor();
+  void saveCursor() {
+    _activeBuffer.saveCursor();
+    _savedActiveCharset = activeCharset;
+    _savedCharsets = List.of(charsets);
+  }
 
   @override
-  void restoreCursor() => _activeBuffer.restoreCursor();
+  void restoreCursor() {
+    _activeBuffer.restoreCursor();
+    activeCharset = _savedActiveCharset;
+    charsets.setAll(0, _savedCharsets);
+  }
 
   @override
   void index() => _activeBuffer.lineFeed();

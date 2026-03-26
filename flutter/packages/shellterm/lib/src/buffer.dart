@@ -719,60 +719,34 @@ class Buffer {
 
     // ── Adjust row count ──────────────────────────────────────────────────
     //
-    // When the keyboard appears, the viewport shrinks (newRows < _rows).
-    // When it hides, the viewport grows (newRows > _rows).
+    // The invariant is the cursor's ABSOLUTE position in the circular
+    // buffer (scrollBack + cursorY).  When the viewport shrinks (keyboard
+    // appears) or grows (keyboard hides), we keep the cursor on the same
+    // buffer line and recompute cursorY from the new scrollBack.
     //
-    // Critical: we must NOT pop/delete visible content when shrinking,
-    // and must NOT push empty lines when growing.  Instead, we adjust
-    // which portion of the circular buffer is considered "viewport" vs
-    // "scrollback".
-    //
-    // The cursor's absolute position in the buffer must stay on the same
-    // line of content.  We achieve this by keeping the total line count
-    // stable and only adjusting _rows (which changes scrollBack).
+    // This makes shrink+grow an identity: the cursor and content return
+    // to exactly where they were.
 
-    if (newRows > _rows) {
-      // Viewport is growing (keyboard hidden).
-      // If there's scrollback, absorb lines from scrollback into viewport.
-      // If not enough scrollback, add empty lines at the end.
-      final canAbsorb = min(newRows - _rows, scrollBack);
-      final needNew = (newRows - _rows) - canAbsorb;
+    // 1. Record cursor's absolute buffer position before changing _rows
+    final absCursorLine = scrollBack + _cursorY;
 
-      // Absorbing from scrollback: just increase _rows (scrollBack shrinks).
-      // The cursor row shifts down by the absorbed amount so it stays on
-      // the same buffer line.
-      _cursorY += canAbsorb;
-
-      // If we still need more lines, add empty ones
-      for (var i = 0; i < needNew; i++) {
-        _lines.push(BufferLine(newCols > 0 ? newCols : _cols));
-      }
-    } else if (newRows < _rows) {
-      // Viewport is shrinking (keyboard appeared).
-      // Move bottom viewport lines into scrollback by decreasing _rows.
-      // But the cursor must remain visible — if the cursor is below the
-      // new bottom, we scroll content up to keep the cursor in view.
-
-      final excessRows = _rows - newRows;
-
-      // How many rows below the cursor can we absorb into scrollback?
-      final rowsBelowCursor = _rows - 1 - _cursorY;
-      final absorbBelow = min(excessRows, rowsBelowCursor);
-      final absorbAbove = excessRows - absorbBelow;
-
-      // Absorbing from below: just decrease _rows (those lines become
-      // scrollback if they have content, or are just ignored).
-      // No cursor adjustment needed.
-
-      // Absorbing from above: the cursor shifts up. Content above the
-      // cursor moves into scrollback.
-      _cursorY -= absorbAbove;
+    // 2. Ensure the buffer has enough lines to fill the new viewport.
+    //    Only needed when the buffer is short (e.g., fresh terminal).
+    final effectiveCols = newCols > 0 ? newCols : _cols;
+    while (_lines.length < newRows) {
+      _lines.push(BufferLine(effectiveCols));
     }
 
+    // 3. Update dimensions — this changes scrollBack implicitly
     _cols = newCols;
     _rows = newRows;
+
+    // 4. Recompute cursorY so the cursor stays on the same buffer line.
+    //    newScrollBack = _lines.length - newRows
+    final newScrollBack = scrollBack;
+    _cursorY = (absCursorLine - newScrollBack).clamp(0, newRows - 1);
+
     _cursorX = _cursorX.clamp(0, max(1, newCols) - 1);
-    _cursorY = _cursorY.clamp(0, max(1, newRows) - 1);
     resetScrollMargins();
     _tabStops = _initTabStops(newCols);
   }

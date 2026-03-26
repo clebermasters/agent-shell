@@ -218,11 +218,13 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       ui.Paint()..color = _theme.background,
     );
 
-    // Determine scroll offset
+    // Determine scroll offset and clamp to valid range
     final scrollOffset = _offset is ScrollPosition
         ? (_offset as ScrollPosition).pixels
         : 0.0;
-    final firstVisibleRow = (scrollOffset / _cellHeight).floor();
+    final rawFirstVisible = (scrollOffset / _cellHeight).floor();
+    final maxFirstRow = max(0, buffer.lines.length - _terminal.viewHeight);
+    final firstVisibleRow = rawFirstVisible.clamp(0, maxFirstRow);
     final visibleRowCount =
         ((size.height - _padding.vertical) / _cellHeight).ceil() + 1;
 

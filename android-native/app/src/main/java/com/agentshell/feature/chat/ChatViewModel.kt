@@ -15,6 +15,7 @@ import com.agentshell.data.remote.acpSendPrompt
 import com.agentshell.data.remote.sendFileToAcpChat
 import com.agentshell.data.remote.sendFileToChat
 import com.agentshell.data.remote.sendInputViaTmux
+import com.agentshell.data.remote.attachSession
 import com.agentshell.data.remote.acpResumeSession
 import com.agentshell.data.remote.clearChatLog
 import com.agentshell.data.remote.loadMoreChatHistory
@@ -148,6 +149,15 @@ class ChatViewModel @Inject constructor(
             )
         }
         restoreDraft(draftKey(sessionName, windowIndex))
+        // Attach first so the backend sets up session context for input routing
+        // (matches Flutter's chat_provider.dart — required for multi-pane sessions)
+        webSocketService.attachSession(
+            sessionName = sessionName,
+            cols = 80,
+            rows = 24,
+            windowIndex = windowIndex,
+            requestHistory = false,
+        )
         webSocketService.watchChatLog(sessionName, windowIndex)
     }
 

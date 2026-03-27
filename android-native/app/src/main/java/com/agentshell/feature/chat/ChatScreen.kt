@@ -8,7 +8,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +36,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -47,14 +47,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,10 +66,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -87,7 +87,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import com.agentshell.feature.common.SwipeableSessionContainer
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,8 +107,9 @@ fun ChatScreen(
     var showScrollButton by remember { mutableStateOf(false) }
     var autoScroll by remember { mutableStateOf(true) }
     var showMenu by remember { mutableStateOf(false) }
-    var swipeDx by remember { mutableFloatStateOf(0f) }
+    var showClearConfirm by remember { mutableStateOf(false) }
     var showVoiceButton by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
     // Swipe navigation state
@@ -126,6 +126,15 @@ fun ChatScreen(
     // Load voice button preference
     LaunchedEffect(Unit) {
         showVoiceButton = viewModel.isVoiceButtonVisible()
+    }
+
+    // Show snackbar on chat cleared
+    LaunchedEffect(Unit) {
+        viewModel.chatCleared.collect { success ->
+            snackbarHostState.showSnackbar(
+                if (success) "Chat history cleared" else "Failed to clear chat"
+            )
+        }
     }
 
     // Mic permission launcher
@@ -252,7 +261,7 @@ fun ChatScreen(
                             text = { Text("Clear chat") },
                             onClick = {
                                 showMenu = false
-                                viewModel.clearChat()
+                                showClearConfirm = true
                             },
                         )
                     }
@@ -262,6 +271,7 @@ fun ChatScreen(
                 ),
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         modifier = Modifier
             .navigationBarsPadding()
             .imePadding(),
@@ -285,17 +295,7 @@ fun ChatScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            if (swipeDx > 120f) onNavigateBack()
-                            swipeDx = 0f
-                        },
-                        onDragCancel = { swipeDx = 0f },
-                        onHorizontalDrag = { _, dragAmount -> swipeDx += dragAmount },
-                    )
-                },
+                .padding(innerPadding),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // Loading indicator at top for load-more
@@ -434,33 +434,27 @@ fun ChatScreen(
                 }
             }
 
-            // Swipe-to-go-back visual hint
-            if (swipeDx > 20f) {
-                val alpha by animateFloatAsState(
-                    targetValue = (swipeDx / 200f).coerceIn(0f, 0.6f),
-                    animationSpec = tween(100),
-                    label = "swipeAlpha",
-                )
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .offset { IntOffset(x = (swipeDx / 3).roundToInt(), y = 0) }
-                        .alpha(alpha)
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant,
-                            RoundedCornerShape(50),
-                        )
-                        .padding(12.dp),
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
         }
         } // SwipeableSessionContainer
+    }
+
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("Clear Chat") },
+            text = { Text("Are you sure you want to clear the chat history? This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearConfirm = false
+                    viewModel.clearChat()
+                }) {
+                    Text("Clear", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 

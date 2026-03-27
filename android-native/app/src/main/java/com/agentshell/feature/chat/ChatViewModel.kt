@@ -16,6 +16,7 @@ import com.agentshell.data.remote.sendFileToAcpChat
 import com.agentshell.data.remote.sendFileToChat
 import com.agentshell.data.remote.sendChatMessage
 import com.agentshell.data.remote.sendInputViaTmux
+import com.agentshell.data.remote.acpClearHistory
 import com.agentshell.data.remote.acpResumeSession
 import com.agentshell.data.remote.clearChatLog
 import com.agentshell.data.remote.loadMoreChatHistory
@@ -29,8 +30,11 @@ import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.WhisperService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -113,6 +117,9 @@ class ChatViewModel @Inject constructor(
         )
     )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    private val _chatCleared = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
+    val chatCleared: SharedFlow<Boolean> = _chatCleared.asSharedFlow()
 
     private var messageCollectionJob: Job? = null
 
@@ -293,7 +300,7 @@ class ChatViewModel @Inject constructor(
         val state = _uiState.value
         if (state.isAcp) {
             val rawId = state.sessionName.removePrefix("acp_")
-            webSocketService.send(mapOf("type" to "acp-clear-history", "sessionId" to rawId))
+            webSocketService.acpClearHistory(rawId)
         } else {
             webSocketService.clearChatLog(state.sessionName, state.windowIndex)
         }
@@ -514,25 +521,34 @@ class ChatViewModel @Inject constructor(
 
     private fun handleChatLogCleared(message: Map<String, Any?>) {
         val sessionName = message["sessionName"] as? String ?: return
-        val windowIndex = (message["windowIndex"] as? Number)?.toInt() ?: return
+        val windowIndex = (message["windowIndex"] as? Number)?.toInt() ?: 0
         val success = message["success"] as? Boolean ?: false
 
         val state = _uiState.value
-        if (sessionName != state.sessionName || windowIndex != state.windowIndex) return
+        // ACP sessions: backend sends "acp_<id>" as sessionName with windowIndex 0
+        val matches = if (state.isAcp) {
+            sessionName == state.sessionName || sessionName == "acp_${state.sessionName}"
+        } else {
+            sessionName == state.sessionName && windowIndex == state.windowIndex
+        }
+        if (!matches) return
 
         if (success) {
             _uiState.update {
                 ChatUiState(
-                    sessionName = sessionName,
-                    windowIndex = windowIndex,
+                    sessionName = it.sessionName,
+                    windowIndex = it.windowIndex,
                     isAcp = it.isAcp,
                     showThinking = it.showThinking,
                     showToolCalls = it.showToolCalls,
+                    fileBaseUrl = it.fileBaseUrl,
                 )
             }
+            _chatCleared.tryEmit(true)
         } else {
             val error = message["error"] as? String ?: "Failed to clear chat"
             _uiState.update { it.copy(error = error, isLoading = false) }
+            _chatCleared.tryEmit(false)
         }
     }
 

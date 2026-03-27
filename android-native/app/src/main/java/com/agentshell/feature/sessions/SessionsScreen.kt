@@ -31,11 +31,13 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -266,39 +268,32 @@ private fun TmuxSessionCard(
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .combinedClickable(onClick = onTap, onLongClick = { showMenu = true }),
     ) {
-        ListItem(
-            leadingContent = {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            // Header row: icon + name + kill menu
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Icon(
                     Icons.Default.Terminal,
                     contentDescription = null,
                     tint = if (session.attached) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            },
-            headlineContent = { Text(session.name, fontWeight = FontWeight.Medium) },
-            supportingContent = {
-                Text(
-                    "${session.windows} window${if (session.windows != 1) "s" else ""}" +
-                        if (session.attached) " • Attached" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-            },
-            trailingContent = {
+                Spacer(Modifier.size(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(session.name, fontWeight = FontWeight.Medium)
+                    Text(
+                        "${session.windows} window${if (session.windows != 1) "s" else ""}" +
+                            if (session.attached) " • Attached" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
                 Box {
                     IconButton(onClick = { showMenu = true }) {
                         Icon(Icons.Default.Edit, contentDescription = "Options")
                     }
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Open Terminal") },
-                            leadingIcon = { Icon(Icons.Default.Terminal, null) },
-                            onClick = { showMenu = false; onTap() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Open Chat") },
-                            leadingIcon = { Icon(Icons.Outlined.Chat, null) },
-                            onClick = { showMenu = false; onChat() },
-                        )
                         DropdownMenuItem(
                             text = { Text("Kill Session", color = MaterialTheme.colorScheme.error) },
                             leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
@@ -306,8 +301,30 @@ private fun TmuxSessionCard(
                         )
                     }
                 }
-            },
-        )
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Action buttons row
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(
+                    onClick = onTap,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Terminal")
+                }
+                OutlinedButton(
+                    onClick = onChat,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Outlined.Chat, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("Chat")
+                }
+            }
+        }
     }
 
     if (showKillDialog) {

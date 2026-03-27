@@ -217,31 +217,43 @@
 
   // ── Touch scrolling ──────────────────────────────────────────────────────
   // Android WebView doesn't translate touch gestures to mouse wheel events
-  // that xterm.js expects. Intercept vertical swipes and call scrollLines().
+  // that xterm.js expects. Intercept vertical swipes on the document (capture
+  // phase to beat xterm.js internal handlers) and call scrollLines().
   (function() {
     var touchStartY = null;
+    var touchStartX = null;
     var touchAccum = 0;
-    var DRAG_THRESHOLD = 12;   // px before scrolling starts
-    var LINE_HEIGHT = 18;      // px per scroll line (approx)
+    var DRAG_THRESHOLD = 10;
+    var LINE_HEIGHT = 16;
     var isDragging = false;
+    var isHorizontal = false;
 
-    var el = term.element;
-    if (!el) return;
-
-    el.addEventListener('touchstart', function(e) {
+    document.addEventListener('touchstart', function(e) {
       if (e.touches.length !== 1) return;
       touchStartY = e.touches[0].clientY;
+      touchStartX = e.touches[0].clientX;
       touchAccum = 0;
       isDragging = false;
-    }, { passive: true });
+      isHorizontal = false;
+    }, { capture: true, passive: true });
 
-    el.addEventListener('touchmove', function(e) {
+    document.addEventListener('touchmove', function(e) {
       if (touchStartY === null || e.touches.length !== 1) return;
-      var dy = touchStartY - e.touches[0].clientY;
+      if (isHorizontal) return;
 
-      if (!isDragging && Math.abs(dy) > DRAG_THRESHOLD) {
-        isDragging = true;
-        touchAccum = 0;
+      var dy = touchStartY - e.touches[0].clientY;
+      var dx = e.touches[0].clientX - touchStartX;
+
+      // Determine scroll direction on first significant move
+      if (!isDragging && !isHorizontal) {
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > DRAG_THRESHOLD) {
+          isHorizontal = true; // horizontal swipe — don't scroll
+          return;
+        }
+        if (Math.abs(dy) > DRAG_THRESHOLD) {
+          isDragging = true;
+          touchAccum = 0;
+        }
       }
 
       if (isDragging) {
@@ -254,20 +266,25 @@
           touchAccum -= lines * LINE_HEIGHT;
         }
         e.preventDefault();
+        e.stopPropagation();
       }
-    }, { passive: false });
+    }, { capture: true, passive: false });
 
-    el.addEventListener('touchend', function() {
+    document.addEventListener('touchend', function() {
       touchStartY = null;
+      touchStartX = null;
       touchAccum = 0;
       isDragging = false;
-    }, { passive: true });
+      isHorizontal = false;
+    }, { capture: true, passive: true });
 
-    el.addEventListener('touchcancel', function() {
+    document.addEventListener('touchcancel', function() {
       touchStartY = null;
+      touchStartX = null;
       touchAccum = 0;
       isDragging = false;
-    }, { passive: true });
+      isHorizontal = false;
+    }, { capture: true, passive: true });
   })();
 
 })();

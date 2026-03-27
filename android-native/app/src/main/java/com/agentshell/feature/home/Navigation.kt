@@ -28,8 +28,8 @@ import com.agentshell.feature.terminal.TerminalScreen
 
 object Routes {
     const val HOME = "home"
-    const val TERMINAL = "terminal/{sessionName}"
-    const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}"
+    const val TERMINAL = "terminal/{sessionName}?isSwipeNav={isSwipeNav}"
+    const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}&isSwipeNav={isSwipeNav}"
     const val SETTINGS = "settings"
     const val DEBUG = "debug"
     const val ALERTS = "alerts"
@@ -40,8 +40,8 @@ object Routes {
     const val DOTFILE_TEMPLATES = "dotfile_templates"
     const val LOGIN = "login"
 
-    fun terminal(sessionName: String) = "terminal/$sessionName"
-    fun chat(sessionName: String, windowIndex: Int, isAcp: Boolean = false) = "chat/$sessionName/$windowIndex?isAcp=$isAcp"
+    fun terminal(sessionName: String, isSwipeNav: Boolean = false) = "terminal/$sessionName?isSwipeNav=$isSwipeNav"
+    fun chat(sessionName: String, windowIndex: Int, isAcp: Boolean = false, isSwipeNav: Boolean = false) = "chat/$sessionName/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav"
     fun fileBrowser(path: String = "/") = "file_browser?path=$path"
     fun cronEditor(jobId: String? = null) = if (jobId != null) "cron_editor?jobId=$jobId" else "cron_editor"
     fun dotfileEditor() = DOTFILE_EDITOR
@@ -102,11 +102,16 @@ fun AgentShellNavHost() {
         // ── Terminal ──────────────────────────────────────────────────────────
         composable(
             route = Routes.TERMINAL,
-            arguments = listOf(navArgument("sessionName") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("sessionName") { type = NavType.StringType },
+                navArgument("isSwipeNav") { type = NavType.BoolType; defaultValue = false },
+            ),
         ) { backStackEntry ->
             val sessionName = backStackEntry.arguments?.getString("sessionName") ?: ""
+            val isSwipeNav = backStackEntry.arguments?.getBoolean("isSwipeNav") ?: false
             TerminalScreen(
                 sessionName = sessionName,
+                isSwipeNavigation = isSwipeNav,
                 onNavigateBack = { navController.popBackStack() },
                 onSwitchToChat = { name, idx ->
                     navController.navigate(Routes.chat(name, idx)) { popUpTo(Routes.HOME) }
@@ -115,7 +120,7 @@ fun AgentShellNavHost() {
                     navController.navigate(Routes.fileBrowser(path))
                 },
                 onSwipeToSession = { name ->
-                    navController.navigate(Routes.terminal(name)) {
+                    navController.navigate(Routes.terminal(name, isSwipeNav = true)) {
                         popUpTo(Routes.HOME)
                     }
                 },
@@ -129,21 +134,24 @@ fun AgentShellNavHost() {
                 navArgument("sessionName") { type = NavType.StringType },
                 navArgument("windowIndex") { type = NavType.IntType; defaultValue = 0 },
                 navArgument("isAcp") { type = NavType.BoolType; defaultValue = false },
+                navArgument("isSwipeNav") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStackEntry ->
             val sessionName = backStackEntry.arguments?.getString("sessionName") ?: ""
             val windowIndex = backStackEntry.arguments?.getInt("windowIndex") ?: 0
             val isAcp = backStackEntry.arguments?.getBoolean("isAcp") ?: false
+            val isSwipeNav = backStackEntry.arguments?.getBoolean("isSwipeNav") ?: false
             ChatScreen(
                 sessionName = sessionName,
                 windowIndex = windowIndex,
                 isAcp = isAcp,
+                isSwipeNavigation = isSwipeNav,
                 onNavigateBack = { navController.popBackStack() },
                 onSwitchToTerminal = { name ->
                     navController.navigate(Routes.terminal(name)) { popUpTo(Routes.HOME) }
                 },
                 onSwipeToChatSession = { name, idx, isAcpNav ->
-                    navController.navigate(Routes.chat(name, idx, isAcp = isAcpNav)) {
+                    navController.navigate(Routes.chat(name, idx, isAcp = isAcpNav, isSwipeNav = true)) {
                         popUpTo(Routes.HOME)
                     }
                 },

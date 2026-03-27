@@ -171,6 +171,8 @@ fun XTermView(
     onVolumeUp: (() -> Unit)? = null,
     onVolumeDown: (() -> Unit)? = null,
     onSelectionChanged: ((hasSelection: Boolean) -> Unit)? = null,
+    onHorizontalDragChanged: ((dx: Float) -> Unit)? = null,
+    onHorizontalSwipeEnd: ((dx: Float) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -185,6 +187,8 @@ fun XTermView(
     bridge.onVolumeUp = onVolumeUp
     bridge.onVolumeDown = onVolumeDown
     bridge.onSelectionChanged = onSelectionChanged
+    bridge.onHorizontalDragChanged = onHorizontalDragChanged
+    bridge.onHorizontalSwipeEnd = onHorizontalSwipeEnd
 
     val webView = remember {
         object : WebView(context) {
@@ -206,6 +210,7 @@ fun XTermView(
                         isScrolling = false
                         isHorizontal = false
                         sentDownToWebView = false
+                        bridge.onHorizontalDragChanged?.invoke(0f)
                         // Don't pass DOWN to WebView yet — wait to see
                         // if this becomes a scroll or a tap.
                         return true
@@ -239,16 +244,30 @@ fun XTermView(
                                 return true
                             }
                         }
+                        // Notify drag progress when horizontal
+                        if (isHorizontal) {
+                            bridge.onHorizontalDragChanged?.invoke(event.x - touchStartX)
+                        }
                         // Not yet scrolling — still might become one, consume MOVE
                         if (!sentDownToWebView) return true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         val wasScrolling = isScrolling
+                        val wasHorizontal = isHorizontal
+                        val totalDx = event.x - touchStartX
                         isScrolling = false
                         isHorizontal = false
                         scrollAccum = 0f
                         parent?.requestDisallowInterceptTouchEvent(false)
                         if (wasScrolling) return true
+                        if (wasHorizontal) {
+                            if (event.actionMasked == MotionEvent.ACTION_UP) {
+                                bridge.onHorizontalSwipeEnd?.invoke(totalDx)
+                            } else {
+                                bridge.onHorizontalDragChanged?.invoke(0f)
+                            }
+                            return true
+                        }
                         // Was a tap — replay DOWN+UP to WebView so it
                         // toggles keyboard / focuses terminal.
                         if (!sentDownToWebView) {
@@ -332,6 +351,8 @@ internal class XTermBridge(
     var onVolumeUp: (() -> Unit)? = null
     var onVolumeDown: (() -> Unit)? = null
     var onSelectionChanged: ((hasSelection: Boolean) -> Unit)? = null
+    var onHorizontalDragChanged: ((dx: Float) -> Unit)? = null
+    var onHorizontalSwipeEnd: ((dx: Float) -> Unit)? = null
 
     // ── JS → Android (called from JavaScript) ─────────────────────────────
 

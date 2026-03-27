@@ -6,6 +6,9 @@ import androidx.activity.compose.BackHandler
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -16,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -23,6 +27,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Close
@@ -40,9 +46,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -52,6 +61,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,8 +76,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.agentshell.feature.common.SwipeableSessionContainer
 import com.agentshell.terminal.XTermView
+import kotlin.math.abs
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -108,6 +118,7 @@ fun TerminalScreen(
 
     // Swipe navigation state
     var recentSessions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var swipeHintDx by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(sessionName) {
         if (!isSwipeNavigation) {
@@ -320,11 +331,16 @@ fun TerminalScreen(
             }
         },
     ) { paddingValues ->
-        SwipeableSessionContainer(
-            recentSessions = recentSessions,
-            currentSessionKey = sessionName,
-            onSwipeToSession = { name -> onSwipeToSession?.invoke(name) },
-        ) {
+        val currentIndex = recentSessions.indexOf(sessionName)
+        val showSwipeHint by remember { derivedStateOf { abs(swipeHintDx) > 60f } }
+        val hintText: String = if (showSwipeHint) when {
+            swipeHintDx > 0 && currentIndex <= 0 -> "\u2190 (start)"
+            swipeHintDx < 0 && currentIndex >= recentSessions.size - 1 -> "(end) \u2192"
+            swipeHintDx > 0 && currentIndex - 1 >= 0 -> recentSessions[currentIndex - 1]
+            swipeHintDx < 0 && currentIndex + 1 < recentSessions.size -> recentSessions[currentIndex + 1]
+            else -> ""
+        } else ""
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -366,6 +382,20 @@ fun TerminalScreen(
                         onVolumeUp = { viewModel.zoomIn() },
                         onVolumeDown = { viewModel.zoomOut() },
                         onSelectionChanged = { hasText -> hasSelection = hasText },
+                        onHorizontalDragChanged = { dx -> swipeHintDx = dx },
+                        onHorizontalSwipeEnd = { dx ->
+                            swipeHintDx = 0f
+                            if (recentSessions.size > 1) {
+                                val nextIdx = when {
+                                    dx > 120f -> currentIndex - 1
+                                    dx < -120f -> currentIndex + 1
+                                    else -> -1
+                                }
+                                if (nextIdx in recentSessions.indices) {
+                                    onSwipeToSession?.invoke(recentSessions[nextIdx])
+                                }
+                            }
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth(),
@@ -415,7 +445,51 @@ fun TerminalScreen(
                     },
                 )
             }
+
+            // Swipe navigation dot indicator
+            if (recentSessions.size > 1) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    recentSessions.forEachIndexed { i, _ ->
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = 3.dp)
+                                .size(if (i == currentIndex) 8.dp else 6.dp)
+                                .background(
+                                    if (i == currentIndex) Color.White.copy(alpha = 0.85f)
+                                    else Color.White.copy(alpha = 0.35f),
+                                    CircleShape,
+                                ),
+                        )
+                    }
+                }
+            }
+
+            // Hint overlay during swipe
+            AnimatedVisibility(
+                visible = showSwipeHint && hintText.isNotEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 20.dp),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color.Black.copy(alpha = 0.7f),
+                ) {
+                    Text(
+                        hintText,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
         }
-        } // SwipeableSessionContainer
     }
 }

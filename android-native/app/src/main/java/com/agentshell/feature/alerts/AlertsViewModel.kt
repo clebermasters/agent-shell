@@ -107,6 +107,43 @@ class AlertsViewModel @Inject constructor(
         }
     }
 
+    fun deleteNotification(id: String) {
+        _state.update { s ->
+            val updated = s.notifications.filterNot { it.id == id }
+            s.copy(notifications = updated, unreadCount = updated.count { !it.read })
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    val host = hostRepository.getSelectedHostOnce() ?: return@withContext
+                    val request = Request.Builder()
+                        .url("${host.httpUrl}/api/notifications/$id")
+                        .delete()
+                        .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
+                        .build()
+                    httpClient.newCall(request).execute().close()
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    fun deleteAllNotifications() {
+        _state.update { AlertsUiState() }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    val host = hostRepository.getSelectedHostOnce() ?: return@withContext
+                    val request = Request.Builder()
+                        .url("${host.httpUrl}/api/notifications")
+                        .delete()
+                        .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
+                        .build()
+                    httpClient.newCall(request).execute().close()
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     // Listen for real-time notification events broadcast by the backend over WebSocket
     private fun observeMessages() {
         viewModelScope.launch {

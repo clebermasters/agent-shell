@@ -258,6 +258,52 @@ impl NotificationStore {
         &self.base_dir
     }
 
+    pub fn delete(&self, id: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path).with_context(|| {
+            format!(
+                "failed to open notifications db: {}",
+                self.db_path.display()
+            )
+        })?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+
+        // Delete attached files from disk
+        let files = self.list_files_for_notification(id).unwrap_or_default();
+        for file in &files {
+            let _ = fs::remove_file(&file.stored_path);
+        }
+        // Remove the notification directory if it exists
+        let notif_dir = self.base_dir.join("notifications").join(id);
+        let _ = fs::remove_dir_all(&notif_dir);
+
+        conn.execute(
+            "DELETE FROM notification_files WHERE notification_id = ?1",
+            params![id],
+        )?;
+        conn.execute("DELETE FROM notifications WHERE id = ?1", params![id])?;
+
+        Ok(())
+    }
+
+    pub fn delete_all(&self) -> Result<()> {
+        let conn = Connection::open(&self.db_path).with_context(|| {
+            format!(
+                "failed to open notifications db: {}",
+                self.db_path.display()
+            )
+        })?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+
+        // Remove all notification file directories
+        let notif_dir = self.base_dir.join("notifications");
+        let _ = fs::remove_dir_all(&notif_dir);
+
+        conn.execute("DELETE FROM notification_files", [])?;
+        conn.execute("DELETE FROM notifications", [])?;
+
+        Ok(())
+    }
+
     pub fn get_unread_count(&self) -> Result<i32> {
         let conn = Connection::open(&self.db_path).with_context(|| {
             format!(

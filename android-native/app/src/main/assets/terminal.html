@@ -76,7 +76,8 @@
 
   // ── Bridge: xterm.js → Android ──────────────────────────────────────────
 
-  // User types in terminal → send to Android
+  // User types in terminal → send to Android (key events only — soft keyboard
+  // input is handled by the Kotlin InputConnection override in XTermView.kt)
   term.onData(function(data) {
     try {
       if (window.Android) {

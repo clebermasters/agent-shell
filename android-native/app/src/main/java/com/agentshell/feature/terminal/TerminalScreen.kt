@@ -137,6 +137,10 @@ fun TerminalScreen(
         if (granted) viewModel.startRecording()
     }
 
+    // Keyboard visibility — hide accessory bar when soft keyboard is dismissed
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    val isKeyboardVisible = imeBottom > 0
+
     // Sticky modifier state — shared between accessory bar and soft keyboard input
     var ctrlActive by remember { mutableStateOf(false) }
     var altActive by remember { mutableStateOf(false) }
@@ -402,7 +406,7 @@ fun TerminalScreen(
                     )
                 }
 
-                if (!isFullscreen) {
+                if (!isFullscreen && isKeyboardVisible) {
                     TerminalAccessoryBar(
                         ctrlActive = ctrlActive,
                         altActive = altActive,

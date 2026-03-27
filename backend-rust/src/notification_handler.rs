@@ -171,3 +171,23 @@ pub async fn mark_read(
     let _ = state.notification_store.mark_read(&id);
     Json(MarkReadResponse { success: true })
 }
+
+#[derive(Debug, Serialize)]
+pub struct DeleteResponse {
+    success: bool,
+}
+
+pub async fn delete_notification(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Json<DeleteResponse> {
+    let success = state.notification_store.delete(&id).is_ok();
+    Json(DeleteResponse { success })
+}
+
+pub async fn delete_all_notifications(
+    State(state): State<Arc<AppState>>,
+) -> Json<DeleteResponse> {
+    let success = state.notification_store.delete_all().is_ok();
+    Json(DeleteResponse { success })
+}

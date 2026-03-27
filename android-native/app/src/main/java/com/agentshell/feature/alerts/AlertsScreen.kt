@@ -34,6 +34,7 @@ fun AlertsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var detailNotification by remember { mutableStateOf<AppNotification?>(null) }
+    var showClearAllConfirm by remember { mutableStateOf(false) }
 
     detailNotification?.let { notification ->
         AlertDetailDialog(
@@ -47,6 +48,25 @@ fun AlertsScreen(
         )
     }
 
+    if (showClearAllConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearAllConfirm = false },
+            title = { Text("Clear All Alerts") },
+            text = { Text("Are you sure you want to delete all alerts? This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearAllConfirm = false
+                    viewModel.deleteAllNotifications()
+                }) {
+                    Text("Delete All", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearAllConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -55,6 +75,11 @@ fun AlertsScreen(
                     if (state.unreadCount > 0) {
                         TextButton(onClick = { viewModel.markAllRead() }) {
                             Text("Mark all read")
+                        }
+                    }
+                    if (state.notifications.isNotEmpty()) {
+                        IconButton(onClick = { showClearAllConfirm = true }) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = "Clear all alerts")
                         }
                     }
                 },
@@ -84,15 +109,47 @@ fun AlertsScreen(
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
                 items(state.notifications, key = { it.id }) { notification ->
-                    NotificationCard(
-                        notification = notification,
-                        onTap = {
-                            if (!notification.read) viewModel.markAsRead(notification.id)
-                            detailNotification = notification
+                    val dismissState = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { value ->
+                            if (value == SwipeToDismissBoxValue.EndToStart) {
+                                viewModel.deleteNotification(notification.id)
+                                true
+                            } else {
+                                false
+                            }
                         },
-                        onMarkRead = { viewModel.markAsRead(notification.id) },
                     )
-                    HorizontalDivider()
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        backgroundContent = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.error)
+                                    .padding(horizontal = 20.dp),
+                                contentAlignment = Alignment.CenterEnd,
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    tint = MaterialTheme.colorScheme.onError,
+                                )
+                            }
+                        },
+                        enableDismissFromStartToEnd = false,
+                    ) {
+                        Column {
+                            NotificationCard(
+                                notification = notification,
+                                onTap = {
+                                    if (!notification.read) viewModel.markAsRead(notification.id)
+                                    detailNotification = notification
+                                },
+                                onMarkRead = { viewModel.markAsRead(notification.id) },
+                            )
+                            HorizontalDivider()
+                        }
+                    }
                 }
             }
         }

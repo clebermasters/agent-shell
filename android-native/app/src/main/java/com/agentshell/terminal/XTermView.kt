@@ -1,10 +1,14 @@
 package com.agentshell.terminal
 
 import android.annotation.SuppressLint
+import android.text.InputType
 import android.util.Base64
 import android.util.Log
 import android.view.MotionEvent
 import android.view.ViewGroup
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -301,6 +305,77 @@ fun XTermView(
                     }
                 }
                 return super.dispatchKeyEvent(event)
+            }
+
+            // ── Android IME InputConnection override ────────────────────────
+            // Android soft keyboards use IME composition that corrupts xterm.js's
+            // internal textarea for punctuation (. , ; : etc.), causing input to
+            // freeze. Bypass xterm.js's textarea entirely: intercept all text
+            // input at the InputConnection level and send directly to the terminal.
+            // Key events (arrows, Enter from hardware kb) still go through xterm.js.
+            override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+                // VISIBLE_PASSWORD disables autocorrect/composition on most keyboards,
+                // making each keystroke a direct commitText call.
+                outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
+                    InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+                    EditorInfo.IME_FLAG_NO_FULLSCREEN
+
+                return object : BaseInputConnection(this, false) {
+                    private val composing = StringBuilder()
+
+                    override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                        val str = text?.toString() ?: return true
+                        val comp = composing.toString()
+                        composing.clear()
+
+                        when {
+                            comp.isNotEmpty() && str.startsWith(comp) -> {
+                                // Committed text extends composing — send only new suffix
+                                val tail = str.substring(comp.length)
+                                if (tail.isNotEmpty()) bridge.onInput(tail)
+                            }
+                            comp.isNotEmpty() -> {
+                                // Autocorrect changed text — delete composing, send new
+                                repeat(comp.length) { bridge.onInput("\u007f") }
+                                if (str.isNotEmpty()) bridge.onInput(str)
+                            }
+                            str.isNotEmpty() -> bridge.onInput(str)
+                        }
+                        return true
+                    }
+
+                    override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                        val str = text?.toString() ?: ""
+                        val old = composing.toString()
+
+                        when {
+                            str.startsWith(old) -> {
+                                val added = str.substring(old.length)
+                                if (added.isNotEmpty()) bridge.onInput(added)
+                            }
+                            else -> {
+                                repeat(old.length) { bridge.onInput("\u007f") }
+                                if (str.isNotEmpty()) bridge.onInput(str)
+                            }
+                        }
+
+                        composing.clear()
+                        composing.append(str)
+                        return true
+                    }
+
+                    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                        composing.clear()
+                        repeat(beforeLength) { bridge.onInput("\u007f") }
+                        return true
+                    }
+
+                    override fun finishComposingText(): Boolean {
+                        composing.clear()
+                        return true
+                    }
+                }
             }
         }.apply {
             layoutParams = ViewGroup.LayoutParams(

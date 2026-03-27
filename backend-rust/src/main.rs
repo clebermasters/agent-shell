@@ -185,6 +185,14 @@ async fn main() -> Result<()> {
             axum::routing::post(notification_handler::mark_read),
         )
         .route(
+            "/api/notifications/:id",
+            axum::routing::delete(notification_handler::delete_notification),
+        )
+        .route(
+            "/api/notifications",
+            axum::routing::delete(notification_handler::delete_all_notifications),
+        )
+        .route(
             "/api/notifications/files/:id",
             get({
                 let notification_store = app_state.notification_store.clone();

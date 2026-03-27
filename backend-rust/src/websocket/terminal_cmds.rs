@@ -52,8 +52,14 @@ pub(crate) async fn handle_input_via_tmux(
 
     info!("  Using session: {:?}, window: {:?}", session, idx);
 
-    if let (Some(ref session), Some(window_idx)) = (&session, idx) {
-        let target = format!("{}:{}", session, window_idx);
+    if let Some(ref session) = session {
+        // Build target: try session:window first, fall back to session only
+        // (lets tmux use the active window when the specified index doesn't exist).
+        let target = if let Some(window_idx) = idx {
+            format!("{}:{}", session, window_idx)
+        } else {
+            session.clone()
+        };
 
         // Send text literally, then Enter as a separate tmux invocation.
         // Note: ";" in .args() is passed as a literal argument, not a tmux
@@ -63,29 +69,51 @@ pub(crate) async fn handle_input_via_tmux(
             .args(&["send-keys", "-t", &target, "-l", text])
             .output()
             .await;
+
+        // If session:window failed (window doesn't exist), retry with session only
+        let send_text = match &send_text {
+            Ok(output) if !output.status.success() && idx.is_some() => {
+                warn!("InputViaTmux: target {} failed, retrying with session only ({})", target, session);
+                tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", session, "-l", text])
+                    .output()
+                    .await
+            }
+            _ => send_text,
+        };
+
         // Small delay so the TUI (e.g. OpenCode) finishes processing the
         // typed characters before Enter arrives.  Without this, Enter can
         // be consumed by an in-progress redraw and the message is dropped.
         tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+
+        // Use the same target that succeeded for send-text
+        let effective_target = match &send_text {
+            Ok(output) if output.status.success() && idx.is_some() => {
+                // Check if original target worked or we fell back
+                target.clone()
+            }
+            _ => session.clone(),
+        };
         let send_enter = tokio::process::Command::new("tmux")
-            .args(&["send-keys", "-t", &target, "Enter"])
+            .args(&["send-keys", "-t", &effective_target, "Enter"])
             .output()
             .await;
 
         match (send_text, send_enter) {
             (Ok(t), Ok(e)) if t.status.success() && e.status.success() => {
-                info!("InputViaTmux: OK sent {:?} to target {}", text, target);
+                info!("InputViaTmux: OK sent {:?} to target {}", text, effective_target);
             }
             (Ok(t), Ok(e)) => {
                 error!("InputViaTmux: tmux send-keys FAILED for {} — text_exit={}, enter_exit={}, text_stderr={:?}, enter_stderr={:?}",
-                    target, t.status, e.status,
+                    effective_target, t.status, e.status,
                     String::from_utf8_lossy(&t.stderr),
                     String::from_utf8_lossy(&e.stderr));
             }
             (Err(e), _) | (_, Err(e)) => {
                 error!(
                     "InputViaTmux: failed to spawn tmux for {}: {}",
-                    target, e
+                    effective_target, e
                 );
             }
         }

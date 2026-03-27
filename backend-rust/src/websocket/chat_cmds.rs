@@ -765,24 +765,40 @@ pub(crate) async fn handle(
             let text = message.trim();
 
             // Two separate tmux calls: text first, then Enter.
-            let _ = tokio::process::Command::new("tmux")
+            let send_text = tokio::process::Command::new("tmux")
                 .args(&["send-keys", "-t", &target, "-l", text])
                 .output()
                 .await;
+
+            // If session:window failed (window doesn't exist), retry with session only
+            // so tmux targets the active window.
+            let (send_text, effective_target) = match &send_text {
+                Ok(output) if !output.status.success() => {
+                    warn!("SendChatMessage: target {} failed, retrying with session only ({})", target, session_name);
+                    let retry = tokio::process::Command::new("tmux")
+                        .args(&["send-keys", "-t", &session_name, "-l", text])
+                        .output()
+                        .await;
+                    (retry, session_name.clone())
+                }
+                _ => (send_text, target.clone()),
+            };
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
             let result = tokio::process::Command::new("tmux")
-                .args(&["send-keys", "-t", &target, "Enter"])
+                .args(&["send-keys", "-t", &effective_target, "Enter"])
                 .output()
                 .await;
 
             match result {
                 Ok(output) if output.status.success() => {
-                    info!("Sent chat message to tmux: {:?}", text);
+                    info!("Sent chat message to tmux: {:?} (target: {})", text, effective_target);
                 }
                 Ok(output) => {
-                    error!("tmux send-keys failed for {}: {}", target, output.status);
+                    error!("tmux send-keys failed for {}: {}", effective_target, output.status);
                 }
                 Err(e) => {
-                    error!("Failed to send chat message to tmux session {}: {}", target, e);
+                    error!("Failed to send chat message to tmux session {}: {}", effective_target, e);
                 }
             }
         }

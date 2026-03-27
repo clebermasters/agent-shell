@@ -11,7 +11,7 @@ class FileBrowserRepository @Inject constructor(
 ) {
     companion object {
         private val FILE_TYPES = setOf(
-            "file-list",
+            "files-list",
             "file-deleted",
             "file-renamed",
             "file-operation-error",

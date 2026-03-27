@@ -119,7 +119,7 @@ class FileBrowserViewModel @Inject constructor(
         viewModelScope.launch {
             repository.filteredFileEvents().collect { msg ->
                 when (msg["type"] as? String) {
-                    "file-list" -> handleFileList(msg)
+                    "files-list" -> handleFileList(msg)
                     "file-deleted" -> handleFileDeleted(msg)
                     "file-renamed" -> handleFileRenamed(msg)
                     "file-operation-error" -> handleError(msg)

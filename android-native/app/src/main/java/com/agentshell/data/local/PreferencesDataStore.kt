@@ -71,7 +71,7 @@ class PreferencesDataStore @Inject constructor(
     // ─── openaiApiKey ────────────────────────────────────────────────────────
 
     val openaiApiKey: Flow<String>
-        get() = dataStore.data.map { it[Keys.OPENAI_API_KEY] ?: "" }
+        get() = dataStore.data.map { it[Keys.OPENAI_API_KEY] ?: com.agentshell.core.config.BuildConfig.DEFAULT_API_KEY }
 
     suspend fun setOpenaiApiKey(value: String) {
         dataStore.edit { it[Keys.OPENAI_API_KEY] = value }

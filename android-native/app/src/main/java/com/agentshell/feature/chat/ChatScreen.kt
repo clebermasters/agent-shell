@@ -337,6 +337,7 @@ fun ChatScreen(
                     onSend = { viewModel.sendMessage(uiState.draftMessage) },
                     isStreaming = uiState.isStreaming,
                     showVoiceButton = showVoiceButton,
+                    onCancelRecording = viewModel::cancelVoiceRecording,
                     isRecording = uiState.isRecording,
                     isTranscribing = uiState.isTranscribing,
                     recordingDuration = uiState.recordingDuration,
@@ -443,6 +444,7 @@ private fun ChatInputBar(
     onSend: () -> Unit,
     isStreaming: Boolean,
     showVoiceButton: Boolean = false,
+    onCancelRecording: () -> Unit = {},
     isRecording: Boolean = false,
     isTranscribing: Boolean = false,
     recordingDuration: Int = 0,
@@ -546,7 +548,19 @@ private fun ChatInputBar(
                                 ),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color(0xFFEF4444),
+                                modifier = Modifier.weight(1f),
                             )
+                            IconButton(
+                                onClick = onCancelRecording,
+                                modifier = Modifier.size(24.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Cancel recording",
+                                    tint = Color(0xFFEF4444),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
                         }
                     }
                 }

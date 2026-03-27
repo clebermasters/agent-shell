@@ -2,6 +2,7 @@ package com.agentshell.feature.terminal
 
 import android.Manifest
 import android.app.Activity
+import androidx.activity.compose.BackHandler
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -211,6 +212,9 @@ fun TerminalScreen(
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
     }
+
+    // Back button exits fullscreen instead of navigating away
+    BackHandler(enabled = isFullscreen) { toggleFullscreen() }
 
     // Restore system bars when leaving the screen
     DisposableEffect(Unit) {

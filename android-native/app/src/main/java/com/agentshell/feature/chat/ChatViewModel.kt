@@ -175,8 +175,8 @@ class ChatViewModel @Inject constructor(
                     .let { msg ->
                         @Suppress("UNCHECKED_CAST")
                         val windows = msg["windows"] as? List<Map<String, Any?>>
-                        // Use the first window's id (which is the actual tmux window index)
-                        windows?.firstOrNull()?.let { (it["id"] as? Number)?.toInt() }
+                        // Use the first window's index (the actual tmux window number)
+                        windows?.firstOrNull()?.let { (it["index"] as? Number)?.toInt() }
                     }
             } ?: fallbackIndex
 

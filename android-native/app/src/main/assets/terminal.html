@@ -172,6 +172,19 @@
       term.selectAll();
     },
 
+    // Scroll terminal by n lines (positive = down, negative = up)
+    scrollLines: function(n) {
+      try { term.scrollLines(n); } catch(e) {}
+    },
+
+    // Scroll to top/bottom of buffer
+    scrollToTop: function() {
+      try { term.scrollToTop(); } catch(e) {}
+    },
+    scrollToBottom: function() {
+      try { term.scrollToBottom(); } catch(e) {}
+    },
+
     // Extract all text from terminal buffer (for selection overlay)
     getBufferText: function() {
       var lines = [];
@@ -201,6 +214,61 @@
       }
     } catch(e) {}
   });
+
+  // ── Touch scrolling ──────────────────────────────────────────────────────
+  // Android WebView doesn't translate touch gestures to mouse wheel events
+  // that xterm.js expects. Intercept vertical swipes and call scrollLines().
+  (function() {
+    var touchStartY = null;
+    var touchAccum = 0;
+    var DRAG_THRESHOLD = 12;   // px before scrolling starts
+    var LINE_HEIGHT = 18;      // px per scroll line (approx)
+    var isDragging = false;
+
+    var el = term.element;
+    if (!el) return;
+
+    el.addEventListener('touchstart', function(e) {
+      if (e.touches.length !== 1) return;
+      touchStartY = e.touches[0].clientY;
+      touchAccum = 0;
+      isDragging = false;
+    }, { passive: true });
+
+    el.addEventListener('touchmove', function(e) {
+      if (touchStartY === null || e.touches.length !== 1) return;
+      var dy = touchStartY - e.touches[0].clientY;
+
+      if (!isDragging && Math.abs(dy) > DRAG_THRESHOLD) {
+        isDragging = true;
+        touchAccum = 0;
+      }
+
+      if (isDragging) {
+        touchAccum += dy;
+        touchStartY = e.touches[0].clientY;
+
+        var lines = Math.trunc(touchAccum / LINE_HEIGHT);
+        if (lines !== 0) {
+          term.scrollLines(lines);
+          touchAccum -= lines * LINE_HEIGHT;
+        }
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    el.addEventListener('touchend', function() {
+      touchStartY = null;
+      touchAccum = 0;
+      isDragging = false;
+    }, { passive: true });
+
+    el.addEventListener('touchcancel', function() {
+      touchStartY = null;
+      touchAccum = 0;
+      isDragging = false;
+    }, { passive: true });
+  })();
 
 })();
 </script>

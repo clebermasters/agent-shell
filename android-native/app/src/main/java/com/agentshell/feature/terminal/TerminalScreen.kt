@@ -275,9 +275,7 @@ fun TerminalScreen(
                         // File browser shortcut
                         if (onNavigateToFileBrowser != null) {
                             IconButton(onClick = {
-                                viewModel.requestSessionCwd()
-                                coroutineScope.launch {
-                                    val path = viewModel.cwdResult.first()
+                                viewModel.navigateToFileBrowser { path ->
                                     onNavigateToFileBrowser(path)
                                 }
                             }) {

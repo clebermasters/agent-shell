@@ -23,8 +23,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 data class TerminalUiState(
@@ -208,6 +210,26 @@ class TerminalViewModel @Inject constructor(
         val currentName = _uiState.value.sessionName
         if (currentName.isNotBlank()) {
             webSocketService.getSessionCwd(currentName)
+        }
+    }
+
+    /**
+     * Request the session CWD and navigate to the file browser once the
+     * response arrives. Handles the full async flow internally.
+     */
+    fun navigateToFileBrowser(onResult: (String) -> Unit) {
+        val currentName = _uiState.value.sessionName
+        if (currentName.isBlank()) return
+        viewModelScope.launch {
+            // Start collecting BEFORE sending the request to avoid race
+            val deferred = viewModelScope.async {
+                withTimeoutOrNull(3000L) {
+                    _cwdResult.first()
+                }
+            }
+            webSocketService.getSessionCwd(currentName)
+            val path = deferred.await() ?: "/home"
+            onResult(path)
         }
     }
 }

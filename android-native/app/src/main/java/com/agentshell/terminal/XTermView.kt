@@ -3,11 +3,13 @@ package com.agentshell.terminal
 import android.annotation.SuppressLint
 import android.util.Base64
 import android.util.Log
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlin.math.abs
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -186,6 +188,73 @@ fun XTermView(
 
     val webView = remember {
         object : WebView(context) {
+            private var touchStartY = 0f
+            private var touchStartX = 0f
+            private var scrollAccum = 0f
+            private var isScrolling = false
+            private var isHorizontal = false
+            private val dragThreshold = 10f
+            private val lineHeight = 16f
+
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchStartY = event.y
+                        touchStartX = event.x
+                        scrollAccum = 0f
+                        isScrolling = false
+                        isHorizontal = false
+                        Log.d("XTermScroll", "DOWN y=${event.y}")
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (!isHorizontal) {
+                            val dy = touchStartY - event.y
+                            val dx = event.x - touchStartX
+
+                            if (!isScrolling) {
+                                if (abs(dx) > abs(dy) && abs(dx) > dragThreshold) {
+                                    isHorizontal = true
+                                } else if (abs(dy) > dragThreshold) {
+                                    isScrolling = true
+                                    scrollAccum = 0f
+                                    parent?.requestDisallowInterceptTouchEvent(true)
+                                    Log.d("XTermScroll", "SCROLL START dy=$dy")
+                                }
+                            }
+
+                            if (isScrolling) {
+                                scrollAccum += dy
+                                touchStartY = event.y
+                                val lines = (scrollAccum / lineHeight).toInt()
+                                if (lines != 0) {
+                                    // Send mouse wheel escape sequences TO the backend
+                                    // (not to xterm.js display — that was the bug)
+                                    // SGR mouse: \x1b[<button;col;rowM
+                                    // button 64 = wheel up, 65 = wheel down
+                                    // Matches Flutter's onOutput approach
+                                    val button = if (lines > 0) 64 else 65
+                                    val count = abs(lines).coerceAtMost(5)
+                                    val seq = "\u001b[<$button;1;1M"
+                                    bridge.onInput(seq.repeat(count))
+                                    scrollAccum -= lines * lineHeight
+                                }
+                                return true // consume — don't pass to WebView
+                            }
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val wasScrolling = isScrolling
+                        Log.d("XTermScroll", "UP wasScrolling=$wasScrolling")
+                        isScrolling = false
+                        isHorizontal = false
+                        scrollAccum = 0f
+                        parent?.requestDisallowInterceptTouchEvent(false)
+                        if (wasScrolling) return true
+                    }
+                }
+                return super.dispatchTouchEvent(event)
+            }
+
             override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
                 if (event.action == android.view.KeyEvent.ACTION_DOWN) {
                     when (event.keyCode) {

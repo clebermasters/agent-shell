@@ -68,13 +68,26 @@ import com.agentshell.data.model.ChatBlockType
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Typeface
 import android.text.method.LinkMovementMethod
+import android.widget.Toast
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import kotlinx.coroutines.delay
+import coil.request.ImageRequest
+import com.agentshell.core.config.BuildConfig
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -85,6 +98,7 @@ fun MessageBubble(
     message: ChatMessage,
     showThinking: Boolean = true,
     showToolCalls: Boolean = true,
+    fileBaseUrl: String = "",
     modifier: Modifier = Modifier,
 ) {
     val isUser = message.messageType == ChatMessageType.USER
@@ -142,6 +156,7 @@ fun MessageBubble(
                             block = block,
                             showThinking = showThinking,
                             showToolCalls = showToolCalls,
+                            fileBaseUrl = fileBaseUrl,
                         )
                     }
                 } else if (!message.content.isNullOrBlank()) {
@@ -247,6 +262,7 @@ private fun BlockContent(
     block: ChatBlock,
     showThinking: Boolean,
     showToolCalls: Boolean,
+    fileBaseUrl: String = "",
 ) {
     when (block.blockType) {
         ChatBlockType.TEXT -> {
@@ -277,15 +293,15 @@ private fun BlockContent(
         }
 
         ChatBlockType.IMAGE -> {
-            ImageBlock(block = block)
+            ImageBlock(block = block, fileBaseUrl = fileBaseUrl)
         }
 
         ChatBlockType.AUDIO -> {
-            AudioBlock(block = block)
+            AudioBlock(block = block, fileBaseUrl = fileBaseUrl)
         }
 
         ChatBlockType.FILE -> {
-            FileBlock(block = block)
+            FileBlock(block = block, fileBaseUrl = fileBaseUrl)
         }
     }
 }
@@ -569,14 +585,39 @@ private fun ToolResultBlock(block: ChatBlock) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun ImageBlock(block: ChatBlock) {
+private fun ImageBlock(block: ChatBlock, fileBaseUrl: String = "") {
+    val imageUrl = if (fileBaseUrl.isNotBlank() && !block.id.isNullOrBlank()) {
+        "$fileBaseUrl/${block.id}"
+    } else {
+        block.id
+    }
+    val context = LocalContext.current
+    var showFullScreen by remember { mutableStateOf(false) }
+
+    val imageRequest = remember(imageUrl) {
+        imageUrl?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
+                .build()
+        }
+    }
+
     AsyncImage(
-        model = block.id,  // URL or media ID resolved externally
+        model = imageRequest,
         contentDescription = block.altText,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp)),
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { showFullScreen = true },
     )
+
+    if (showFullScreen && imageUrl != null) {
+        FullScreenImageDialog(
+            imageUrl = imageUrl,
+            onDismiss = { showFullScreen = false },
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -584,15 +625,25 @@ private fun ImageBlock(block: ChatBlock) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun AudioBlock(block: ChatBlock) {
+private fun AudioBlock(block: ChatBlock, fileBaseUrl: String = "") {
+    val audioUrl = if (fileBaseUrl.isNotBlank() && !block.id.isNullOrBlank()) {
+        "$fileBaseUrl/${block.id}"
+    } else {
+        block.id
+    }
     val context = LocalContext.current
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().also { player ->
-            if (!block.id.isNullOrBlank()) {
-                player.setMediaItem(MediaItem.fromUri(block.id))
-                player.prepare()
+    val exoPlayer = remember(audioUrl) {
+        val dataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+            .setDefaultRequestProperties(mapOf("X-Auth-Token" to BuildConfig.AUTH_TOKEN))
+        val mediaSourceFactory = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(dataSourceFactory)
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .build().also { player ->
+                if (!audioUrl.isNullOrBlank()) {
+                    player.setMediaItem(MediaItem.fromUri(audioUrl))
+                    player.prepare()
+                }
             }
-        }
     }
     DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
 
@@ -653,9 +704,28 @@ private fun AudioBlock(block: ChatBlock) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun FileBlock(block: ChatBlock) {
+private fun FileBlock(block: ChatBlock, fileBaseUrl: String = "") {
+    val fileUrl = if (fileBaseUrl.isNotBlank() && !block.id.isNullOrBlank()) {
+        "$fileBaseUrl/${block.id}"
+    } else {
+        null
+    }
+    val context = LocalContext.current
+    var isDownloading by remember { mutableStateOf(false) }
+
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = fileUrl != null && !isDownloading) {
+                isDownloading = true
+                downloadAndOpenFile(
+                    context = context,
+                    url = fileUrl!!,
+                    filename = block.filename ?: "file",
+                    mimeType = block.mimeType ?: "application/octet-stream",
+                    onComplete = { isDownloading = false },
+                )
+            },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(8.dp),
     ) {
@@ -664,12 +734,16 @@ private fun FileBlock(block: ChatBlock) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(
-                Icons.Default.InsertDriveFile,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp),
-            )
+            if (isDownloading) {
+                CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(
+                    Icons.Default.InsertDriveFile,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp),
+                )
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = block.filename ?: "File",
@@ -690,6 +764,111 @@ private fun FileBlock(block: ChatBlock) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fullscreen image dialog
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun FullScreenImageDialog(imageUrl: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val imageRequest = remember(imageUrl) {
+        ImageRequest.Builder(context)
+            .data(imageUrl)
+            .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
+            .build()
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.9f))
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            AsyncImage(
+                model = imageRequest,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Close",
+                    tint = Color.White,
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File download + open helper
+// ---------------------------------------------------------------------------
+
+private fun downloadAndOpenFile(
+    context: android.content.Context,
+    url: String,
+    filename: String,
+    mimeType: String,
+    onComplete: () -> Unit,
+) {
+    Thread {
+        try {
+            val client = OkHttpClient()
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
+                .build()
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    Toast.makeText(context, "Download failed: ${response.code}", Toast.LENGTH_SHORT).show()
+                    onComplete()
+                }
+                return@Thread
+            }
+            val cacheDir = File(context.cacheDir, "chat_files")
+            cacheDir.mkdirs()
+            val file = File(cacheDir, filename)
+            file.outputStream().use { out ->
+                response.body?.byteStream()?.copyTo(out)
+            }
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file,
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    context.startActivity(intent)
+                } catch (_: Exception) {
+                    Toast.makeText(context, "No app to open this file", Toast.LENGTH_SHORT).show()
+                }
+                onComplete()
+            }
+        } catch (e: Exception) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                Toast.makeText(context, "Download error: ${e.message}", Toast.LENGTH_SHORT).show()
+                onComplete()
+            }
+        }
+    }.start()
 }
 
 // ---------------------------------------------------------------------------

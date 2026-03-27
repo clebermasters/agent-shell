@@ -303,6 +303,7 @@ fun ChatScreen(
                                 message = message,
                                 showThinking = uiState.showThinking,
                                 showToolCalls = uiState.showToolCalls,
+                                fileBaseUrl = uiState.fileBaseUrl,
                             )
                         }
 

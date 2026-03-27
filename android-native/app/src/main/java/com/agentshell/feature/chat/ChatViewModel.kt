@@ -24,6 +24,7 @@ import com.agentshell.data.remote.unwatchChatLog
 import com.agentshell.data.remote.watchAcpChatLog
 import com.agentshell.data.remote.watchChatLog
 import com.agentshell.data.repository.ChatRepository
+import com.agentshell.data.repository.HostRepository
 import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.WhisperService
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -79,6 +80,7 @@ data class ChatUiState(
     val showToolCalls: Boolean = true,
     val draftMessage: String = "",
     val error: String? = null,
+    val fileBaseUrl: String = "",
 )
 
 // ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ data class ChatUiState(
 class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val chatRepository: ChatRepository,
+    private val hostRepository: HostRepository,
     private val dataStore: PreferencesDataStore,
     private val audioService: AudioService,
     private val whisperService: WhisperService,
@@ -122,6 +125,12 @@ class ChatViewModel @Inject constructor(
             val showThinking = dataStore.showThinking.first()
             val showToolCalls = dataStore.showToolCalls.first()
             _uiState.update { it.copy(showThinking = showThinking, showToolCalls = showToolCalls) }
+        }
+        viewModelScope.launch {
+            val host = hostRepository.getSelectedHostOnce()
+            if (host != null) {
+                _uiState.update { it.copy(fileBaseUrl = "${host.httpUrl}/api/chat/files") }
+            }
         }
         viewModelScope.launch {
             audioService.isRecording.collect { recording ->

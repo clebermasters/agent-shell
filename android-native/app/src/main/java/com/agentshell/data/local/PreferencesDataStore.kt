@@ -98,7 +98,7 @@ class PreferencesDataStore @Inject constructor(
     // ─── showThinking ────────────────────────────────────────────────────────
 
     val showThinking: Flow<Boolean>
-        get() = dataStore.data.map { it[Keys.SHOW_THINKING] ?: false }
+        get() = dataStore.data.map { it[Keys.SHOW_THINKING] ?: com.agentshell.core.config.BuildConfig.DEFAULT_SHOW_THINKING }
 
     suspend fun setShowThinking(value: Boolean) {
         dataStore.edit { it[Keys.SHOW_THINKING] = value }
@@ -107,7 +107,7 @@ class PreferencesDataStore @Inject constructor(
     // ─── showToolCalls ───────────────────────────────────────────────────────
 
     val showToolCalls: Flow<Boolean>
-        get() = dataStore.data.map { it[Keys.SHOW_TOOL_CALLS] ?: false }
+        get() = dataStore.data.map { it[Keys.SHOW_TOOL_CALLS] ?: com.agentshell.core.config.BuildConfig.DEFAULT_SHOW_TOOL_CALLS }
 
     suspend fun setShowToolCalls(value: Boolean) {
         dataStore.edit { it[Keys.SHOW_TOOL_CALLS] = value }

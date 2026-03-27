@@ -15,6 +15,7 @@ class FileBrowserRepository @Inject constructor(
             "file-deleted",
             "file-renamed",
             "file-operation-error",
+            "binary-file-content",
         )
     }
 
@@ -32,5 +33,9 @@ class FileBrowserRepository @Inject constructor(
 
     fun renameFile(path: String, newName: String) {
         wsService.send(mapOf("type" to "rename-file", "path" to path, "newName" to newName))
+    }
+
+    fun readBinaryFile(path: String) {
+        wsService.send(mapOf("type" to "read-binary-file", "path" to path))
     }
 }

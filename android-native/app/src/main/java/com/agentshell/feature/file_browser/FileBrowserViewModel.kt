@@ -1,5 +1,6 @@
 package com.agentshell.feature.file_browser
 
+import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentshell.data.model.FileEntry
@@ -16,6 +17,14 @@ enum class SortMode {
     NAME_ASC, NAME_DESC, SIZE_ASC, SIZE_DESC, MODIFIED_DESC
 }
 
+data class FileViewerState(
+    val isLoading: Boolean = false,
+    val entry: FileEntry? = null,
+    val bytes: ByteArray? = null,
+    val mimeType: String? = null,
+    val error: String? = null,
+)
+
 data class FileBrowserUiState(
     val currentPath: String = "/",
     val entries: List<FileEntry> = emptyList(),
@@ -25,6 +34,7 @@ data class FileBrowserUiState(
     val showHidden: Boolean = false,
     val selectedPaths: Set<String> = emptySet(),
     val isSelectionMode: Boolean = false,
+    val viewer: FileViewerState? = null,
 ) {
     val sortedEntries: List<FileEntry>
         get() {
@@ -115,6 +125,15 @@ class FileBrowserViewModel @Inject constructor(
         repository.renameFile(path, newName)
     }
 
+    fun openFile(entry: FileEntry) {
+        _state.update { it.copy(viewer = FileViewerState(isLoading = true, entry = entry)) }
+        repository.readBinaryFile(entry.path)
+    }
+
+    fun closeViewer() {
+        _state.update { it.copy(viewer = null) }
+    }
+
     private fun observeEvents() {
         viewModelScope.launch {
             repository.filteredFileEvents().collect { msg ->
@@ -123,6 +142,7 @@ class FileBrowserViewModel @Inject constructor(
                     "file-deleted" -> handleFileDeleted(msg)
                     "file-renamed" -> handleFileRenamed(msg)
                     "file-operation-error" -> handleError(msg)
+                    "binary-file-content" -> handleBinaryFileContent(msg)
                 }
             }
         }
@@ -145,6 +165,20 @@ class FileBrowserViewModel @Inject constructor(
     private fun handleFileRenamed(msg: Map<String, Any?>) {
         // Refresh directory after rename
         repository.listDirectory(_state.value.currentPath)
+    }
+
+    private fun handleBinaryFileContent(msg: Map<String, Any?>) {
+        val error = msg["error"] as? String
+        if (error != null) {
+            _state.update { it.copy(viewer = it.viewer?.copy(isLoading = false, error = error)) }
+            return
+        }
+        val b64 = msg["contentBase64"] as? String ?: ""
+        val mimeType = msg["mimeType"] as? String
+        val bytes = if (b64.isNotEmpty()) Base64.decode(b64, Base64.DEFAULT) else null
+        _state.update {
+            it.copy(viewer = it.viewer?.copy(isLoading = false, bytes = bytes, mimeType = mimeType))
+        }
     }
 
     private fun handleError(msg: Map<String, Any?>) {

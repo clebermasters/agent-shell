@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -17,10 +20,19 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.agentshell.data.model.FileEntry
+import com.agentshell.feature.alerts.AudioViewer
+import com.agentshell.feature.alerts.FileInfoDialog
+import com.agentshell.feature.alerts.HtmlViewer
+import com.agentshell.feature.alerts.ImageViewer
+import com.agentshell.feature.alerts.MarkdownViewer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +51,44 @@ fun FileBrowserScreen(
     var searchQuery by remember { mutableStateOf("") }
 
     LaunchedEffect(initialPath) { viewModel.listDirectory(initialPath) }
+
+    // File viewer overlay
+    state.viewer?.let { viewer ->
+        if (viewer.isLoading) {
+            AlertDialog(
+                onDismissRequest = { viewModel.closeViewer() },
+                title = { Text(viewer.entry?.name ?: "Loading…") },
+                text = { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.closeViewer() }) { Text("Cancel") }
+                },
+            )
+        } else if (viewer.error != null) {
+            AlertDialog(
+                onDismissRequest = { viewModel.closeViewer() },
+                title = { Text("Error") },
+                text = { Text(viewer.error) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.closeViewer() }) { Text("Close") }
+                },
+            )
+        } else if (viewer.bytes != null && viewer.entry != null) {
+            val mime = (viewer.mimeType ?: "").lowercase()
+            val filename = viewer.entry.name
+            val dismiss = { viewModel.closeViewer() }
+            when {
+                mime.startsWith("image/") -> ImageViewer(viewer.bytes, filename, dismiss)
+                mime.startsWith("audio/") -> AudioViewer(viewer.bytes, filename, mime, dismiss)
+                mime == "text/markdown" || filename.endsWith(".md") ->
+                    MarkdownViewer(viewer.bytes, filename, dismiss)
+                mime == "text/html" || filename.endsWith(".html") || filename.endsWith(".htm") ->
+                    HtmlViewer(viewer.bytes, filename, dismiss)
+                mime.startsWith("text/") || isTextFile(filename) ->
+                    TextFileViewer(viewer.bytes, filename, dismiss)
+                else -> FileInfoDialog(filename, viewer.entry.size, mime.ifEmpty { "unknown" }, dismiss)
+            }
+        }
+    }
 
     val breadcrumbs = buildBreadcrumbs(state.currentPath)
     val filtered = if (searchQuery.isEmpty()) state.sortedEntries
@@ -266,7 +316,7 @@ fun FileBrowserScreen(
                                 } else if (entry.isDirectory) {
                                     viewModel.navigateTo(entry.path)
                                 } else {
-                                    onOpenFile(entry)
+                                    viewModel.openFile(entry)
                                 }
                             },
                             onLongPress = {
@@ -427,5 +477,78 @@ private fun fileIconColor(name: String, isDirectory: Boolean): Color {
         "html","htm" -> Color(0xFF2DD4BF)
         "md" -> Color(0xFF22D3EE)
         else -> Color(0xFF9CA3AF)
+    }
+}
+
+private val TEXT_EXTENSIONS = setOf(
+    "txt", "md", "rst", "log", "csv", "tsv",
+    "json", "yaml", "yml", "toml", "ini", "conf", "cfg", "env", "properties",
+    "dart", "py", "js", "ts", "jsx", "tsx", "rs", "go", "java", "kt", "kts",
+    "cpp", "c", "h", "hpp", "cs", "rb", "php", "swift", "scala", "zig",
+    "sh", "bash", "zsh", "fish", "bat", "ps1",
+    "xml", "svg", "html", "htm", "css", "scss", "sass", "less",
+    "sql", "graphql", "proto",
+    "makefile", "dockerfile", "gitignore", "gitattributes", "editorconfig",
+    "gradle", "lock",
+)
+
+private fun isTextFile(name: String): Boolean {
+    val lower = name.lowercase()
+    if (lower == "makefile" || lower == "dockerfile" || lower == "rakefile") return true
+    val ext = if (lower.contains('.')) lower.substringAfterLast('.') else ""
+    return ext in TEXT_EXTENSIONS
+}
+
+@Composable
+private fun TextFileViewer(
+    bytes: ByteArray,
+    filename: String,
+    onDismiss: () -> Unit,
+) {
+    val text = remember(bytes) { String(bytes, Charsets.UTF_8) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.95f).padding(vertical = 32.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = filename,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                SelectionContainer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Text(
+                        text = text,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
     }
 }

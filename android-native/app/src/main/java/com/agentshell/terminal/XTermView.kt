@@ -193,6 +193,7 @@ fun XTermView(
             private var scrollAccum = 0f
             private var isScrolling = false
             private var isHorizontal = false
+            private var sentDownToWebView = false
             private val dragThreshold = 10f
             private val lineHeight = 16f
 
@@ -204,7 +205,10 @@ fun XTermView(
                         scrollAccum = 0f
                         isScrolling = false
                         isHorizontal = false
-                        Log.d("XTermScroll", "DOWN y=${event.y}")
+                        sentDownToWebView = false
+                        // Don't pass DOWN to WebView yet — wait to see
+                        // if this becomes a scroll or a tap.
+                        return true
                     }
                     MotionEvent.ACTION_MOVE -> {
                         if (!isHorizontal) {
@@ -218,7 +222,6 @@ fun XTermView(
                                     isScrolling = true
                                     scrollAccum = 0f
                                     parent?.requestDisallowInterceptTouchEvent(true)
-                                    Log.d("XTermScroll", "SCROLL START dy=$dy")
                                 }
                             }
 
@@ -227,29 +230,36 @@ fun XTermView(
                                 touchStartY = event.y
                                 val lines = (scrollAccum / lineHeight).toInt()
                                 if (lines != 0) {
-                                    // Send mouse wheel escape sequences TO the backend
-                                    // (not to xterm.js display — that was the bug)
-                                    // SGR mouse: \x1b[<button;col;rowM
-                                    // button 64 = wheel up, 65 = wheel down
-                                    // Matches Flutter's onOutput approach
                                     val button = if (lines > 0) 64 else 65
                                     val count = abs(lines).coerceAtMost(5)
                                     val seq = "\u001b[<$button;1;1M"
                                     bridge.onInput(seq.repeat(count))
                                     scrollAccum -= lines * lineHeight
                                 }
-                                return true // consume — don't pass to WebView
+                                return true
                             }
                         }
+                        // Not yet scrolling — still might become one, consume MOVE
+                        if (!sentDownToWebView) return true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         val wasScrolling = isScrolling
-                        Log.d("XTermScroll", "UP wasScrolling=$wasScrolling")
                         isScrolling = false
                         isHorizontal = false
                         scrollAccum = 0f
                         parent?.requestDisallowInterceptTouchEvent(false)
                         if (wasScrolling) return true
+                        // Was a tap — replay DOWN+UP to WebView so it
+                        // toggles keyboard / focuses terminal.
+                        if (!sentDownToWebView) {
+                            val down = MotionEvent.obtain(
+                                event.downTime, event.downTime,
+                                MotionEvent.ACTION_DOWN, touchStartX, touchStartY, 0,
+                            )
+                            super.dispatchTouchEvent(down)
+                            down.recycle()
+                            sentDownToWebView = true
+                        }
                     }
                 }
                 return super.dispatchTouchEvent(event)

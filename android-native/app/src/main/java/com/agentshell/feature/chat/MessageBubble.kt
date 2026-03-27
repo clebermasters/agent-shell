@@ -124,6 +124,9 @@ fun MessageBubble(
         return
     }
 
+    // Hide entire tool bubble when setting is off
+    if (isTool && !showToolCalls) return
+
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,

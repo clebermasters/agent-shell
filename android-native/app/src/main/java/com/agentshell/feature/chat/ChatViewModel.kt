@@ -16,6 +16,7 @@ import com.agentshell.data.remote.sendFileToAcpChat
 import com.agentshell.data.remote.sendFileToChat
 import com.agentshell.data.remote.sendChatMessage
 import com.agentshell.data.remote.sendInputViaTmux
+import com.agentshell.data.remote.requestWindows
 import com.agentshell.data.remote.acpResumeSession
 import com.agentshell.data.remote.clearChatLog
 import com.agentshell.data.remote.loadMoreChatHistory
@@ -149,7 +150,40 @@ class ChatViewModel @Inject constructor(
             )
         }
         restoreDraft(draftKey(sessionName, windowIndex))
-        webSocketService.watchChatLog(sessionName, windowIndex)
+        // Resolve the actual window index from the session's window list.
+        // The caller may pass 0 (hardcoded default) but the session might not
+        // have a window 0 — e.g. agentShell has windows 1 and 2 only.
+        // Request the window list, then use the first window's real index.
+        resolveWindowAndWatch(sessionName, windowIndex)
+    }
+
+    /**
+     * Request the session's window list, find the best window index, and
+     * start watching the chat log with the resolved index. Falls back to
+     * the provided [fallbackIndex] if the window list doesn't arrive.
+     */
+    private fun resolveWindowAndWatch(sessionName: String, fallbackIndex: Int) {
+        webSocketService.requestWindows(sessionName)
+        viewModelScope.launch {
+            // Wait for the windows-list response (or timeout after 2s)
+            val resolvedIndex = kotlinx.coroutines.withTimeoutOrNull(2000L) {
+                webSocketService.messages
+                    .first { msg ->
+                        msg["type"] == "windows-list" &&
+                                msg["sessionName"] == sessionName
+                    }
+                    .let { msg ->
+                        @Suppress("UNCHECKED_CAST")
+                        val windows = msg["windows"] as? List<Map<String, Any?>>
+                        // Use the first window's id (which is the actual tmux window index)
+                        windows?.firstOrNull()?.let { (it["id"] as? Number)?.toInt() }
+                    }
+            } ?: fallbackIndex
+
+            // Update state with the resolved index
+            _uiState.update { it.copy(windowIndex = resolvedIndex) }
+            webSocketService.watchChatLog(sessionName, resolvedIndex)
+        }
     }
 
     /** Begin watching an ACP chat session. */

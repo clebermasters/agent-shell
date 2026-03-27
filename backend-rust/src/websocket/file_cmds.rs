@@ -151,6 +151,109 @@ pub(crate) async fn handle(
             }
         }
 
+        WebSocketMessage::CopyFiles { source_paths, destination_path } => {
+            if let Err(e) = validate_path(&destination_path) {
+                let response = ServerMessage::FilesCopied {
+                    success: false,
+                    error: Some(e),
+                };
+                send_message(tx, response).await?;
+                return Ok(());
+            }
+
+            let dest = Path::new(&destination_path);
+            if !dest.is_dir() {
+                let response = ServerMessage::FilesCopied {
+                    success: false,
+                    error: Some("Destination is not a directory".to_string()),
+                };
+                send_message(tx, response).await?;
+                return Ok(());
+            }
+
+            let mut errors: Vec<String> = Vec::new();
+            for src in &source_paths {
+                if let Err(e) = validate_path(src) {
+                    errors.push(format!("{}: {}", src, e));
+                    continue;
+                }
+                let src_path = Path::new(src);
+                if !src_path.exists() {
+                    errors.push(format!("{}: not found", src));
+                    continue;
+                }
+                let file_name = match src_path.file_name() {
+                    Some(n) => n,
+                    None => { errors.push(format!("{}: invalid path", src)); continue; }
+                };
+                let target = dest.join(file_name);
+                if let Err(e) = copy_recursive(src_path, &target) {
+                    errors.push(format!("{}: {}", src, e));
+                }
+            }
+
+            let success = errors.is_empty();
+            let error = if errors.is_empty() { None } else { Some(errors.join("; ")) };
+            let response = ServerMessage::FilesCopied { success, error };
+            send_message(tx, response).await?;
+        }
+
+        WebSocketMessage::MoveFiles { source_paths, destination_path } => {
+            if let Err(e) = validate_path(&destination_path) {
+                let response = ServerMessage::FilesMoved {
+                    success: false,
+                    error: Some(e),
+                };
+                send_message(tx, response).await?;
+                return Ok(());
+            }
+
+            let dest = Path::new(&destination_path);
+            if !dest.is_dir() {
+                let response = ServerMessage::FilesMoved {
+                    success: false,
+                    error: Some("Destination is not a directory".to_string()),
+                };
+                send_message(tx, response).await?;
+                return Ok(());
+            }
+
+            let mut errors: Vec<String> = Vec::new();
+            for src in &source_paths {
+                if let Err(e) = validate_path(src) {
+                    errors.push(format!("{}: {}", src, e));
+                    continue;
+                }
+                let src_path = Path::new(src);
+                if !src_path.exists() {
+                    errors.push(format!("{}: not found", src));
+                    continue;
+                }
+                let file_name = match src_path.file_name() {
+                    Some(n) => n,
+                    None => { errors.push(format!("{}: invalid path", src)); continue; }
+                };
+                let target = dest.join(file_name);
+                if let Err(e) = std::fs::rename(src_path, &target) {
+                    // rename fails across filesystems — fall back to copy + delete
+                    if let Err(e2) = copy_recursive(src_path, &target)
+                        .and_then(|_| if src_path.is_dir() {
+                            std::fs::remove_dir_all(src_path)
+                        } else {
+                            std::fs::remove_file(src_path)
+                        })
+                    {
+                        errors.push(format!("{}: rename: {}, copy-fallback: {}", src, e, e2));
+                    }
+                }
+            }
+
+            let success = errors.is_empty();
+            let error = if errors.is_empty() { None } else { Some(errors.join("; ")) };
+            let response = ServerMessage::FilesMoved { success, error };
+            send_message(tx, response).await?;
+        }
+
         WebSocketMessage::ReadBinaryFile { path } => {
             if let Err(e) = validate_path(&path) {
                 let response = ServerMessage::BinaryFileContent {
@@ -206,6 +309,21 @@ pub(crate) async fn handle(
     }
 
     Ok(())
+}
+
+fn copy_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        std::fs::create_dir_all(dest)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let child_dest = dest.join(entry.file_name());
+            copy_recursive(&entry.path(), &child_dest)?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(src, dest)?;
+        Ok(())
+    }
 }
 
 fn detect_mime_type(path: &Path) -> &'static str {

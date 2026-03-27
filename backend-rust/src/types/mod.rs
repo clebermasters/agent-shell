@@ -393,6 +393,18 @@ pub enum WebSocketMessage {
         #[serde(rename = "newName")]
         new_name: String,
     },
+    CopyFiles {
+        #[serde(rename = "sourcePaths")]
+        source_paths: Vec<String>,
+        #[serde(rename = "destinationPath")]
+        destination_path: String,
+    },
+    MoveFiles {
+        #[serde(rename = "sourcePaths")]
+        source_paths: Vec<String>,
+        #[serde(rename = "destinationPath")]
+        destination_path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -778,6 +790,16 @@ pub enum ServerMessage {
         error: Option<String>,
     },
     FileRenamed {
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    FilesCopied {
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    FilesMoved {
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,

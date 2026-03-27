@@ -294,6 +294,8 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         | WebSocketMessage::GetSessionCwd { .. }
         | WebSocketMessage::DeleteFiles { .. }
         | WebSocketMessage::RenameFile { .. }
+        | WebSocketMessage::CopyFiles { .. }
+        | WebSocketMessage::MoveFiles { .. }
         | WebSocketMessage::ReadBinaryFile { .. } => {
             file_cmds::handle(msg, &state.message_tx).await?;
         }

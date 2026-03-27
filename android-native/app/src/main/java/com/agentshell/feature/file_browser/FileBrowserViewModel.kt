@@ -17,6 +17,8 @@ enum class SortMode {
     NAME_ASC, NAME_DESC, SIZE_ASC, SIZE_DESC, MODIFIED_DESC
 }
 
+enum class ClipboardMode { NONE, COPY, CUT }
+
 data class FileViewerState(
     val isLoading: Boolean = false,
     val entry: FileEntry? = null,
@@ -34,6 +36,8 @@ data class FileBrowserUiState(
     val showHidden: Boolean = false,
     val selectedPaths: Set<String> = emptySet(),
     val isSelectionMode: Boolean = false,
+    val clipboardPaths: List<String> = emptyList(),
+    val clipboardMode: ClipboardMode = ClipboardMode.NONE,
     val viewer: FileViewerState? = null,
 ) {
     val sortedEntries: List<FileEntry>
@@ -125,6 +129,36 @@ class FileBrowserViewModel @Inject constructor(
         repository.renameFile(path, newName)
     }
 
+    fun copySelected() {
+        _state.update { it.copy(clipboardPaths = it.selectedPaths.toList(), clipboardMode = ClipboardMode.COPY, selectedPaths = emptySet(), isSelectionMode = false) }
+    }
+
+    fun cutSelected() {
+        _state.update { it.copy(clipboardPaths = it.selectedPaths.toList(), clipboardMode = ClipboardMode.CUT, selectedPaths = emptySet(), isSelectionMode = false) }
+    }
+
+    fun copySingle(path: String) {
+        _state.update { it.copy(clipboardPaths = listOf(path), clipboardMode = ClipboardMode.COPY) }
+    }
+
+    fun cutSingle(path: String) {
+        _state.update { it.copy(clipboardPaths = listOf(path), clipboardMode = ClipboardMode.CUT) }
+    }
+
+    fun pasteFiles() {
+        val s = _state.value
+        if (s.clipboardPaths.isEmpty() || s.clipboardMode == ClipboardMode.NONE) return
+        when (s.clipboardMode) {
+            ClipboardMode.COPY -> repository.copyFiles(s.clipboardPaths, s.currentPath)
+            ClipboardMode.CUT -> repository.moveFiles(s.clipboardPaths, s.currentPath)
+            else -> {}
+        }
+    }
+
+    fun clearClipboard() {
+        _state.update { it.copy(clipboardPaths = emptyList(), clipboardMode = ClipboardMode.NONE) }
+    }
+
     fun openFile(entry: FileEntry) {
         _state.update { it.copy(viewer = FileViewerState(isLoading = true, entry = entry)) }
         repository.readBinaryFile(entry.path)
@@ -143,6 +177,8 @@ class FileBrowserViewModel @Inject constructor(
                     "file-renamed" -> handleFileRenamed(msg)
                     "file-operation-error" -> handleError(msg)
                     "binary-file-content" -> handleBinaryFileContent(msg)
+                    "files-copied" -> handleFilesCopied(msg)
+                    "files-moved" -> handleFilesMoved(msg)
                 }
             }
         }
@@ -179,6 +215,26 @@ class FileBrowserViewModel @Inject constructor(
         _state.update {
             it.copy(viewer = it.viewer?.copy(isLoading = false, bytes = bytes, mimeType = mimeType))
         }
+    }
+
+    private fun handleFilesCopied(msg: Map<String, Any?>) {
+        val success = msg["success"] as? Boolean ?: false
+        if (!success) {
+            val error = msg["error"] as? String ?: "Copy failed"
+            _state.update { it.copy(error = error) }
+        }
+        repository.listDirectory(_state.value.currentPath)
+    }
+
+    private fun handleFilesMoved(msg: Map<String, Any?>) {
+        val success = msg["success"] as? Boolean ?: false
+        if (success) {
+            _state.update { it.copy(clipboardPaths = emptyList(), clipboardMode = ClipboardMode.NONE) }
+        } else {
+            val error = msg["error"] as? String ?: "Move failed"
+            _state.update { it.copy(error = error) }
+        }
+        repository.listDirectory(_state.value.currentPath)
     }
 
     private fun handleError(msg: Map<String, Any?>) {

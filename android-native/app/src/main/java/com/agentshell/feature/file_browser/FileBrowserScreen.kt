@@ -211,6 +211,12 @@ fun FileBrowserScreen(
                     },
                     title = { Text("${state.selectedPaths.size} selected") },
                     actions = {
+                        IconButton(onClick = { viewModel.copySelected() }) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                        }
+                        IconButton(onClick = { viewModel.cutSelected() }) {
+                            Icon(Icons.Default.ContentCut, contentDescription = "Cut")
+                        }
                         IconButton(onClick = { viewModel.selectAll() }) {
                             Icon(Icons.Default.SelectAll, contentDescription = "Select all")
                         }
@@ -276,6 +282,25 @@ fun FileBrowserScreen(
         },
     ) { paddingValues ->
         Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+            // Clipboard banner
+            if (state.clipboardPaths.isNotEmpty()) {
+                val label = "${state.clipboardPaths.size} item${if (state.clipboardPaths.size > 1) "s" else ""} ${if (state.clipboardMode == ClipboardMode.CUT) "cut" else "copied"}"
+                Surface(color = MaterialTheme.colorScheme.primaryContainer) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(if (state.clipboardMode == ClipboardMode.CUT) Icons.Default.ContentCut else Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { viewModel.pasteFiles() }) { Text("Paste here") }
+                        IconButton(onClick = { viewModel.clearClipboard() }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear clipboard", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+
             if (showSearch && !state.isSelectionMode) {
                 OutlinedTextField(
                     value = searchQuery,
@@ -323,6 +348,8 @@ fun FileBrowserScreen(
                                 viewModel.toggleSelection(entry.path)
                             },
                             onCopyPath = { clipboard.setText(AnnotatedString(entry.path)) },
+                            onCopyFile = { viewModel.copySingle(entry.path) },
+                            onCutFile = { viewModel.cutSingle(entry.path) },
                             onRename = { renameTarget = entry },
                             onDelete = { deleteTargets = listOf(entry) },
                         )
@@ -343,6 +370,8 @@ private fun FileBrowserEntry(
     onTap: () -> Unit,
     onLongPress: () -> Unit,
     onCopyPath: () -> Unit,
+    onCopyFile: () -> Unit,
+    onCutFile: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -358,7 +387,9 @@ private fun FileBrowserEntry(
                 }
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
-                ListItem(headlineContent = { Text("Copy path") }, leadingContent = { Icon(Icons.Default.ContentCopy, contentDescription = null) }, modifier = Modifier.clickable { onCopyPath(); showActions = false })
+                ListItem(headlineContent = { Text("Copy") }, leadingContent = { Icon(Icons.Default.ContentCopy, contentDescription = null) }, modifier = Modifier.clickable { onCopyFile(); showActions = false })
+                ListItem(headlineContent = { Text("Cut") }, leadingContent = { Icon(Icons.Default.ContentCut, contentDescription = null) }, modifier = Modifier.clickable { onCutFile(); showActions = false })
+                ListItem(headlineContent = { Text("Copy path") }, leadingContent = { Icon(Icons.Default.Link, contentDescription = null) }, modifier = Modifier.clickable { onCopyPath(); showActions = false })
                 ListItem(headlineContent = { Text("Rename") }, leadingContent = { Icon(Icons.Default.Edit, contentDescription = null) }, modifier = Modifier.clickable { onRename(); showActions = false })
                 ListItem(headlineContent = { Text("Delete", color = MaterialTheme.colorScheme.error) }, leadingContent = { Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error) }, modifier = Modifier.clickable { onDelete(); showActions = false })
                 Spacer(Modifier.height(16.dp))

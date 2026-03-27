@@ -18,7 +18,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Mic
@@ -27,11 +36,17 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -81,6 +96,11 @@ fun TerminalScreen(
 
     // Fullscreen toggle state
     var isFullscreen by remember { mutableStateOf(false) }
+
+    // Terminal text selection mode
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectionText by remember { mutableStateOf("") }
+    var hasSelection by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         showVoiceButton = viewModel.getShowVoiceButton()
@@ -228,6 +248,24 @@ fun TerminalScreen(
                         }
                     },
                     actions = {
+                        // Selection mode toggle
+                        IconButton(onClick = {
+                            if (isSelectionMode) {
+                                isSelectionMode = false
+                                selectionText = ""
+                            } else {
+                                viewModel.xTermController.getBufferText { text ->
+                                    selectionText = text.trimEnd()
+                                    isSelectionMode = true
+                                }
+                            }
+                        }) {
+                            Icon(
+                                if (isSelectionMode) Icons.Default.Close else Icons.Default.SelectAll,
+                                contentDescription = if (isSelectionMode) "Exit selection" else "Select text",
+                                tint = if (isSelectionMode) Color(0xFFF97316) else MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
                         // Paste from clipboard
                         IconButton(onClick = {
                             clipboardManager.getText()?.text?.let { viewModel.onTerminalInput(it) }
@@ -274,23 +312,45 @@ fun TerminalScreen(
                 .imePadding(),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                XTermView(
-                    controller = viewModel.xTermController,
-                    onInput = { data ->
-                        // Apply sticky modifiers from accessory bar to soft keyboard input
-                        val modified = applyModifiers(data)
-                        viewModel.onTerminalInput(modified)
-                    },
-                    onResize = { cols, rows -> viewModel.onTerminalResize(cols, rows) },
-                    onReady = { cols, rows ->
-                        viewModel.onTerminalReady(sessionName, windowIndex, cols, rows)
-                    },
-                    onVolumeUp = { viewModel.zoomIn() },
-                    onVolumeDown = { viewModel.zoomOut() },
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                )
+                if (isSelectionMode) {
+                    // Selection overlay — native Android text selection
+                    SelectionContainer(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .background(Color(0xFF1E1E1E))
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            text = selectionText,
+                            style = TextStyle(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                color = Color(0xFFD4D4D4),
+                                lineHeight = 16.sp,
+                            ),
+                        )
+                    }
+                } else {
+                    XTermView(
+                        controller = viewModel.xTermController,
+                        onInput = { data ->
+                            val modified = applyModifiers(data)
+                            viewModel.onTerminalInput(modified)
+                        },
+                        onResize = { cols, rows -> viewModel.onTerminalResize(cols, rows) },
+                        onReady = { cols, rows ->
+                            viewModel.onTerminalReady(sessionName, windowIndex, cols, rows)
+                        },
+                        onVolumeUp = { viewModel.zoomIn() },
+                        onVolumeDown = { viewModel.zoomOut() },
+                        onSelectionChanged = { hasText -> hasSelection = hasText },
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                    )
+                }
 
                 if (!isFullscreen) {
                     TerminalAccessoryBar(

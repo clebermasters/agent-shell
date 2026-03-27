@@ -150,8 +150,57 @@
     // Get current dimensions
     getDimensions: function() {
       return JSON.stringify({ cols: term.cols, rows: term.rows });
+    },
+
+    // Get selected text from xterm.js
+    getSelection: function() {
+      return term.getSelection() || '';
+    },
+
+    // Check if there is a selection
+    hasSelection: function() {
+      return term.hasSelection();
+    },
+
+    // Clear selection
+    clearSelection: function() {
+      term.clearSelection();
+    },
+
+    // Select all text in terminal buffer
+    selectAll: function() {
+      term.selectAll();
+    },
+
+    // Extract all text from terminal buffer (for selection overlay)
+    getBufferText: function() {
+      var lines = [];
+      var buf = term.buffer.active;
+      for (var i = 0; i < buf.length; i++) {
+        var line = buf.getLine(i);
+        if (line) {
+          var text = line.translateToString(true);
+          // If next line is wrapped, don't add newline
+          var nextLine = (i + 1 < buf.length) ? buf.getLine(i + 1) : null;
+          if (nextLine && nextLine.isWrapped) {
+            lines.push(text);
+          } else {
+            lines.push(text + '\n');
+          }
+        }
+      }
+      return lines.join('');
     }
   };
+
+  // Auto-notify Android when text is selected (for copy button state)
+  term.onSelectionChange(function() {
+    try {
+      if (window.Android && window.Android.onSelectionChange) {
+        window.Android.onSelectionChange(term.hasSelection());
+      }
+    } catch(e) {}
+  });
 
 })();
 </script>

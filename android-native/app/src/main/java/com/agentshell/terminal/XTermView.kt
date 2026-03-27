@@ -112,6 +112,45 @@ class XTermController {
     fun focus() {
         bridge?.callJs("termBridge.focus()")
     }
+
+    /** Get selected text from xterm.js via callback. */
+    fun getSelection(callback: (String) -> Unit) {
+        val wv = bridge?.webView ?: return
+        wv.post {
+            wv.evaluateJavascript("termBridge.getSelection()") { result ->
+                // evaluateJavascript returns JSON-encoded string (with quotes)
+                val text = result?.removeSurrounding("\"")?.replace("\\n", "\n")
+                    ?.replace("\\t", "\t") ?: ""
+                callback(text)
+            }
+        }
+    }
+
+    /** Select all text in terminal buffer. */
+    fun selectAll() {
+        bridge?.callJs("termBridge.selectAll()")
+    }
+
+    /** Clear current selection. */
+    fun clearSelection() {
+        bridge?.callJs("termBridge.clearSelection()")
+    }
+
+    /** Extract all text from terminal buffer (for selection overlay). */
+    fun getBufferText(callback: (String) -> Unit) {
+        val wv = bridge?.webView ?: return
+        wv.post {
+            wv.evaluateJavascript("termBridge.getBufferText()") { result ->
+                val text = result
+                    ?.removeSurrounding("\"")
+                    ?.replace("\\n", "\n")
+                    ?.replace("\\t", "\t")
+                    ?.replace("\\\\", "\\")
+                    ?: ""
+                callback(text)
+            }
+        }
+    }
 }
 
 @Composable
@@ -129,6 +168,7 @@ fun XTermView(
     onReady: (cols: Int, rows: Int) -> Unit,
     onVolumeUp: (() -> Unit)? = null,
     onVolumeDown: (() -> Unit)? = null,
+    onSelectionChanged: ((hasSelection: Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -139,9 +179,10 @@ fun XTermView(
     bridge.onReady = onReady
     controller.bridge = bridge
 
-    // Store volume callbacks in bridge so the WebView can access them
+    // Store callbacks in bridge so the WebView can access them
     bridge.onVolumeUp = onVolumeUp
     bridge.onVolumeDown = onVolumeDown
+    bridge.onSelectionChanged = onSelectionChanged
 
     val webView = remember {
         object : WebView(context) {
@@ -211,6 +252,7 @@ internal class XTermBridge(
     var webView: WebView? = null
     var onVolumeUp: (() -> Unit)? = null
     var onVolumeDown: (() -> Unit)? = null
+    var onSelectionChanged: ((hasSelection: Boolean) -> Unit)? = null
 
     // ── JS → Android (called from JavaScript) ─────────────────────────────
 
@@ -234,6 +276,11 @@ internal class XTermBridge(
     fun onTerminalReady(cols: Int, rows: Int) {
         Log.d(TAG, "onTerminalReady: ${cols}x${rows}")
         onReady(cols, rows)
+    }
+
+    @JavascriptInterface
+    fun onSelectionChange(hasSelection: Boolean) {
+        onSelectionChanged?.invoke(hasSelection)
     }
 
     // ── Android → JS ──────────────────────────────────────────────────────

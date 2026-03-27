@@ -204,6 +204,12 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
+    // ── Recent sessions (swipe navigation) ─────────────────────────────────
+
+    suspend fun getRecentTerminalSessions(): List<String> = prefs.getRecentTerminalSessions()
+
+    suspend fun pushRecentTerminalSession(name: String) = prefs.pushRecentTerminalSession(name)
+
     // ── File browser CWD ──────────────────────────────────────────────────
 
     fun requestSessionCwd() {

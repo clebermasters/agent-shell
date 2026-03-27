@@ -114,6 +114,11 @@ fun AgentShellNavHost() {
                 onNavigateToFileBrowser = { path ->
                     navController.navigate(Routes.fileBrowser(path))
                 },
+                onSwipeToSession = { name ->
+                    navController.navigate(Routes.terminal(name)) {
+                        popUpTo(Routes.HOME)
+                    }
+                },
             )
         }
 
@@ -136,6 +141,11 @@ fun AgentShellNavHost() {
                 onNavigateBack = { navController.popBackStack() },
                 onSwitchToTerminal = { name ->
                     navController.navigate(Routes.terminal(name)) { popUpTo(Routes.HOME) }
+                },
+                onSwipeToChatSession = { name, idx, isAcpNav ->
+                    navController.navigate(Routes.chat(name, idx, isAcp = isAcpNav)) {
+                        popUpTo(Routes.HOME)
+                    }
                 },
             )
         }

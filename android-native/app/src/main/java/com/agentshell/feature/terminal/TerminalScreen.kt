@@ -66,6 +66,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agentshell.feature.common.SwipeableSessionContainer
 import com.agentshell.terminal.XTermView
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -78,6 +79,8 @@ fun TerminalScreen(
     onNavigateBack: () -> Unit,
     onSwitchToChat: ((sessionName: String, windowIndex: Int) -> Unit)? = null,
     onNavigateToFileBrowser: ((path: String) -> Unit)? = null,
+    onSwipeToSession: ((sessionName: String) -> Unit)? = null,
+    isSwipeNavigation: Boolean = false,
     viewModel: TerminalViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -102,6 +105,16 @@ fun TerminalScreen(
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectionText by remember { mutableStateOf("") }
     var hasSelection by remember { mutableStateOf(false) }
+
+    // Swipe navigation state
+    var recentSessions by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    LaunchedEffect(sessionName) {
+        if (!isSwipeNavigation) {
+            viewModel.pushRecentTerminalSession(sessionName)
+        }
+        recentSessions = viewModel.getRecentTerminalSessions()
+    }
 
     LaunchedEffect(Unit) {
         showVoiceButton = viewModel.getShowVoiceButton()
@@ -307,6 +320,11 @@ fun TerminalScreen(
             }
         },
     ) { paddingValues ->
+        SwipeableSessionContainer(
+            recentSessions = recentSessions,
+            currentSessionKey = sessionName,
+            onSwipeToSession = { name -> onSwipeToSession?.invoke(name) },
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -398,5 +416,6 @@ fun TerminalScreen(
                 )
             }
         }
+        } // SwipeableSessionContainer
     }
 }

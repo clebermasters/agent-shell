@@ -86,6 +86,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
+import com.agentshell.feature.common.SwipeableSessionContainer
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -97,6 +98,8 @@ fun ChatScreen(
     cwd: String = "",
     onNavigateBack: () -> Unit = {},
     onSwitchToTerminal: ((sessionName: String) -> Unit)? = null,
+    onSwipeToChatSession: ((sessionName: String, windowIndex: Int, isAcp: Boolean) -> Unit)? = null,
+    isSwipeNavigation: Boolean = false,
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -108,6 +111,17 @@ fun ChatScreen(
     var swipeDx by remember { mutableFloatStateOf(0f) }
     var showVoiceButton by remember { mutableStateOf(false) }
     val context = LocalContext.current
+
+    // Swipe navigation state
+    val chatKey = if (isAcp) "acp:$sessionName" else "tmux:$sessionName\u0000$windowIndex"
+    var recentChatSessions by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    LaunchedEffect(chatKey) {
+        if (!isSwipeNavigation) {
+            viewModel.pushRecentChatSession(chatKey)
+        }
+        recentChatSessions = viewModel.getRecentChatSessions()
+    }
 
     // Load voice button preference
     LaunchedEffect(Unit) {
@@ -252,6 +266,22 @@ fun ChatScreen(
             .navigationBarsPadding()
             .imePadding(),
     ) { innerPadding ->
+        SwipeableSessionContainer(
+            recentSessions = recentChatSessions,
+            currentSessionKey = chatKey,
+            sessionLabel = { key ->
+                if (key.startsWith("acp:")) key.removePrefix("acp:")
+                else key.removePrefix("tmux:").substringBefore("\u0000")
+            },
+            onSwipeToSession = { key ->
+                if (key.startsWith("acp:")) {
+                    onSwipeToChatSession?.invoke(key.removePrefix("acp:"), 0, true)
+                } else {
+                    val parts = key.removePrefix("tmux:").split("\u0000")
+                    onSwipeToChatSession?.invoke(parts[0], parts.getOrNull(1)?.toIntOrNull() ?: 0, false)
+                }
+            },
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -430,6 +460,7 @@ fun ChatScreen(
                 }
             }
         }
+        } // SwipeableSessionContainer
     }
 }
 

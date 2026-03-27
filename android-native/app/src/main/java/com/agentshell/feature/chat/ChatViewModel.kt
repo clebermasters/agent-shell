@@ -339,6 +339,10 @@ class ChatViewModel @Inject constructor(
 
     suspend fun isVoiceButtonVisible(): Boolean = dataStore.showVoiceButton.first()
 
+    suspend fun getRecentChatSessions(): List<String> = dataStore.getRecentChatSessions()
+
+    suspend fun pushRecentChatSession(key: String) = dataStore.pushRecentChatSession(key)
+
     // -------------------------------------------------------------------------
     // File attachment
     // -------------------------------------------------------------------------

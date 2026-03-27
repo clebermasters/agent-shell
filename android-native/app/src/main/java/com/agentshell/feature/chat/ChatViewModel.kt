@@ -14,8 +14,8 @@ import com.agentshell.data.remote.acpRespondPermission
 import com.agentshell.data.remote.acpSendPrompt
 import com.agentshell.data.remote.sendFileToAcpChat
 import com.agentshell.data.remote.sendFileToChat
+import com.agentshell.data.remote.sendChatMessage
 import com.agentshell.data.remote.sendInputViaTmux
-import com.agentshell.data.remote.attachSession
 import com.agentshell.data.remote.acpResumeSession
 import com.agentshell.data.remote.clearChatLog
 import com.agentshell.data.remote.loadMoreChatHistory
@@ -149,15 +149,6 @@ class ChatViewModel @Inject constructor(
             )
         }
         restoreDraft(draftKey(sessionName, windowIndex))
-        // Attach first so the backend sets up session context for input routing
-        // (matches Flutter's chat_provider.dart — required for multi-pane sessions)
-        webSocketService.attachSession(
-            sessionName = sessionName,
-            cols = 80,
-            rows = 24,
-            windowIndex = windowIndex,
-            requestHistory = false,
-        )
         webSocketService.watchChatLog(sessionName, windowIndex)
     }
 
@@ -237,23 +228,24 @@ class ChatViewModel @Inject constructor(
 
         if (trimmed.isEmpty()) return
 
-        // Optimistically add the user message locally
-        val userMsg = buildUserMessage(trimmed)
-        _uiState.update { it.copy(messages = it.messages + userMsg, draftMessage = "") }
+        _uiState.update { it.copy(draftMessage = "") }
         saveDraft(draftKey(state.sessionName, state.windowIndex), "")
 
         if (state.isAcp) {
+            // ACP: optimistic local add (backend doesn't echo user messages back)
+            val userMsg = buildUserMessage(trimmed)
+            _uiState.update { it.copy(messages = it.messages + userMsg) }
             val rawId = state.sessionName.removePrefix("acp_")
             webSocketService.acpSendPrompt(rawId, trimmed)
         } else {
-            // For TMUX chat, send as terminal input via tmux (matches Flutter behavior).
-            // The backend has no "chat-input" type — tmux chat works by typing into
-            // the terminal session where the AI agent reads stdin.
-            // Don't append \n — the backend sends Enter as a separate tmux command.
-            webSocketService.sendInputViaTmux(
-                data = trimmed,
+            // TMUX: use send-chat-message which persists to chat event store,
+            // broadcasts to all clients (including us — shows as ChatEvent with
+            // source="webhook"), then sends to tmux via send-keys.
+            // No optimistic add needed — the broadcast handles it.
+            webSocketService.sendChatMessage(
                 sessionName = state.sessionName,
                 windowIndex = state.windowIndex,
+                message = trimmed,
             )
         }
     }

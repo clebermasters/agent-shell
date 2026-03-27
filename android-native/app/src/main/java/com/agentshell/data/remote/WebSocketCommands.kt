@@ -168,6 +168,26 @@ fun WebSocketService.sendInputViaTmux(
     })
 }
 
+/**
+ * Send a chat message to a tmux session. The backend persists the message to
+ * the chat event store, broadcasts it to all clients, and then sends it to
+ * the tmux pane via send-keys. Preferred over [sendInputViaTmux] for chat
+ * because it properly records the message in chat history.
+ */
+fun WebSocketService.sendChatMessage(
+    sessionName: String,
+    windowIndex: Int,
+    message: String,
+) {
+    send(mapOf(
+        "type" to "send-chat-message",
+        "sessionName" to sessionName,
+        "windowIndex" to windowIndex,
+        "message" to message,
+        "notify" to false,
+    ))
+}
+
 /** Send an Enter key-press to the currently attached terminal. */
 fun WebSocketService.sendEnterKey() {
     send(mapOf("type" to "sendEnterKey"))

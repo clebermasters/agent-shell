@@ -151,10 +151,93 @@ pub(crate) async fn handle(
             }
         }
 
+        WebSocketMessage::ReadBinaryFile { path } => {
+            if let Err(e) = validate_path(&path) {
+                let response = ServerMessage::BinaryFileContent {
+                    path,
+                    content_base64: String::new(),
+                    mime_type: "application/octet-stream".to_string(),
+                    error: Some(e),
+                };
+                send_message(tx, response).await?;
+                return Ok(());
+            }
+
+            let file_path = Path::new(&path);
+            if !file_path.exists() || !file_path.is_file() {
+                let response = ServerMessage::BinaryFileContent {
+                    path,
+                    content_base64: String::new(),
+                    mime_type: "application/octet-stream".to_string(),
+                    error: Some("File not found".to_string()),
+                };
+                send_message(tx, response).await?;
+                return Ok(());
+            }
+
+            match std::fs::read(file_path) {
+                Ok(bytes) => {
+                    use base64::Engine;
+                    let content_base64 =
+                        base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    let mime_type = detect_mime_type(file_path);
+                    let response = ServerMessage::BinaryFileContent {
+                        path,
+                        content_base64,
+                        mime_type: mime_type.to_string(),
+                        error: None,
+                    };
+                    send_message(tx, response).await?;
+                }
+                Err(e) => {
+                    error!("Failed to read file {}: {}", path, e);
+                    let response = ServerMessage::BinaryFileContent {
+                        path,
+                        content_base64: String::new(),
+                        mime_type: "application/octet-stream".to_string(),
+                        error: Some(format!("Failed to read file: {}", e)),
+                    };
+                    send_message(tx, response).await?;
+                }
+            }
+        }
+
         _ => {}
     }
 
     Ok(())
+}
+
+fn detect_mime_type(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "m4a" | "aac" => "audio/aac",
+        "flac" => "audio/flac",
+        "html" | "htm" => "text/html",
+        "md" => "text/markdown",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "yaml" | "yml" => "text/yaml",
+        "toml" => "text/toml",
+        "txt" | "log" | "csv" => "text/plain",
+        "rs" | "py" | "js" | "ts" | "go" | "java" | "kt" | "c" | "cpp" | "h"
+        | "sh" | "bash" | "dart" | "rb" | "php" | "swift" | "css" | "scss"
+        | "sql" | "jsx" | "tsx" => "text/plain",
+        _ => "application/octet-stream",
+    }
 }
 
 fn list_files(path: &str) -> anyhow::Result<Vec<FileEntry>> {

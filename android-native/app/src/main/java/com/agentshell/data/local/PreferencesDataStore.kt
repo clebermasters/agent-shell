@@ -176,6 +176,40 @@ class PreferencesDataStore @Inject constructor(
         }
     }
 
+    // ─── recent sessions (swipe navigation) ───────────────────────────────────
+    // Stored as pipe-delimited strings, max 3 entries each.
+
+    private val recentTerminalKey = stringPreferencesKey("recent_terminal_sessions")
+    private val recentChatKey = stringPreferencesKey("recent_chat_sessions")
+
+    suspend fun getRecentTerminalSessions(): List<String> {
+        val raw = dataStore.data.first()[recentTerminalKey] ?: return emptyList()
+        return raw.split("|").filter { it.isNotEmpty() }
+    }
+
+    suspend fun pushRecentTerminalSession(sessionName: String) {
+        dataStore.edit { prefs ->
+            val current = (prefs[recentTerminalKey] ?: "").split("|").filter { it.isNotEmpty() }.toMutableList()
+            current.remove(sessionName)
+            current.add(0, sessionName)
+            prefs[recentTerminalKey] = current.take(3).joinToString("|")
+        }
+    }
+
+    suspend fun getRecentChatSessions(): List<String> {
+        val raw = dataStore.data.first()[recentChatKey] ?: return emptyList()
+        return raw.split("|").filter { it.isNotEmpty() }
+    }
+
+    suspend fun pushRecentChatSession(key: String) {
+        dataStore.edit { prefs ->
+            val current = (prefs[recentChatKey] ?: "").split("|").filter { it.isNotEmpty() }.toMutableList()
+            current.remove(key)
+            current.add(0, key)
+            prefs[recentChatKey] = current.take(3).joinToString("|")
+        }
+    }
+
     // ─── chat draft messages ─────────────────────────────────────────────────
     // Keyed by "chat_draft_{sessionName}_{windowIndex}"; stored as plain strings.
 

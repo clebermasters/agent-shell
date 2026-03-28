@@ -602,7 +602,7 @@ pub(crate) async fn handle(
                 }
             };
 
-            // Build combined text (prompt + file path)
+            // Build combined text for chat log (prompt + file path, multi-line OK)
             let combined_text = match (&prompt, &file_path_str) {
                 (Some(text), Some(path)) if !text.trim().is_empty() => {
                     format!("{}\n\nHere is the file: {}", text.trim(), path)
@@ -610,6 +610,22 @@ pub(crate) async fn handle(
                 (Some(_), Some(path)) => format!("Here is the file: {}", path),
                 (Some(text), None) if !text.trim().is_empty() => text.trim().to_string(),
                 (None, Some(path)) => format!("Here is the file: {}", path),
+                _ => String::new(),
+            };
+
+            // Build single-line text for tmux. Wrap file paths in backticks so
+            // TUI apps like Claude Code don't auto-detect image extensions
+            // (.jpg/.png) and convert them to [Image #N] inline attachments,
+            // which swallows the path text. With backticks, the AI reads the
+            // file via its Read tool instead.
+            let tmux_text = match (&prompt, &file_path_str) {
+                (Some(text), Some(path)) if !text.trim().is_empty() => {
+                    format!("{} `{}`", text.trim(), path)
+                }
+                (Some(_), Some(path)) | (None, Some(path)) => {
+                    format!("`{}`", path)
+                }
+                (Some(text), None) if !text.trim().is_empty() => text.trim().to_string(),
                 _ => String::new(),
             };
 
@@ -637,7 +653,6 @@ pub(crate) async fn handle(
 
             // Build message blocks: text (if prompt provided) + file
             let mut blocks = Vec::new();
-            let combined_text_for_tmux = combined_text.clone();
             if !combined_text.is_empty() {
                 blocks.push(crate::chat_log::ContentBlock::Text {
                     text: combined_text,
@@ -673,31 +688,49 @@ pub(crate) async fn handle(
             // Use client_manager.broadcast to send to ALL connected clients
             state.client_manager.broadcast(msg).await;
 
-            // Send the combined text (prompt + file path) to the tmux session
-            // so the AI tool (OpenCode/Claude) actually receives the file reference
-            if !combined_text_for_tmux.is_empty() {
+            // Send the single-line text (prompt + file path) to the tmux session
+            // so the AI tool (OpenCode/Claude) receives the file reference.
+            if !tmux_text.is_empty() {
                 let target = format!("{}:{}", session_name, window_index);
-                let text = combined_text_for_tmux.trim_end_matches('\n');
 
                 // Two separate tmux calls: text first, then Enter.
-                let _ = tokio::process::Command::new("tmux")
-                    .args(&["send-keys", "-t", &target, "-l", text])
-                    .output()
-                    .await;
-                let result = tokio::process::Command::new("tmux")
-                    .args(&["send-keys", "-t", &target, "Enter"])
+                let send_text = tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", &target, "-l", &tmux_text])
                     .output()
                     .await;
 
-                match result {
-                    Ok(output) if output.status.success() => {
-                        info!("Sent file prompt to tmux: {:?}", text);
+                // If session:window failed (window doesn't exist), retry with session only.
+                let (send_text, effective_target) = match &send_text {
+                    Ok(output) if !output.status.success() => {
+                        warn!("SendFileToChat: target {} failed, retrying with session only ({})", target, session_name);
+                        let retry = tokio::process::Command::new("tmux")
+                            .args(&["send-keys", "-t", &session_name, "-l", &tmux_text])
+                            .output()
+                            .await;
+                        (retry, session_name.clone())
                     }
-                    Ok(output) => {
-                        error!("tmux send-keys failed for {}: {}", target, output.status);
+                    _ => (send_text, target.clone()),
+                };
+
+                // Delay so the TUI finishes processing the typed text before Enter.
+                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                let send_enter = tokio::process::Command::new("tmux")
+                    .args(&["send-keys", "-t", &effective_target, "Enter"])
+                    .output()
+                    .await;
+
+                match (send_text, send_enter) {
+                    (Ok(t), Ok(e)) if t.status.success() && e.status.success() => {
+                        info!("SendFileToChat: OK sent to tmux target {}: {:?}", effective_target, tmux_text);
                     }
-                    Err(e) => {
-                        error!("Failed to send file prompt to tmux session {}: {}", target, e);
+                    (Ok(t), Ok(e)) => {
+                        error!("SendFileToChat: tmux send-keys FAILED for {} — text_exit={}, enter_exit={}, text_stderr={:?}, enter_stderr={:?}",
+                            effective_target, t.status, e.status,
+                            String::from_utf8_lossy(&t.stderr),
+                            String::from_utf8_lossy(&e.stderr));
+                    }
+                    (Err(e), _) | (_, Err(e)) => {
+                        error!("SendFileToChat: failed to spawn tmux for {}: {}", effective_target, e);
                     }
                 }
             }

@@ -1,6 +1,9 @@
 package com.agentshell.feature.file_browser
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -418,6 +421,7 @@ private fun FileBrowserEntry(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ListTile(
     icon: ImageVector?,
@@ -435,7 +439,8 @@ private fun ListTile(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onTap)
+            .background(bg)
+            .combinedClickable(onClick = onTap, onLongClick = onLongPress)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

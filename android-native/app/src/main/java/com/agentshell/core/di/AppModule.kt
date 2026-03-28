@@ -7,6 +7,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import com.agentshell.data.local.AppDatabase
 import com.agentshell.data.local.HostDao
+import com.agentshell.data.local.PanelLayoutDao
 import com.agentshell.data.local.PreferencesDataStore
 import dagger.Module
 import dagger.Provides
@@ -32,13 +33,21 @@ object AppModule {
             context,
             AppDatabase::class.java,
             "agentshell_db"
-        ).build()
+        )
+            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .build()
     }
 
     @Provides
     @Singleton
     fun provideHostDao(database: AppDatabase): HostDao {
         return database.hostDao()
+    }
+
+    @Provides
+    @Singleton
+    fun providePanelLayoutDao(database: AppDatabase): PanelLayoutDao {
+        return database.panelLayoutDao()
     }
 
     @Provides

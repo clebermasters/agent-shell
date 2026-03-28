@@ -20,6 +20,7 @@ import com.agentshell.feature.dotfiles.DotfileEditorScreen
 import com.agentshell.feature.dotfiles.DotfileTemplatesScreen
 import com.agentshell.feature.dotfiles.DotfilesScreen
 import com.agentshell.feature.file_browser.FileBrowserScreen
+import com.agentshell.feature.splitscreen.SplitScreenScreen
 import com.agentshell.feature.hosts.HostSelectionScreen
 import com.agentshell.feature.sessions.SessionsScreen
 import com.agentshell.feature.settings.SettingsScreen
@@ -38,8 +39,10 @@ object Routes {
     const val CRON_EDITOR = "cron_editor?jobId={jobId}"
     const val DOTFILE_EDITOR = "dotfile_editor"
     const val DOTFILE_TEMPLATES = "dotfile_templates"
+    const val SPLIT_SCREEN = "split_screen?layoutId={layoutId}"
     const val LOGIN = "login"
 
+    fun splitScreen(layoutId: String? = null) = if (layoutId != null) "split_screen?layoutId=$layoutId" else "split_screen"
     fun terminal(sessionName: String, isSwipeNav: Boolean = false) = "terminal/$sessionName?isSwipeNav=$isSwipeNav"
     fun chat(sessionName: String, windowIndex: Int, isAcp: Boolean = false, isSwipeNav: Boolean = false) = "chat/$sessionName/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav"
     fun fileBrowser(path: String = "/") = "file_browser?path=$path"
@@ -64,6 +67,7 @@ fun AgentShellNavHost() {
                 onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
                 onNavigateToAlerts = { navController.navigate(Routes.ALERTS) },
                 onNavigateToHosts = { navController.navigate(Routes.HOST_SELECTION) },
+                onNavigateToSplitScreen = { layoutId -> navController.navigate(Routes.splitScreen(layoutId)) },
                 sessionsContent = {
                     SessionsScreen(
                         onNavigateToTerminal = { name -> navController.navigate(Routes.terminal(name)) },
@@ -232,6 +236,24 @@ fun AgentShellNavHost() {
         // ── Host Selection ────────────────────────────────────────────────────
         composable(Routes.HOST_SELECTION) {
             HostSelectionScreen(
+                onNavigateBack = { navController.popBackStack() },
+            )
+        }
+
+        // ── Split Screen ─────────────────────────────────────────────────────
+        composable(
+            route = Routes.SPLIT_SCREEN,
+            arguments = listOf(
+                navArgument("layoutId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { backStackEntry ->
+            val layoutId = backStackEntry.arguments?.getString("layoutId")
+            SplitScreenScreen(
+                layoutId = layoutId,
                 onNavigateBack = { navController.popBackStack() },
             )
         }

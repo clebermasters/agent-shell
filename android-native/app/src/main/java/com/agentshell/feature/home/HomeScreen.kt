@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
@@ -69,6 +70,7 @@ fun HomeScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToAlerts: () -> Unit,
     onNavigateToHosts: () -> Unit,
+    onNavigateToSplitScreen: (layoutId: String?) -> Unit = {},
     sessionsContent: @Composable () -> Unit,
     cronContent: @Composable () -> Unit,
     dotfilesContent: @Composable () -> Unit,
@@ -150,6 +152,7 @@ fun HomeScreen(
                     viewModel.clearUnreadAlerts()
                     onNavigateToAlerts()
                 },
+                onSplitScreenClick = { onNavigateToSplitScreen(null) },
                 onSettingsClick = onNavigateToSettings,
             )
 
@@ -203,6 +206,7 @@ fun HomeScreen(
 private fun TopBarRow(
     unreadAlertCount: Int,
     onAlertsClick: () -> Unit,
+    onSplitScreenClick: () -> Unit = {},
     onSettingsClick: () -> Unit,
 ) {
     androidx.compose.foundation.layout.Row(
@@ -218,6 +222,11 @@ private fun TopBarRow(
                 .weight(1f)
                 .padding(start = 12.dp),
         )
+
+        // Split screen
+        IconButton(onClick = onSplitScreenClick) {
+            Icon(Icons.Default.Dashboard, contentDescription = "Split Screen")
+        }
 
         // Alerts bell with unread badge
         BadgedBox(

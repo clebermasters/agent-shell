@@ -6,13 +6,14 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-DEA584?style=flat&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/Flutter-02569B?style=flat&logo=flutter&logoColor=white" alt="Flutter">
+  <img src="https://img.shields.io/badge/Kotlin-7F52FF?style=flat&logo=kotlin&logoColor=white" alt="Kotlin">
+  <img src="https://img.shields.io/badge/Jetpack_Compose-4285F4?style=flat&logo=jetpackcompose&logoColor=white" alt="Jetpack Compose">
   <img src="https://img.shields.io/badge/OpenCode-FF6B6B?style=flat" alt="OpenCode ACP">
 </p>
 
 AgentShell is a **high-performance, Rust-powered terminal session manager** that gives you complete control over your development agents—anywhere, anytime.
 
-Built with Rust for maximum speed and reliability, AgentShell lets you manage TMUX sessions and AI-powered development workflows from your Android device or web browser. Whether you're monitoring autonomous coding agents, controlling remote development sessions via Claude Code or OpenCode, or simply need mobile access to your terminal workflows, AgentShell delivers a seamless, real-time experience.
+Built with Rust for maximum speed and reliability, AgentShell lets you manage TMUX sessions and AI-powered development workflows from your Android device or web browser. The native Android app (Kotlin/Jetpack Compose) provides a modern, high-performance experience with split-screen multi-panel layouts, real-time system monitoring, and Claude usage tracking. Whether you're monitoring autonomous coding agents, controlling remote development sessions via Claude Code or OpenCode, or simply need mobile access to your terminal workflows, AgentShell delivers a seamless, real-time experience.
 
 **Control your AI agents. Control your development. From anywhere.**
 
@@ -22,21 +23,32 @@ Built with Rust for maximum speed and reliability, AgentShell lets you manage TM
 
 ## Features
 
+### Core
 - **Remote Claude Code**: Run Claude Code in a TMUX session and control it from anywhere — send input, read output, and supervise your AI coding agent remotely
 - **Remote OpenCode**: Control OpenCode via native ACP integration or directly through a TMUX session
 - **Agent Control**: Monitor and control AI coding agents running in TMUX sessions
-- **TMUX Session Management**: Create, attach, rename, and kill TMUX sessions
-- **Window Management**: Create, switch, rename, and kill windows within sessions
+- **TMUX Session Management**: Create, attach, rename, and kill TMUX sessions and windows
 - **Real-time Communication**: WebSocket-based architecture for live terminal I/O
 - **Chat Support**: Full chat experience with text, images, audio, and file sharing
-- **Audio Streaming**: Record and play audio messages with transcription support
-- **Image Viewer**: View images inline with full-screen mode and save to device
-- **File Management**: View and manage files in chat sessions
-- **Responsive Design**: Modern Android interface built with Flutter
-- **Performance Optimized**: Rust-powered backend handles large outputs with buffering and flow control
-- **Mobile Optimized**: Touch-friendly interface with iOS safe area support
-- **Network Accessible**: Access via local network or Tailscale IPs from anywhere
-- **Session Isolation**: Alternative session manager to avoid attachment conflicts
+- **File Browser**: Browse, rename, copy, move, and delete files on the server
+- **Cron Job Manager**: Create, edit, toggle, and test cron jobs from your phone
+
+### Native Android App (Kotlin/Jetpack Compose)
+- **Split-Screen Multi-Panel**: View multiple terminal and chat sessions side-by-side with configurable panel layouts — drag to resize, save layouts for quick switching
+- **Real-Time Claude Usage**: Live Claude Max subscription usage display (5-hour and 7-day utilization with reset countdowns) on the main screen and inside Claude chat sessions, with color-coded indicators (green/amber/red)
+- **System Alerts**: Real-time CPU, RAM, and disk monitoring with warning banners when resources exceed 90%
+- **Swipe Navigation**: Swipe between recent terminal and chat sessions for fast context switching
+- **Terminal Accessory Bar**: Scrollable bar with CTRL, ALT, ESC, TAB, arrow keys, and F1-F12
+- **Voice Input**: Record audio messages with speech-to-text transcription
+- **Image & File Upload**: Attach and send images/files to AI agents running in tmux sessions
+- **Session Persistence**: Remembers active session and tab across app restarts
+- **Notification System**: Receive alerts from the server with support for images, audio, markdown, and HTML
+
+### Backend (Rust)
+- **Performance Optimized**: Handles large terminal outputs with buffering and flow control
+- **AI Tool Detection**: Auto-detects Claude Code, OpenCode, and Codex running in tmux sessions and parses their chat logs
+- **Network Accessible**: Access via local network, Tailscale, or Cloudflare-proxied domains
+- **Dotfile Management**: Version-controlled dotfile editing with history and rollback
 
 ## AI Agent Integrations
 
@@ -131,33 +143,28 @@ ACP (Agent Control Protocol) is a protocol that allows AI agents to interact wit
 - **Permission System**: Review and approve/deny tool execution requests
 - **Event History**: All session events are persisted for later review
 
-## Android App (Flutter)
+## Android App (Native Kotlin)
 
-AgentShell includes a high-performance **Android application** built with Flutter. This app allows you to control your Tmux sessions directly from your phone.
-
-### Key Features
-
-- **SSH-Free Access**: Connect directly to the AgentShell backend via WebSocket.
-- **Terminal Accessory Bar**: A horizontally scrollable bar featuring `CTRL`, `ALT`, `ESC`, `TAB`, arrow keys, and `F1-F12` for effortless Tmux shortcuts.
-- **Enhanced Native Keyboard**: Optimized support for the native Android keyboard, including "sticky" modifiers (e.g., tap `CTRL` then `l` to clear screen).
-- **Session Persistence**: The app remembers your active session and navigation tab, automatically restoring them even after app restarts or screen-off events.
-- **Real-time Synchronization**: High-performance terminal rendering with instant cursor updates.
-- **Audio Playback & Recording**: Play audio messages and record voice notes with transcription support.
-- **Image Viewer**: View images inline with full-screen mode and save to device.
-- **File Support**: View and manage files shared in chat sessions.
+AgentShell includes a native **Android application** built with Kotlin and Jetpack Compose. This is the primary client for controlling your development agents from your phone.
 
 ### Building from Source
 
-1. Ensure Docker is installed and running.
-2. Navigate to the `flutter` directory:
-   ```bash
-   cd flutter
-   ```
-3. Run the build script:
-   ```bash
-   ./build.sh
-   ```
-4. The generated APK will be available in the project root as `agentshell-flutter-debug.apk`.
+**Local build** (requires JDK 17):
+```bash
+cd android-native
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew assembleDebug
+# APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+**Docker build** (reads `.env` for server list and auth token):
+```bash
+cd android-native
+./build.sh debug             # Debug APK
+./build.sh release           # Release APK
+./build.sh release --install # Build + install via USB
+```
+
+> A legacy Flutter app exists in `flutter/` for web and cross-platform builds.
 
 ## Prerequisites
 
@@ -248,16 +255,17 @@ Connect to `/ws` endpoint for terminal session management.
 - **Web Framework**: Axum for high-performance async HTTP/WebSocket handling
 - **Async Runtime**: Tokio for concurrent operations
 - **Terminal Interface**: portable-pty for cross-platform PTY support
-- **WebSocket**: tokio-tungstenite for real-time communication
-- **Session Management**: Two approaches:
-  - Direct attachment via `tmux attach-session`
-  - Alternative manager using `send-keys` and `capture-pane` for better isolation
+- **Database**: SQLite (rusqlite) for chat history and notifications
+- **AI Tool Detection**: Process scanning via `/proc` to detect Claude Code, OpenCode, Codex
+- **Session Management**: `tmux send-keys` + `capture-pane` for multi-client isolation
 
-### Android App (Flutter)
+### Android App (Kotlin/Compose)
 
-- **Framework**: Flutter with Dart
-- **State Management**: Riverpod
-- **WebSocket Client**: Native WebSocket API with reconnection logic
+- **UI**: Jetpack Compose with Material3
+- **DI**: Hilt
+- **State**: ViewModel + StateFlow
+- **Network**: OkHttp WebSocket with exponential backoff reconnection
+- **Storage**: Room + DataStore
 
 ## Troubleshooting
 
@@ -447,5 +455,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Acknowledgments
 
 - Backend powered by [Rust](https://www.rust-lang.org/) and [Axum](https://github.com/tokio-rs/axum)
-- Android app built with [Flutter](https://flutter.dev/)
+- Native Android app built with [Kotlin](https://kotlinlang.org/) and [Jetpack Compose](https://developer.android.com/jetpack/compose)
 - Real-time communication via [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket)
+- Claude usage API integration inspired by [claude-usage](https://github.com/LightspeedDMS/claude-usage)

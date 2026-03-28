@@ -75,9 +75,28 @@ pub(crate) async fn handle_get_stats(
     send_message(tx, ServerMessage::Stats { stats }).await
 }
 
+/// Cached last successful usage response so we can serve stale data on 429.
+static CACHED_USAGE: std::sync::OnceLock<tokio::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn get_usage_cache() -> &'static tokio::sync::Mutex<Option<String>> {
+    CACHED_USAGE.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
 pub(crate) async fn handle_get_claude_usage(
     tx: &mpsc::UnboundedSender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
+    let send_cached = |tx: &mpsc::UnboundedSender<BroadcastMessage>| {
+        let cache = get_usage_cache().try_lock().ok();
+        if let Some(ref guard) = cache {
+            if let Some(ref json) = **guard {
+                let _ = tx.send(BroadcastMessage::Text(std::sync::Arc::new(json.clone())));
+                return true;
+            }
+        }
+        false
+    };
+
     let usage_error = |tx: &mpsc::UnboundedSender<BroadcastMessage>, reason: String| {
         let msg = ServerMessage::ClaudeUsage {
             five_hour: None,
@@ -135,13 +154,22 @@ pub(crate) async fn handle_get_claude_usage(
         Ok(r) => r,
         Err(e) => {
             error!("Claude usage API request failed: {}", e);
-            usage_error(tx, "API unreachable".into());
+            // Serve cached data if available, otherwise error
+            if !send_cached(tx) {
+                usage_error(tx, "API unreachable".into());
+            }
             return Ok(());
         }
     };
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
+        if status == 429 {
+            // Rate limited — serve cached data silently
+            if send_cached(tx) {
+                return Ok(());
+            }
+        }
         error!("Claude usage API returned {}", status);
         usage_error(tx, format!("API error {}", status));
         return Ok(());
@@ -170,6 +198,13 @@ pub(crate) async fn handle_get_claude_usage(
         seven_day_sonnet: parse_bucket("seven_day_sonnet"),
         error: None,
     };
+
+    // Cache the successful response for 429 fallback
+    if let Ok(json) = serde_json::to_string(&msg) {
+        if let Ok(mut cache) = get_usage_cache().try_lock() {
+            *cache = Some(json);
+        }
+    }
 
     send_message(tx, msg).await
 }

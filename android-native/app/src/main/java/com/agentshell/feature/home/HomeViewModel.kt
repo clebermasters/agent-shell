@@ -212,7 +212,7 @@ class HomeViewModel @Inject constructor(
             wsService.connectionStatus.first { it == ConnectionStatus.CONNECTED }
             while (true) {
                 systemRepository.requestClaudeUsage()
-                delay(60_000)
+                delay(300_000) // 5 minutes — Anthropic rate-limits this endpoint
             }
         }
     }

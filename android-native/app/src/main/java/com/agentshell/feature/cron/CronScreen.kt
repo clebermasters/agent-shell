@@ -42,14 +42,15 @@ fun CronScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Cron Jobs") },
-                actions = {
-                    IconButton(onClick = { viewModel.requestJobs() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                },
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Cron Jobs", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                IconButton(onClick = { viewModel.requestJobs() }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(20.dp))
+                }
+            }
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { onNavigateToEditor(null) }) {

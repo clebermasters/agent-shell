@@ -42,8 +42,8 @@ fun PanelContainer(
 
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .border(borderWidth, borderColor, RoundedCornerShape(8.dp)),
+            .clip(RoundedCornerShape(6.dp))
+            .border(borderWidth, borderColor, RoundedCornerShape(6.dp)),
     ) {
         // Header bar — NOT wrapped in clickable so buttons work
         PanelHeader(
@@ -88,48 +88,41 @@ private fun PanelHeader(
         modifier = Modifier
             .fillMaxWidth()
             .background(bgColor)
-            .padding(horizontal = 8.dp, vertical = 2.dp),
+            .padding(horizontal = 6.dp, vertical = 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Type icon
         Icon(
             imageVector = when (panel.panelType) {
                 PanelType.TERMINAL -> Icons.Default.Terminal
                 PanelType.CHAT -> Icons.AutoMirrored.Filled.Chat
             },
             contentDescription = null,
-            modifier = Modifier.size(14.dp),
+            modifier = Modifier.size(12.dp),
             tint = if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
-
-        Spacer(Modifier.width(6.dp))
-
-        // Session name
+        Spacer(Modifier.width(4.dp))
         Text(
             text = panel.sessionName.ifEmpty { "Unassigned" },
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = if (panel.sessionName.isEmpty()) MaterialTheme.colorScheme.outline
                     else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f),
         )
-
-        // Action buttons
         if (isEditing) {
-            IconButton(onClick = onSwapSession, modifier = Modifier.size(24.dp)) {
-                Icon(Icons.Default.SwapHoriz, contentDescription = "Change session", modifier = Modifier.size(14.dp))
+            IconButton(onClick = onSwapSession, modifier = Modifier.size(22.dp)) {
+                Icon(Icons.Default.SwapHoriz, contentDescription = "Swap", modifier = Modifier.size(12.dp))
             }
-            IconButton(onClick = onRemove, modifier = Modifier.size(24.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Remove panel", modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error)
+            IconButton(onClick = onRemove, modifier = Modifier.size(22.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.error)
             }
         }
-
-        IconButton(onClick = onToggleMaximize, modifier = Modifier.size(24.dp)) {
+        IconButton(onClick = onToggleMaximize, modifier = Modifier.size(22.dp)) {
             Icon(
                 imageVector = if (isMaximized) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
                 contentDescription = if (isMaximized) "Restore" else "Maximize",
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(12.dp),
             )
         }
     }

@@ -2,7 +2,9 @@ package com.agentshell.feature.home
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -209,26 +211,22 @@ private fun TopBarRow(
     onSplitScreenClick: () -> Unit = {},
     onSettingsClick: () -> Unit,
 ) {
-    androidx.compose.foundation.layout.Row(
+    Row(
         modifier = Modifier
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 0.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
-        // App title
         Text(
             text = "AgentShell",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 12.dp),
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f).padding(start = 8.dp),
         )
 
-        // Split screen
-        IconButton(onClick = onSplitScreenClick) {
-            Icon(Icons.Default.Dashboard, contentDescription = "Split Screen")
+        IconButton(onClick = onSplitScreenClick, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Dashboard, contentDescription = "Split Screen", modifier = Modifier.size(20.dp))
         }
 
-        // Alerts bell with unread badge
         BadgedBox(
             badge = {
                 if (unreadAlertCount > 0) {
@@ -236,17 +234,17 @@ private fun TopBarRow(
                 }
             },
         ) {
-            IconButton(onClick = onAlertsClick) {
+            IconButton(onClick = onAlertsClick, modifier = Modifier.size(36.dp)) {
                 Icon(
                     imageVector = if (unreadAlertCount > 0) Icons.Default.Notifications else Icons.Default.NotificationsNone,
                     contentDescription = "Alerts",
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
 
-        // Settings
-        IconButton(onClick = onSettingsClick) {
-            Icon(Icons.Default.Settings, contentDescription = "Settings")
+        IconButton(onClick = onSettingsClick, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Settings, contentDescription = "Settings", modifier = Modifier.size(20.dp))
         }
     }
 }

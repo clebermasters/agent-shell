@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -19,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
@@ -63,6 +66,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentshell.data.model.AcpSession
@@ -93,46 +97,43 @@ fun SessionsScreen(
     Scaffold(
         topBar = {
             if (uiState.isSelectionMode) {
-                TopAppBar(
-                    navigationIcon = {
-                        IconButton(onClick = { viewModel.exitSelectionMode() }) {
-                            Icon(Icons.Default.Close, contentDescription = "Cancel selection")
-                        }
-                    },
-                    title = { Text("${uiState.selectedSessionIds.size} selected") },
-                    actions = {
-                        IconButton(
-                            onClick = {
-                                viewModel.deleteSelectedSessions()
-                            },
-                            enabled = uiState.selectedSessionIds.isNotEmpty(),
-                        ) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Delete selected",
-                                tint = if (uiState.selectedSessionIds.isNotEmpty())
-                                    MaterialTheme.colorScheme.error
-                                else
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                            )
-                        }
-                    },
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = { viewModel.exitSelectionMode() }, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
+                    }
+                    Text("${uiState.selectedSessionIds.size} selected", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    IconButton(
+                        onClick = { viewModel.deleteSelectedSessions() },
+                        enabled = uiState.selectedSessionIds.isNotEmpty(),
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Delete, contentDescription = "Delete",
+                            modifier = Modifier.size(20.dp),
+                            tint = if (uiState.selectedSessionIds.isNotEmpty()) MaterialTheme.colorScheme.error
+                                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                        )
+                    }
+                }
             } else {
-                TopAppBar(
-                    title = { Text("Sessions") },
-                    actions = {
-                        IconButton(onClick = onNavigateToHosts) {
-                            Icon(Icons.Default.Edit, contentDescription = "Servers")
-                        }
-                        IconButton(onClick = { viewModel.requestSessions() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                        }
-                        IconButton(onClick = { showCreateDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = "New Session")
-                        }
-                    },
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Sessions", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    IconButton(onClick = onNavigateToHosts, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Edit, contentDescription = "Servers", modifier = Modifier.size(20.dp))
+                    }
+                    IconButton(onClick = { viewModel.requestSessions() }, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(20.dp))
+                    }
+                    IconButton(onClick = { showCreateDialog = true }, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.Add, contentDescription = "New Session", modifier = Modifier.size(20.dp))
+                    }
+                }
             }
         },
         floatingActionButton = {
@@ -149,20 +150,26 @@ fun SessionsScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            // Tabs: Tmux / ACP
+            // Tabs: Tmux / ACP — compact, text-only
             TabRow(selectedTabIndex = selectedTabIndex) {
                 Tab(
                     selected = selectedTabIndex == 0,
                     onClick = { selectedTabIndex = 0 },
-                    text = { Text("Terminal") },
-                    icon = { Icon(Icons.Default.Terminal, contentDescription = null) },
-                )
+                ) {
+                    Row(modifier = Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("Terminal", fontSize = 13.sp)
+                    }
+                }
                 Tab(
                     selected = selectedTabIndex == 1,
                     onClick = { selectedTabIndex = 1 },
-                    text = { Text("Direct (ACP)") },
-                    icon = { Icon(Icons.Default.SmartToy, contentDescription = null) },
-                )
+                ) {
+                    Row(modifier = Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("Direct", fontSize = 13.sp)
+                    }
+                }
             }
 
             PullToRefreshBox(
@@ -265,63 +272,60 @@ private fun TmuxSessionCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 3.dp)
             .combinedClickable(onClick = onTap, onLongClick = { showMenu = true }),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            // Header row: icon + name + kill menu
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(
-                    Icons.Default.Terminal,
-                    contentDescription = null,
-                    tint = if (session.attached) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Icon(
+                Icons.Default.Terminal,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = if (session.attached) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(session.name, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Text(
+                    "${session.windows} win${if (session.attached) " • Active" else ""}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
                 )
-                Spacer(Modifier.size(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(session.name, fontWeight = FontWeight.Medium)
-                    Text(
-                        "${session.windows} window${if (session.windows != 1) "s" else ""}" +
-                            if (session.attached) " • Attached" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-                Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Options")
-                    }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Kill Session", color = MaterialTheme.colorScheme.error) },
-                            leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
-                            onClick = { showMenu = false; showKillDialog = true },
-                        )
-                    }
-                }
             }
 
-            Spacer(Modifier.height(8.dp))
-
-            // Action buttons row
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(
-                    onClick = onTap,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.size(6.dp))
-                    Text("Terminal")
+            // Compact action buttons
+            FilledTonalButton(
+                onClick = onTap,
+                modifier = Modifier.height(30.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) {
+                Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Term", fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(6.dp))
+            OutlinedButton(
+                onClick = onChat,
+                modifier = Modifier.height(30.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) {
+                Icon(Icons.Outlined.Chat, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Chat", fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(4.dp))
+            Box {
+                IconButton(onClick = { showMenu = true }, modifier = Modifier.size(30.dp)) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Options", modifier = Modifier.size(18.dp))
                 }
-                OutlinedButton(
-                    onClick = onChat,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Icon(Icons.Outlined.Chat, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.size(6.dp))
-                    Text("Chat")
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Kill Session", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                        onClick = { showMenu = false; showKillDialog = true },
+                    )
                 }
             }
         }

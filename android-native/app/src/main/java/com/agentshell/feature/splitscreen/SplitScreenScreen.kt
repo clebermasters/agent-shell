@@ -97,40 +97,36 @@ fun SplitScreenScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (state.maximizedPanelId != null) viewModel.restoreFromMaximize()
-                        else onNavigateBack()
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                title = {
-                    Text(
-                        text = state.layoutName.ifEmpty { "Split Screen" },
-                        fontSize = 16.sp,
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = {
+                    if (state.maximizedPanelId != null) viewModel.restoreFromMaximize()
+                    else onNavigateBack()
+                }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(20.dp))
+                }
+                Text(
+                    text = state.layoutName.ifEmpty { "Split Screen" },
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f).padding(start = 4.dp),
+                )
+                IconButton(onClick = { viewModel.toggleEditing() }, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        if (state.isEditing) Icons.Default.Check else Icons.Default.Edit,
+                        contentDescription = if (state.isEditing) "Done" else "Edit",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (state.isEditing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     )
-                },
-                actions = {
-                    // Edit toggle
-                    IconButton(onClick = { viewModel.toggleEditing() }) {
-                        Icon(
-                            if (state.isEditing) Icons.Default.Check else Icons.Default.Edit,
-                            contentDescription = if (state.isEditing) "Done editing" else "Edit layout",
-                            tint = if (state.isEditing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                    // Save / name layout
-                    IconButton(onClick = { viewModel.openLayoutEditor() }) {
-                        Icon(Icons.Default.Save, contentDescription = "Save layout")
-                    }
-                    // Layout list
-                    IconButton(onClick = { viewModel.openLayoutList() }) {
-                        Icon(Icons.AutoMirrored.Filled.ViewList, contentDescription = "Saved layouts")
-                    }
-                },
-            )
+                }
+                IconButton(onClick = { viewModel.openLayoutEditor() }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Save, contentDescription = "Save", modifier = Modifier.size(20.dp))
+                }
+                IconButton(onClick = { viewModel.openLayoutList() }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ViewList, contentDescription = "Layouts", modifier = Modifier.size(20.dp))
+                }
+            }
         },
     ) { paddingValues ->
         Box(
@@ -138,7 +134,7 @@ fun SplitScreenScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .imePadding()
-                .padding(4.dp),
+                .padding(2.dp),
         ) {
             when {
                 state.isLoading -> {

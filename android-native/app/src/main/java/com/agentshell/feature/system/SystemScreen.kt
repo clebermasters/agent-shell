@@ -26,14 +26,15 @@ fun SystemScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("System") },
-                actions = {
-                    IconButton(onClick = { viewModel.refresh() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                },
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("System", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                IconButton(onClick = { viewModel.refresh() }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(20.dp))
+                }
+            }
         },
     ) { paddingValues ->
         if (state.isLoading && state.stats == null) {

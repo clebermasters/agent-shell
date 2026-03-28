@@ -38,17 +38,18 @@ fun DotfilesScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Dotfiles") },
-                actions = {
-                    IconButton(onClick = { viewModel.requestDotfiles() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                    IconButton(onClick = onNavigateToTemplates) {
-                        Icon(Icons.Default.BookmarkBorder, contentDescription = "Templates")
-                    }
-                },
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Dotfiles", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                IconButton(onClick = { viewModel.requestDotfiles() }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(20.dp))
+                }
+                IconButton(onClick = onNavigateToTemplates, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.BookmarkBorder, contentDescription = "Templates", modifier = Modifier.size(20.dp))
+                }
+            }
         },
         floatingActionButton = {
             FloatingActionButton(

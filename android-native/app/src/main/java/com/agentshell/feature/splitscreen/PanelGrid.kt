@@ -51,7 +51,7 @@ fun PanelGrid(
         return
     }
 
-    val spacing = 4.dp
+    val spacing = 2.dp
 
     when (sorted.size) {
         0 -> { /* empty */ }

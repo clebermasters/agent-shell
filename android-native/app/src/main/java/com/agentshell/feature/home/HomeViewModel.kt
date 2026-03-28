@@ -55,6 +55,8 @@ class HomeViewModel @Inject constructor(
     private val _cronJobs = MutableStateFlow<List<CronJob>>(emptyList())
     private val _dotFiles = MutableStateFlow<List<DotFile>>(emptyList())
 
+    val claudeUsage = systemRepository.claudeUsage
+
     val uiState: StateFlow<HomeUiState> = combine(
         hostRepository.getSelectedHost(),
         wsService.connectionStatus,
@@ -128,6 +130,9 @@ class HomeViewModel @Inject constructor(
                         // Delegate to SystemRepository which owns the stats state
                         systemRepository.parseAndEmit(message)
                     }
+                    "claude-usage" -> {
+                        systemRepository.parseClaudeUsage(message)
+                    }
                     "sessions-list", "session_list" -> {
                         @Suppress("UNCHECKED_CAST")
                         val rawList = message["sessions"] as? List<Map<String, Any?>> ?: emptyList()
@@ -200,6 +205,14 @@ class HomeViewModel @Inject constructor(
                     systemRepository.requestStats()
                 }
                 delay(5_000)
+            }
+        }
+        viewModelScope.launch {
+            // Wait for connection before first request
+            wsService.connectionStatus.first { it == ConnectionStatus.CONNECTED }
+            while (true) {
+                systemRepository.requestClaudeUsage()
+                delay(60_000)
             }
         }
     }

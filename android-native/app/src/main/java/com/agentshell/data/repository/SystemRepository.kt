@@ -1,7 +1,10 @@
 package com.agentshell.data.repository
 
+import com.agentshell.data.model.ClaudeUsage
 import com.agentshell.data.model.SystemStats
+import com.agentshell.data.model.UsageBucket
 import com.agentshell.data.remote.WebSocketService
+import com.agentshell.data.remote.requestClaudeUsage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,8 +18,35 @@ class SystemRepository @Inject constructor(
     private val _stats = MutableStateFlow<SystemStats?>(null)
     val stats: StateFlow<SystemStats?> = _stats.asStateFlow()
 
+    private val _claudeUsage = MutableStateFlow<ClaudeUsage?>(null)
+    val claudeUsage: StateFlow<ClaudeUsage?> = _claudeUsage.asStateFlow()
+
     fun requestStats() {
         wsService.send(mapOf("type" to "get-stats"))
+    }
+
+    fun requestClaudeUsage() {
+        wsService.requestClaudeUsage()
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun parseClaudeUsage(msg: Map<String, Any?>) {
+        try {
+            fun parseBucket(key: String): UsageBucket? {
+                val obj = msg[key] as? Map<String, Any?> ?: return null
+                return UsageBucket(
+                    utilization = (obj["utilization"] as? Number)?.toDouble() ?: return null,
+                    resetsAt = obj["resetsAt"] as? String ?: obj["resets_at"] as? String ?: "",
+                )
+            }
+            val err = msg["error"] as? String
+            _claudeUsage.value = ClaudeUsage(
+                fiveHour = parseBucket("fiveHour") ?: parseBucket("five_hour"),
+                sevenDay = parseBucket("sevenDay") ?: parseBucket("seven_day"),
+                sevenDaySonnet = parseBucket("sevenDaySonnet") ?: parseBucket("seven_day_sonnet"),
+                error = err,
+            )
+        } catch (_: Exception) { }
     }
 
     /**

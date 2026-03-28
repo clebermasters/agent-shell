@@ -43,8 +43,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import com.agentshell.core.widgets.ConnectionStatusBanner
+import com.agentshell.data.model.ClaudeUsage
 import com.agentshell.feature.system.AlertBanner
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 // Tab indices
 private const val TAB_SESSIONS = 0
@@ -80,6 +91,7 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
     val paletteSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showPalette by rememberSaveable { mutableStateOf(false) }
 
@@ -166,6 +178,9 @@ fun HomeScreen(
 
             // ── Connection status animated banner ──
             ConnectionStatusBanner(connectionStatus = uiState.connectionStatus)
+
+            // ── Claude usage banner ──
+            claudeUsage?.let { usage -> ClaudeUsageBanner(usage) }
 
             // ── Tab content (preserved – uses Box with visibility to keep state) ──
             Box(modifier = Modifier.fillMaxSize()) {
@@ -262,5 +277,84 @@ private fun TabContent(
         Box(modifier = Modifier.fillMaxSize()) {
             content()
         }
+    }
+}
+
+// ── Claude Usage Banner ──────────────────────────────────────────────────────
+
+private fun usageColor(pct: Double): Color = when {
+    pct >= 80 -> Color(0xFFEF4444) // red
+    pct >= 50 -> Color(0xFFF59E0B) // amber
+    else -> Color(0xFF10B981)       // green
+}
+
+private fun formatResetCountdown(resetsAt: String): String {
+    return try {
+        val reset = Instant.parse(resetsAt)
+        val now = Instant.now()
+        val mins = ChronoUnit.MINUTES.between(now, reset)
+        if (mins <= 0) "now"
+        else if (mins < 60) "${mins}m"
+        else "${mins / 60}h ${mins % 60}m"
+    } catch (_: Exception) { "" }
+}
+
+@Composable
+private fun ClaudeUsageBanner(usage: ClaudeUsage) {
+    // Hide banner entirely when there's an error (not logged in, no credentials, etc.)
+    if (usage.error != null) return
+    val fh = usage.fiveHour
+    val sd = usage.sevenDay
+    if (fh == null && sd == null) return
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Left: utilization percentages
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            fh?.let {
+                val color = usageColor(it.utilization)
+                Text(
+                    text = "5h ${it.utilization.toInt()}%",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = color,
+                )
+            }
+            sd?.let {
+                val color = usageColor(it.utilization)
+                Text(
+                    text = "7d ${it.utilization.toInt()}%",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = color,
+                )
+            }
+        }
+        // Right: reset countdown
+        fh?.let {
+            val countdown = formatResetCountdown(it.resetsAt)
+            if (countdown.isNotEmpty()) {
+                Text(
+                    text = "resets $countdown",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+    // Progress bar for 5-hour usage
+    fh?.let {
+        LinearProgressIndicator(
+            progress = { (it.utilization / 100.0).toFloat().coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(2.dp),
+            color = usageColor(it.utilization),
+            trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        )
     }
 }

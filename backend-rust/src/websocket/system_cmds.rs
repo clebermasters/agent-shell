@@ -1,5 +1,5 @@
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{error, info};
 
 use super::types::{send_message, BroadcastMessage, WsState};
 use crate::{audio, types::*};
@@ -73,6 +73,105 @@ pub(crate) async fn handle_get_stats(
     })
     .await?;
     send_message(tx, ServerMessage::Stats { stats }).await
+}
+
+pub(crate) async fn handle_get_claude_usage(
+    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+) -> anyhow::Result<()> {
+    let usage_error = |tx: &mpsc::UnboundedSender<BroadcastMessage>, reason: String| {
+        let msg = ServerMessage::ClaudeUsage {
+            five_hour: None,
+            seven_day: None,
+            seven_day_sonnet: None,
+            error: Some(reason),
+        };
+        let json = serde_json::to_string(&msg).unwrap_or_default();
+        let _ = tx.send(BroadcastMessage::Text(std::sync::Arc::new(json)));
+    };
+
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            usage_error(tx, "no home directory".into());
+            return Ok(());
+        }
+    };
+    let creds_path = home.join(".claude/.credentials.json");
+
+    let creds_data = match tokio::fs::read_to_string(&creds_path).await {
+        Ok(d) => d,
+        Err(_) => {
+            usage_error(tx, "not logged in".into());
+            return Ok(());
+        }
+    };
+
+    let creds: serde_json::Value = match serde_json::from_str(&creds_data) {
+        Ok(v) => v,
+        Err(_) => {
+            usage_error(tx, "invalid credentials".into());
+            return Ok(());
+        }
+    };
+
+    let token = match creds["claudeAiOauth"]["accessToken"].as_str() {
+        Some(t) => t.to_string(),
+        None => {
+            usage_error(tx, "no OAuth token".into());
+            return Ok(());
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .get("https://api.anthropic.com/api/oauth/usage")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Claude usage API request failed: {}", e);
+            usage_error(tx, "API unreachable".into());
+            return Ok(());
+        }
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        error!("Claude usage API returned {}", status);
+        usage_error(tx, format!("API error {}", status));
+        return Ok(());
+    }
+
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Failed to parse Claude usage response: {}", e);
+            usage_error(tx, "bad response".into());
+            return Ok(());
+        }
+    };
+
+    let parse_bucket = |key: &str| -> Option<UsageBucket> {
+        let obj = body.get(key)?.as_object()?;
+        Some(UsageBucket {
+            utilization: obj.get("utilization")?.as_f64()?,
+            resets_at: obj.get("resets_at")?.as_str()?.to_string(),
+        })
+    };
+
+    let msg = ServerMessage::ClaudeUsage {
+        five_hour: parse_bucket("five_hour"),
+        seven_day: parse_bucket("seven_day"),
+        seven_day_sonnet: parse_bucket("seven_day_sonnet"),
+        error: None,
+    };
+
+    send_message(tx, msg).await
 }
 
 pub(crate) async fn handle_audio_control(

@@ -578,6 +578,11 @@ fun WebSocketService.requestSystemStats() {
     send(mapOf("type" to "get-stats"))
 }
 
+/** Request Claude Max subscription usage metrics. */
+fun WebSocketService.requestClaudeUsage() {
+    send(mapOf("type" to "get-claude-usage"))
+}
+
 // =============================================================================
 // 9. FILE COMMANDS
 // =============================================================================

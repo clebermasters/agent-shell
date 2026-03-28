@@ -23,6 +23,13 @@ pub struct TmuxWindow {
     pub panes: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageBucket {
+    pub utilization: f64,
+    pub resets_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemStats {
@@ -215,6 +222,7 @@ pub enum WebSocketMessage {
     },
     // System stats
     GetStats,
+    GetClaudeUsage,
     // Cron management
     ListCronJobs,
     CreateCronJob {
@@ -504,6 +512,14 @@ pub enum ServerMessage {
     // System stats response
     Stats {
         stats: SystemStats,
+    },
+    // Claude usage response
+    ClaudeUsage {
+        five_hour: Option<UsageBucket>,
+        seven_day: Option<UsageBucket>,
+        seven_day_sonnet: Option<UsageBucket>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     // Generic error response
     Error {

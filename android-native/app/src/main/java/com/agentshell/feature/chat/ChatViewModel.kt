@@ -10,6 +10,7 @@ import com.agentshell.data.model.ChatBlockType
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
 import com.agentshell.data.remote.WebSocketService
+import com.agentshell.data.repository.SystemRepository
 import com.agentshell.data.remote.acpRespondPermission
 import com.agentshell.data.remote.acpSendPrompt
 import com.agentshell.data.remote.sendFileToAcpChat
@@ -85,6 +86,7 @@ data class ChatUiState(
     val draftMessage: String = "",
     val error: String? = null,
     val fileBaseUrl: String = "",
+    val detectedTool: String? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -100,7 +102,10 @@ class ChatViewModel @Inject constructor(
     private val audioService: AudioService,
     private val whisperService: WhisperService,
     private val app: Application,
+    systemRepository: SystemRepository,
 ) : ViewModel() {
+
+    val claudeUsage = systemRepository.claudeUsage
 
     private val webSocketService: WebSocketService get() = chatRepository.webSocketService
 
@@ -428,6 +433,8 @@ class ChatViewModel @Inject constructor(
         val totalCount = (message["totalCount"] as? Number)?.toInt() ?: parsed.size
         val hasMore = message["hasMore"] as? Boolean ?: false
 
+        val tool = (message["tool"] as? String)?.lowercase()
+
         _uiState.update {
             it.copy(
                 messages = parsed,
@@ -435,6 +442,7 @@ class ChatViewModel @Inject constructor(
                 error = null,
                 totalMessageCount = totalCount,
                 hasMoreMessages = hasMore,
+                detectedTool = tool ?: it.detectedTool,
             )
         }
     }

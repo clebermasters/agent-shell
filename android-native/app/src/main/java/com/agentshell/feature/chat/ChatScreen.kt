@@ -86,7 +86,12 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.unit.sp
+import com.agentshell.data.model.ClaudeUsage
 import com.agentshell.feature.common.SwipeableSessionContainer
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -102,6 +107,7 @@ fun ChatScreen(
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var showScrollButton by remember { mutableStateOf(false) }
@@ -298,6 +304,15 @@ fun ChatScreen(
                 .padding(innerPadding),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
+                // Claude usage banner (only when session runs Claude)
+                if (uiState.detectedTool == "claude") {
+                    claudeUsage?.let { usage ->
+                        if (usage.error == null && (usage.fiveHour != null || usage.sevenDay != null)) {
+                            ChatClaudeUsageBanner(usage)
+                        }
+                    }
+                }
+
                 // Loading indicator at top for load-more
                 if (uiState.isLoadingMore) {
                     Box(
@@ -705,5 +720,75 @@ private fun StreamingIndicator(modifier: Modifier = Modifier) {
                     ),
             )
         }
+    }
+}
+
+// ── Claude Usage Banner (chat-specific, compact) ─────────────────────────────
+
+private fun chatUsageColor(pct: Double): Color = when {
+    pct >= 80 -> Color(0xFFEF4444)
+    pct >= 50 -> Color(0xFFF59E0B)
+    else -> Color(0xFF10B981)
+}
+
+private fun chatResetCountdown(resetsAt: String): String {
+    return try {
+        val reset = Instant.parse(resetsAt)
+        val mins = ChronoUnit.MINUTES.between(Instant.now(), reset)
+        if (mins <= 0) "now"
+        else if (mins < 60) "${mins}m"
+        else "${mins / 60}h ${mins % 60}m"
+    } catch (_: Exception) { "" }
+}
+
+@Composable
+private fun ChatClaudeUsageBanner(usage: ClaudeUsage) {
+    val fh = usage.fiveHour
+    val sd = usage.sevenDay
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            fh?.let {
+                Text(
+                    text = "5h ${it.utilization.toInt()}%",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = chatUsageColor(it.utilization),
+                )
+            }
+            sd?.let {
+                Text(
+                    text = "7d ${it.utilization.toInt()}%",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = chatUsageColor(it.utilization),
+                )
+            }
+        }
+        fh?.let {
+            val countdown = chatResetCountdown(it.resetsAt)
+            if (countdown.isNotEmpty()) {
+                Text(
+                    text = "resets $countdown",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+    fh?.let {
+        LinearProgressIndicator(
+            progress = { (it.utilization / 100.0).toFloat().coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(2.dp),
+            color = chatUsageColor(it.utilization),
+            trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        )
     }
 }

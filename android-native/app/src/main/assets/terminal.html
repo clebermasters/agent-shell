@@ -65,14 +65,24 @@
   // Initial fit
   try { fitAddon.fit(); } catch(e) {}
 
-  // Re-fit on window resize
-  var resizeTimer = null;
-  window.addEventListener('resize', function() {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(function() {
+  // Re-fit when the terminal container resizes.  ResizeObserver is far more
+  // reliable than window.resize inside Android WebView / Compose AndroidView
+  // where the JS viewport often does NOT update when the Android View relayouts.
+  var fitPending = false;
+  function debouncedFit() {
+    if (fitPending) return;
+    fitPending = true;
+    requestAnimationFrame(function() {
+      fitPending = false;
       try { fitAddon.fit(); } catch(e) {}
-    }, 100);
-  });
+    });
+  }
+
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(debouncedFit).observe(document.getElementById('terminal'));
+  }
+  // Fallback for older WebViews
+  window.addEventListener('resize', debouncedFit);
 
   // ── Bridge: xterm.js → Android ──────────────────────────────────────────
 
@@ -125,9 +135,12 @@
       } catch(e) {}
     },
 
-    // Fit terminal to container
+    // Fit terminal to container (deferred to next animation frame so
+    // the DOM has reflowed and measurements are accurate)
     fit: function() {
-      try { fitAddon.fit(); } catch(e) {}
+      requestAnimationFrame(function() {
+        try { fitAddon.fit(); } catch(e) {}
+      });
     },
 
     // Set font size in pixels

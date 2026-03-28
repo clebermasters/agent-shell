@@ -188,14 +188,19 @@ fun TerminalScreen(
         return result
     }
 
-    // Volume keys + detach on leave
+    // Volume keys cleanup on leave.
+    // NOTE: Do NOT call viewModel.detachSession() here. During swipe
+    // navigation, the NEW ViewModel's attachSession() fires BEFORE this
+    // onDispose runs. Calling detach() here would kill the new session's
+    // listener and callback, making the terminal unresponsive. The new
+    // attachSession() already cancels the old listener cleanly, and the
+    // old ViewModel's viewModelScope cancellation stops its coroutines.
     DisposableEffect(sessionName) {
         com.agentshell.VolumeKeyHandler.onVolumeUp = { viewModel.zoomIn() }
         com.agentshell.VolumeKeyHandler.onVolumeDown = { viewModel.zoomOut() }
         onDispose {
             com.agentshell.VolumeKeyHandler.onVolumeUp = null
             com.agentshell.VolumeKeyHandler.onVolumeDown = null
-            viewModel.detachSession()
         }
     }
 

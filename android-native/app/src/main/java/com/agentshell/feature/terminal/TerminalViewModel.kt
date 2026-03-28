@@ -57,6 +57,10 @@ class TerminalViewModel @Inject constructor(
 
     val xTermController = XTermController()
 
+    // Last known terminal dimensions from xterm.js — used for reconnection
+    private var lastCols = 80
+    private var lastRows = 24
+
     private val _cwdResult = MutableSharedFlow<String>(replay = 1)
     val cwdResult: SharedFlow<String> = _cwdResult.asSharedFlow()
 
@@ -77,8 +81,7 @@ class TerminalViewModel @Inject constructor(
                         if (state.sessionName.isNotBlank() && !state.isLoading) {
                             terminalService.attachSession(
                                 state.sessionName,
-                                /* use last known size — xterm.js will send a resize if needed */
-                                80, 24,
+                                lastCols, lastRows,
                                 state.windowIndex,
                             )
                         }
@@ -124,6 +127,8 @@ class TerminalViewModel @Inject constructor(
         _uiState.update {
             it.copy(sessionName = sessionName, windowIndex = windowIndex, isLoading = false)
         }
+        lastCols = cols
+        lastRows = rows
 
         // Wire: TerminalService output → XTermController → xterm.js WebView
         terminalService.onTerminalData = { data ->
@@ -139,8 +144,10 @@ class TerminalViewModel @Inject constructor(
         terminalService.sendInput(data)
     }
 
-    /** Called when xterm.js resizes (e.g. screen rotation). */
+    /** Called when xterm.js resizes (e.g. screen rotation, keyboard). */
     fun onTerminalResize(cols: Int, rows: Int) {
+        lastCols = cols
+        lastRows = rows
         terminalService.resize(cols, rows)
     }
 

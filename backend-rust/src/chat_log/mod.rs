@@ -81,9 +81,15 @@ pub enum ChatLogEvent {
         tool: AiTool,
         has_more: bool,
         total_count: usize,
+        context_window_usage: Option<f64>,
+        model_name: Option<String>,
     },
     NewMessage {
         message: ChatMessage,
+    },
+    ContextWindowUpdate {
+        usage: f64,
+        model_name: Option<String>,
     },
     Error {
         error: String,

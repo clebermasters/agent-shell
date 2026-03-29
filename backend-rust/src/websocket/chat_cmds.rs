@@ -78,7 +78,7 @@ pub(crate) async fn handle(
                         let session_name_owned = session_name.clone();
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
-                                crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count } => {
+                                crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count, context_window_usage, model_name } => {
                                     let persisted_messages = match chat_event_store
                                         .list_messages(&session_name_owned, window_index)
                                     {
@@ -106,6 +106,8 @@ pub(crate) async fn handle(
                                         tool: Some(tool),
                                         has_more,
                                         total_count,
+                                        context_window_usage,
+                                        model_name,
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::NewMessage { message } => {
@@ -119,6 +121,14 @@ pub(crate) async fn handle(
                                         window_index,
                                         message,
                                         source: None,
+                                    }
+                                }
+                                crate::chat_log::ChatLogEvent::ContextWindowUpdate { usage, model_name } => {
+                                    ServerMessage::ContextWindowUpdate {
+                                        session_name: session_name_owned.clone(),
+                                        window_index,
+                                        context_window_usage: usage,
+                                        model_name,
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::Error { error } => {
@@ -248,6 +258,8 @@ pub(crate) async fn handle(
                         }),
                         has_more,
                         total_count,
+                        context_window_usage: None,
+                        model_name: None,
                     },
                 ).await;
 
@@ -488,7 +500,7 @@ pub(crate) async fn handle(
                         // Forward events to WebSocket
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
-                                crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count } => {
+                                crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count, context_window_usage, model_name } => {
                                     let persisted_messages = match chat_event_store
                                         .list_messages(&session_name_owned, window_index_owned)
                                     {
@@ -515,6 +527,8 @@ pub(crate) async fn handle(
                                         tool: Some(tool),
                                         has_more,
                                         total_count,
+                                        context_window_usage,
+                                        model_name,
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::NewMessage { message } => {
@@ -523,6 +537,14 @@ pub(crate) async fn handle(
                                         window_index: window_index_owned,
                                         message,
                                         source: None,
+                                    }
+                                }
+                                crate::chat_log::ChatLogEvent::ContextWindowUpdate { usage, model_name } => {
+                                    ServerMessage::ContextWindowUpdate {
+                                        session_name: session_name_owned.clone(),
+                                        window_index: window_index_owned,
+                                        context_window_usage: usage,
+                                        model_name,
                                     }
                                 }
                                 crate::chat_log::ChatLogEvent::Error { error } => {

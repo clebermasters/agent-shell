@@ -87,6 +87,8 @@ data class ChatUiState(
     val error: String? = null,
     val fileBaseUrl: String = "",
     val detectedTool: String? = null,
+    val contextWindowUsage: Double? = null,
+    val modelName: String? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -399,6 +401,16 @@ class ChatViewModel @Inject constructor(
                     "chat-file-message"  -> handleChatFileMessage(message)
                     "chat-log-error"     -> handleChatError(message)
                     "chat-log-cleared"   -> handleChatLogCleared(message)
+                    "context-window-update" -> {
+                        val pct = (message["contextWindowUsage"] as? Number)?.toDouble()
+                        val model = message["modelName"] as? String
+                        _uiState.update {
+                            it.copy(
+                                contextWindowUsage = pct ?: it.contextWindowUsage,
+                                modelName = model ?: it.modelName,
+                            )
+                        }
+                    }
                     "acp-message-chunk"  -> handleAcpMessageChunk(message)
                     "acp-tool-call"      -> handleAcpToolCall(message)
                     "acp-tool-result"    -> handleAcpToolResult(message)
@@ -434,6 +446,8 @@ class ChatViewModel @Inject constructor(
         val hasMore = message["hasMore"] as? Boolean ?: false
 
         val tool = (message["tool"] as? String)?.lowercase()
+        val ctxUsage = (message["contextWindowUsage"] as? Number)?.toDouble()
+        val model = message["modelName"] as? String
 
         _uiState.update {
             it.copy(
@@ -443,6 +457,8 @@ class ChatViewModel @Inject constructor(
                 totalMessageCount = totalCount,
                 hasMoreMessages = hasMore,
                 detectedTool = tool ?: it.detectedTool,
+                contextWindowUsage = ctxUsage,
+                modelName = model ?: it.modelName,
             )
         }
     }

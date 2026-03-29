@@ -29,6 +29,7 @@ class ChatRepository @Inject constructor(
             "chat-log-cleared",
             "chat-file-message",
             "chat-notification",
+            "context-window-update",
             // ACP streaming messages
             "acp-message-chunk",
             "acp-tool-call",

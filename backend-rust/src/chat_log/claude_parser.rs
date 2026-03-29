@@ -183,6 +183,73 @@ fn convert_block(block: RawBlock) -> Option<ContentBlock> {
 // Summaries
 // ---------------------------------------------------------------------------
 
+/// Extract context window usage percentage from a Claude Code JSONL log file.
+///
+/// Reads the last assistant message's `usage` block and calculates what
+/// fraction of the model's context window is consumed.  Returns `None`
+/// if the file cannot be read or contains no usage data.
+/// Context window info extracted from a Claude Code session log.
+pub struct ContextInfo {
+    pub usage_pct: f64,
+    pub model: String,
+}
+
+pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
+    let data = std::fs::read_to_string(path).ok()?;
+    let mut last_input: Option<(u64, String)> = None; // (total_input_tokens, model)
+
+    for line in data.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() { continue; }
+        let v: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let msg = match v.get("message") {
+            Some(m) => m,
+            None => continue,
+        };
+        let usage = match msg.get("usage") {
+            Some(u) => u,
+            None => continue,
+        };
+        let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cache_read = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let cache_create = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let model = msg.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+        last_input = Some((input + cache_read + cache_create, model));
+        break;
+    }
+
+    let (total_tokens, model) = last_input?;
+    // Determine context window size: Claude Max subscription gives 1M for Opus.
+    // If total tokens exceed 200K, it must be a 1M context session.
+    // Also check model name for explicit 1m suffix.
+    let ctx_window: u64 = if model.contains("1m") || total_tokens > 200_000 {
+        1_000_000
+    } else {
+        // Check credentials for subscription type
+        let is_max = dirs::home_dir()
+            .and_then(|h| std::fs::read_to_string(h.join(".claude/.credentials.json")).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v["claudeAiOauth"]["subscriptionType"].as_str().map(|s| s == "max"))
+            .unwrap_or(false);
+        if is_max && model.contains("opus") { 1_000_000 } else { 200_000 }
+    };
+    // Friendly model name: "claude-opus-4-6" → "Opus 4.6"
+    let friendly_model = model
+        .replace("claude-", "")
+        .replace("opus-", "Opus ")
+        .replace("sonnet-", "Sonnet ")
+        .replace("haiku-", "Haiku ")
+        .replace('-', ".");
+
+    Some(ContextInfo {
+        usage_pct: (total_tokens as f64 / ctx_window as f64) * 100.0,
+        model: friendly_model,
+    })
+}
+
 /// Build a short human-readable summary of a tool invocation based on its
 /// name and input object. For well-known Claude Code tools we pull out the
 /// single most informative field; for unknown tools we fall back to the tool

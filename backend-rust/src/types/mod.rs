@@ -584,6 +584,10 @@ pub enum ServerMessage {
         has_more: bool,
         #[serde(rename = "totalCount")]
         total_count: usize,
+        #[serde(rename = "contextWindowUsage", skip_serializing_if = "Option::is_none")]
+        context_window_usage: Option<f64>,
+        #[serde(rename = "modelName", skip_serializing_if = "Option::is_none")]
+        model_name: Option<String>,
     },
     ChatHistoryChunk {
         #[serde(rename = "sessionName")]
@@ -602,6 +606,16 @@ pub enum ServerMessage {
         message: crate::chat_log::ChatMessage,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
+    },
+    ContextWindowUpdate {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "windowIndex")]
+        window_index: u32,
+        #[serde(rename = "contextWindowUsage")]
+        context_window_usage: f64,
+        #[serde(rename = "modelName", skip_serializing_if = "Option::is_none")]
+        model_name: Option<String>,
     },
     ChatLogError {
         error: String,
@@ -967,6 +981,8 @@ mod tests {
             tool: None,
             has_more: false,
             total_count: 0,
+            context_window_usage: None,
+            model_name: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("chat-history"));

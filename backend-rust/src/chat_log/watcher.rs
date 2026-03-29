@@ -113,12 +113,20 @@ pub async fn watch_log_file(
         _ => (filtered_history, false),
     };
 
+    let ctx_info = if tool == AiTool::Claude {
+        claude_parser::extract_context_usage(path)
+    } else {
+        None
+    };
+
     event_tx
         .send(ChatLogEvent::History {
             messages: paginated,
             tool: tool.clone(),
             has_more,
             total_count,
+            context_window_usage: ctx_info.as_ref().map(|c| c.usage_pct),
+            model_name: ctx_info.as_ref().map(|c| c.model.clone()),
         })
         .ok();
 
@@ -163,6 +171,15 @@ pub async fn watch_log_file(
                         {
                             debug!("event_tx closed, stopping watcher task");
                             return;
+                        }
+                    }
+                    // Recalculate context window usage for the active chat
+                    if tool == AiTool::Claude {
+                        if let Some(info) = claude_parser::extract_context_usage(&file_path) {
+                            let _ = event_tx.send(ChatLogEvent::ContextWindowUpdate {
+                                usage: info.usage_pct,
+                                model_name: Some(info.model),
+                            });
                         }
                     }
                 }
@@ -219,6 +236,8 @@ async fn watch_opencode_db(
             },
             has_more,
             total_count,
+            context_window_usage: None,
+            model_name: None,
         });
     } else {
         info!("Initial fetch got no messages or error");

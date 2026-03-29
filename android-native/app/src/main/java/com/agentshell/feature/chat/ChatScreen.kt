@@ -306,10 +306,11 @@ fun ChatScreen(
             Column(modifier = Modifier.fillMaxSize()) {
                 // Claude usage banner (only when session runs Claude)
                 if (uiState.detectedTool == "claude") {
-                    claudeUsage?.let { usage ->
-                        if (usage.error == null && (usage.fiveHour != null || usage.sevenDay != null)) {
-                            ChatClaudeUsageBanner(usage)
-                        }
+                    val usage = claudeUsage?.takeIf { it.error == null }
+                    val hasApiUsage = usage?.fiveHour != null || usage?.sevenDay != null
+                    val hasCtxUsage = uiState.contextWindowUsage != null
+                    if (hasApiUsage || hasCtxUsage) {
+                        ChatClaudeUsageBanner(usage, uiState.contextWindowUsage, uiState.modelName)
                     }
                 }
 
@@ -742,9 +743,25 @@ private fun chatResetCountdown(resetsAt: String): String {
 }
 
 @Composable
-private fun ChatClaudeUsageBanner(usage: ClaudeUsage) {
-    val fh = usage.fiveHour
-    val sd = usage.sevenDay
+private fun ChatClaudeUsageBanner(usage: ClaudeUsage?, contextWindowUsage: Double? = null, modelName: String? = null) {
+    val fh = usage?.fiveHour
+    val sd = usage?.sevenDay
+
+    // Model name label
+    modelName?.let {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .padding(horizontal = 12.dp, vertical = 2.dp),
+        ) {
+            Text(
+                text = it,
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 
     Row(
         modifier = Modifier
@@ -769,6 +786,14 @@ private fun ChatClaudeUsageBanner(usage: ClaudeUsage) {
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = chatUsageColor(it.utilization),
+                )
+            }
+            contextWindowUsage?.let { pct ->
+                Text(
+                    text = "ctx ${pct.toInt()}%",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = chatUsageColor(pct),
                 )
             }
         }

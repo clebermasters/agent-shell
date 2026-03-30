@@ -174,6 +174,9 @@ dependencies {
     implementation("io.noties.markwon:syntax-highlight:4.6.2") {
         exclude(group = "org.jetbrains", module = "annotations-java5")
     }
+    implementation("io.noties.markwon:linkify:4.6.2") {
+        exclude(group = "org.jetbrains", module = "annotations-java5")
+    }
 
     // Audio playback
     implementation("androidx.media3:media3-exoplayer:1.5.0")

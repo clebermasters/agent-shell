@@ -67,7 +67,6 @@ import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatBlockType
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
-import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Typeface
 import android.text.method.LinkMovementMethod
@@ -82,6 +81,7 @@ import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.linkify.LinkifyPlugin
 import kotlinx.coroutines.delay
 import coil.request.ImageRequest
 import com.agentshell.core.config.BuildConfig
@@ -341,6 +341,7 @@ fun MarkdownText(
     // Build Markwon once per theme — TablePlugin.create(context) enables scroll-wrapping for wide tables
     val markwon = remember(isDark) {
         Markwon.builder(context)
+            .usePlugin(LinkifyPlugin.create())
             .usePlugin(StrikethroughPlugin.create())
             .usePlugin(TablePlugin.create(context))
             .usePlugin(object : AbstractMarkwonPlugin() {

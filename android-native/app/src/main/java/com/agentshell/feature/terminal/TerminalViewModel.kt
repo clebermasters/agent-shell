@@ -93,6 +93,10 @@ class TerminalViewModel @Inject constructor(
         viewModelScope.launch {
             val fontSize = prefs.terminalFontSize.first()
             _uiState.update { it.copy(fontSize = fontSize) }
+            // If terminal already loaded, apply immediately
+            if (!_uiState.value.isLoading) {
+                xTermController.setFontSize(fontSize)
+            }
         }
 
         // Observe audio recording
@@ -137,6 +141,12 @@ class TerminalViewModel @Inject constructor(
 
         // Attach to backend (triggers history + live output)
         terminalService.attachSession(sessionName, cols, rows, windowIndex)
+
+        // Apply persisted font size to xterm.js (it starts with hardcoded default 14px)
+        val fontSize = _uiState.value.fontSize
+        if (fontSize != AppConfig.DEFAULT_FONT_SIZE) {
+            xTermController.setFontSize(fontSize)
+        }
     }
 
     /** Called when user types in xterm.js. */

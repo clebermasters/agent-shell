@@ -27,6 +27,7 @@ import com.agentshell.data.remote.watchAcpChatLog
 import com.agentshell.data.remote.watchChatLog
 import com.agentshell.data.repository.ChatRepository
 import com.agentshell.data.repository.HostRepository
+import com.agentshell.data.services.AudioPlayerManager
 import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.WhisperService
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -105,6 +106,7 @@ class ChatViewModel @Inject constructor(
     private val whisperService: WhisperService,
     private val app: Application,
     systemRepository: SystemRepository,
+    val audioPlayerManager: AudioPlayerManager,
 ) : ViewModel() {
 
     val claudeUsage = systemRepository.claudeUsage

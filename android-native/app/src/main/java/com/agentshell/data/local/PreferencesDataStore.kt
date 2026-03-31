@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -221,6 +222,20 @@ class PreferencesDataStore @Inject constructor(
         dataStore.edit { prefs ->
             if (text.isEmpty()) prefs.remove(stringPreferencesKey(key))
             else prefs[stringPreferencesKey(key)] = text
+        }
+    }
+
+    // ─── audio playback position ──────────────────────────────────────────────
+
+    suspend fun getAudioPosition(audioId: String): Long {
+        val key = longPreferencesKey("audio_pos_$audioId")
+        return dataStore.data.first()[key] ?: 0L
+    }
+
+    suspend fun setAudioPosition(audioId: String, positionMs: Long) {
+        val key = longPreferencesKey("audio_pos_$audioId")
+        dataStore.edit { prefs ->
+            if (positionMs <= 0L) prefs.remove(key) else prefs[key] = positionMs
         }
     }
 }

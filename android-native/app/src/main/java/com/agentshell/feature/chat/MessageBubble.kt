@@ -31,20 +31,19 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,8 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatBlockType
@@ -82,9 +80,10 @@ import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
-import kotlinx.coroutines.delay
 import coil.request.ImageRequest
+import kotlinx.coroutines.delay
 import com.agentshell.core.config.BuildConfig
+import com.agentshell.data.services.AudioPlayerManager
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -99,6 +98,7 @@ fun MessageBubble(
     showThinking: Boolean = true,
     showToolCalls: Boolean = true,
     fileBaseUrl: String = "",
+    audioPlayerManager: AudioPlayerManager,
     modifier: Modifier = Modifier,
 ) {
     val isUser = message.messageType == ChatMessageType.USER
@@ -160,6 +160,7 @@ fun MessageBubble(
                             showThinking = showThinking,
                             showToolCalls = showToolCalls,
                             fileBaseUrl = fileBaseUrl,
+                            audioPlayerManager = audioPlayerManager,
                         )
                     }
                 } else if (!message.content.isNullOrBlank()) {
@@ -266,6 +267,7 @@ private fun BlockContent(
     showThinking: Boolean,
     showToolCalls: Boolean,
     fileBaseUrl: String = "",
+    audioPlayerManager: AudioPlayerManager,
 ) {
     when (block.blockType) {
         ChatBlockType.TEXT -> {
@@ -300,7 +302,7 @@ private fun BlockContent(
         }
 
         ChatBlockType.AUDIO -> {
-            AudioBlock(block = block, fileBaseUrl = fileBaseUrl)
+            AudioBlock(block = block, fileBaseUrl = fileBaseUrl, audioPlayerManager = audioPlayerManager)
         }
 
         ChatBlockType.FILE -> {
@@ -629,75 +631,98 @@ private fun ImageBlock(block: ChatBlock, fileBaseUrl: String = "") {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun AudioBlock(block: ChatBlock, fileBaseUrl: String = "") {
-    val audioUrl = if (fileBaseUrl.isNotBlank() && !block.id.isNullOrBlank()) {
-        "$fileBaseUrl/${block.id}"
-    } else {
-        block.id
-    }
-    val context = LocalContext.current
-    val exoPlayer = remember(audioUrl) {
-        val dataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(mapOf("X-Auth-Token" to BuildConfig.AUTH_TOKEN))
-        val mediaSourceFactory = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(dataSourceFactory)
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .build().also { player ->
-                if (!audioUrl.isNullOrBlank()) {
-                    player.setMediaItem(MediaItem.fromUri(audioUrl))
-                    player.prepare()
-                }
-            }
-    }
-    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
+private fun AudioBlock(
+    block: ChatBlock,
+    fileBaseUrl: String = "",
+    audioPlayerManager: AudioPlayerManager,
+) {
+    val audioId = block.id ?: return
+    val audioUrl = if (fileBaseUrl.isNotBlank()) "$fileBaseUrl/$audioId" else audioId
 
-    var isPlaying by remember { mutableStateOf(false) }
-    var progress by remember { mutableFloatStateOf(0f) }
-    var duration by remember { mutableLongStateOf(0L) }
-
-    LaunchedEffect(exoPlayer) {
-        while (true) {
-            isPlaying = exoPlayer.isPlaying
-            duration = exoPlayer.duration.coerceAtLeast(0L)
-            val pos = exoPlayer.currentPosition
-            progress = if (duration > 0) pos / duration.toFloat() else 0f
-            delay(200)
-        }
-    }
+    val state by audioPlayerManager.state.collectAsStateWithLifecycle()
+    val isThisActive = state.activeAudioId == audioId
+    val isPlaying = isThisActive && state.isPlaying
+    val isBuffering = isThisActive && state.isBuffering
+    val positionMs = if (isThisActive) state.positionMs else 0L
+    val durationMs = if (isThisActive) state.durationMs else 0L
+    val progress = if (durationMs > 0L) positionMs / durationMs.toFloat() else 0f
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Row(
-            modifier = Modifier.padding(8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            IconButton(
+            FilledIconButton(
                 onClick = {
-                    if (isPlaying) exoPlayer.pause() else exoPlayer.play()
+                    if (isPlaying) audioPlayerManager.pause()
+                    else audioPlayerManager.play(audioId, audioUrl)
                 },
                 modifier = Modifier.size(40.dp),
             ) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                )
+                if (isBuffering) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
+
             Column(modifier = Modifier.weight(1f)) {
-                LinearProgressIndicator(
-                    progress = { progress },
+                Slider(
+                    value = progress,
+                    onValueChange = { audioPlayerManager.seekTo(it) },
+                    enabled = isThisActive,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp),
+                )
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(4.dp))
-                val durationText = formatDuration(block.durationSeconds?.toLong() ?: (duration / 1000))
-                Text(
-                    text = durationText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = formatDuration(positionMs / 1000),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = formatDuration(
+                            if (durationMs > 0L) durationMs / 1000
+                            else block.durationSeconds?.toLong() ?: 0L,
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = isThisActive) {
+                IconButton(
+                    onClick = { audioPlayerManager.stop() },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Stop,
+                        contentDescription = "Stop",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.os.Bundle
 import com.agentshell.core.service.ConnectionService
+import com.agentshell.data.services.AudioPlayerManager
 import com.agentshell.core.util.NotificationHelper
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.remote.WebSocketService
@@ -27,6 +28,7 @@ class AgentShellApp : Application() {
     @InstallIn(SingletonComponent::class)
     interface AppEntryPoint {
         fun webSocketService(): WebSocketService
+        fun audioPlayerManager(): AudioPlayerManager
     }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -38,6 +40,7 @@ class AgentShellApp : Application() {
 
         val entryPoint = EntryPointAccessors.fromApplication(this, AppEntryPoint::class.java)
         wsService = entryPoint.webSocketService()
+        entryPoint.audioPlayerManager().connect()
 
         observeNotificationEvents()
         manageForegroundService()

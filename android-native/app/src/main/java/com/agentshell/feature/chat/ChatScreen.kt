@@ -350,6 +350,7 @@ fun ChatScreen(
                                 showThinking = uiState.showThinking,
                                 showToolCalls = uiState.showToolCalls,
                                 fileBaseUrl = uiState.fileBaseUrl,
+                                audioPlayerManager = viewModel.audioPlayerManager,
                             )
                         }
 

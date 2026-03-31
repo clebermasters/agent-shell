@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dvr
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -102,6 +103,7 @@ fun ChatScreen(
     cwd: String = "",
     onNavigateBack: () -> Unit = {},
     onSwitchToTerminal: ((sessionName: String) -> Unit)? = null,
+    onNavigateToFileBrowser: ((String) -> Unit)? = null,
     onSwipeToChatSession: ((sessionName: String, windowIndex: Int, isAcp: Boolean) -> Unit)? = null,
     isSwipeNavigation: Boolean = false,
     viewModel: ChatViewModel = hiltViewModel(),
@@ -257,6 +259,15 @@ fun ChatScreen(
                     if (onSwitchToTerminal != null) {
                         IconButton(onClick = { onSwitchToTerminal(sessionName) }) {
                             Icon(Icons.Filled.Dvr, contentDescription = "Switch to Terminal")
+                        }
+                    }
+                    if (onNavigateToFileBrowser != null && !uiState.isAcp) {
+                        IconButton(onClick = {
+                            viewModel.navigateToFileBrowser { path ->
+                                onNavigateToFileBrowser(path)
+                            }
+                        }) {
+                            Icon(Icons.Filled.FolderOpen, contentDescription = "File Browser")
                         }
                     }
                     IconButton(onClick = { showMenu = true }) {

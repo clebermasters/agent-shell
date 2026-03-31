@@ -12,6 +12,7 @@ import com.agentshell.data.model.ChatMessageType
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.repository.SystemRepository
 import com.agentshell.data.remote.acpRespondPermission
+import com.agentshell.data.remote.getSessionCwd
 import com.agentshell.data.remote.acpSendPrompt
 import com.agentshell.data.remote.sendFileToAcpChat
 import com.agentshell.data.remote.sendFileToChat
@@ -32,6 +33,7 @@ import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.WhisperService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -41,6 +43,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.util.UUID
 import javax.inject.Inject
@@ -130,6 +133,8 @@ class ChatViewModel @Inject constructor(
     private val _chatCleared = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
     val chatCleared: SharedFlow<Boolean> = _chatCleared.asSharedFlow()
 
+    private val _cwdResult = MutableSharedFlow<String>(replay = 1)
+
     private var messageCollectionJob: Job? = null
 
     // -------------------------------------------------------------------------
@@ -159,6 +164,15 @@ class ChatViewModel @Inject constructor(
             }
         }
         collectMessages()
+        viewModelScope.launch {
+            webSocketService.messages.collect { message ->
+                val type = message["type"] as? String ?: return@collect
+                if (type == "session-cwd") {
+                    val path = message["cwd"] as? String ?: return@collect
+                    _cwdResult.emit(path)
+                }
+            }
+        }
     }
 
     /** Begin watching a TMUX chat log. */
@@ -199,6 +213,20 @@ class ChatViewModel @Inject constructor(
     /** Stop watching the current chat log. */
     fun unwatchChatLog() {
         webSocketService.unwatchChatLog()
+    }
+
+    /** Request the session CWD and invoke [onResult] with the path once received. */
+    fun navigateToFileBrowser(onResult: (String) -> Unit) {
+        val currentName = _uiState.value.sessionName
+        if (currentName.isBlank()) return
+        viewModelScope.launch {
+            val deferred = viewModelScope.async {
+                withTimeoutOrNull(3000L) { _cwdResult.first() }
+            }
+            webSocketService.getSessionCwd(currentName)
+            val path = deferred.await() ?: "/home"
+            onResult(path)
+        }
     }
 
     // -------------------------------------------------------------------------

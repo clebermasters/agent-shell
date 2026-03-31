@@ -154,6 +154,9 @@ fun AgentShellNavHost() {
                 onSwitchToTerminal = { name ->
                     navController.navigate(Routes.terminal(name)) { popUpTo(Routes.HOME) }
                 },
+                onNavigateToFileBrowser = { path ->
+                    navController.navigate(Routes.fileBrowser(path))
+                },
                 onSwipeToChatSession = { name, idx, isAcpNav ->
                     navController.navigate(Routes.chat(name, idx, isAcp = isAcpNav, isSwipeNav = true)) {
                         popUpTo(Routes.HOME)

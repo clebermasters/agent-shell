@@ -3,12 +3,14 @@ package com.agentshell.feature.file_browser
 import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.FileEntry
 import com.agentshell.data.repository.FileBrowserRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -59,6 +61,7 @@ data class FileBrowserUiState(
 @HiltViewModel
 class FileBrowserViewModel @Inject constructor(
     private val repository: FileBrowserRepository,
+    private val prefs: PreferencesDataStore,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FileBrowserUiState())
@@ -66,6 +69,11 @@ class FileBrowserViewModel @Inject constructor(
 
     init {
         observeEvents()
+        viewModelScope.launch {
+            val raw = prefs.fileSortMode.first()
+            val mode = SortMode.entries.find { it.name == raw } ?: SortMode.NAME_ASC
+            _state.update { it.copy(sortMode = mode) }
+        }
     }
 
     fun listDirectory(path: String) {
@@ -87,6 +95,7 @@ class FileBrowserViewModel @Inject constructor(
 
     fun setSortMode(mode: SortMode) {
         _state.update { it.copy(sortMode = mode) }
+        viewModelScope.launch { prefs.setFileSortMode(mode.name) }
     }
 
     fun toggleHidden() {

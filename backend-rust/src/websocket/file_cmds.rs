@@ -305,6 +305,48 @@ pub(crate) async fn handle(
             }
         }
 
+        WebSocketMessage::WriteFile { path, content_base64 } => {
+            if let Err(e) = validate_path(&path) {
+                let response = ServerMessage::FileWritten {
+                    path,
+                    success: false,
+                    error: Some(e),
+                };
+                send_message(tx, response).await?;
+                return Ok(());
+            }
+
+            use base64::Engine;
+            let bytes = match base64::engine::general_purpose::STANDARD.decode(&content_base64) {
+                Ok(b) => b,
+                Err(e) => {
+                    let response = ServerMessage::FileWritten {
+                        path,
+                        success: false,
+                        error: Some(format!("Invalid base64: {}", e)),
+                    };
+                    send_message(tx, response).await?;
+                    return Ok(());
+                }
+            };
+
+            match std::fs::write(&path, &bytes) {
+                Ok(()) => {
+                    let response = ServerMessage::FileWritten { path, success: true, error: None };
+                    send_message(tx, response).await?;
+                }
+                Err(e) => {
+                    error!("Failed to write file {}: {}", path, e);
+                    let response = ServerMessage::FileWritten {
+                        path,
+                        success: false,
+                        error: Some(format!("Write failed: {}", e)),
+                    };
+                    send_message(tx, response).await?;
+                }
+            }
+        }
+
         _ => {}
     }
 

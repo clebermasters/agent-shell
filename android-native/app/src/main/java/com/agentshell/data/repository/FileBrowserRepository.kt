@@ -18,6 +18,7 @@ class FileBrowserRepository @Inject constructor(
             "binary-file-content",
             "files-copied",
             "files-moved",
+            "file-written",
         )
     }
 
@@ -39,6 +40,10 @@ class FileBrowserRepository @Inject constructor(
 
     fun readBinaryFile(path: String) {
         wsService.send(mapOf("type" to "read-binary-file", "path" to path))
+    }
+
+    fun writeFile(path: String, contentBase64: String) {
+        wsService.send(mapOf("type" to "write-file", "path" to path, "contentBase64" to contentBase64))
     }
 
     fun copyFiles(sourcePaths: List<String>, destinationPath: String) {

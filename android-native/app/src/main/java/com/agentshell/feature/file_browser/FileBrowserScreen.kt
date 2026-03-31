@@ -87,7 +87,14 @@ fun FileBrowserScreen(
                 mime == "text/html" || filename.endsWith(".html") || filename.endsWith(".htm") ->
                     HtmlViewer(viewer.bytes, filename, dismiss)
                 mime.startsWith("text/") || isTextFile(filename) ->
-                    TextFileViewer(viewer.bytes, filename, dismiss)
+                    TextFileViewer(
+                        bytes = viewer.bytes,
+                        filename = filename,
+                        onDismiss = dismiss,
+                        isSaving = viewer.isSaving,
+                        saveError = viewer.saveError,
+                        onSave = { content -> viewModel.saveFile(viewer.entry!!.path, content) },
+                    )
                 else -> FileInfoDialog(filename, viewer.entry.size, mime.ifEmpty { "unknown" }, dismiss)
             }
         }
@@ -540,11 +547,23 @@ private fun TextFileViewer(
     bytes: ByteArray,
     filename: String,
     onDismiss: () -> Unit,
+    onSave: ((String) -> Unit)? = null,
+    isSaving: Boolean = false,
+    saveError: String? = null,
 ) {
-    val text = remember(bytes) { String(bytes, Charsets.UTF_8) }
+    val originalText = remember(bytes) { String(bytes, Charsets.UTF_8) }
+    var isEditing by remember { mutableStateOf(false) }
+    var editedText by remember(bytes) { mutableStateOf(originalText) }
+
+    // Exit edit mode when save succeeds (isSaving goes false with no error)
+    LaunchedEffect(isSaving, saveError) {
+        if (!isSaving && saveError == null && isEditing) {
+            isEditing = false
+        }
+    }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isSaving) onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
@@ -553,6 +572,7 @@ private fun TextFileViewer(
             color = MaterialTheme.colorScheme.surface,
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
+                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -565,24 +585,70 @@ private fun TextFileViewer(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    if (isEditing) {
+                        TextButton(
+                            onClick = { isEditing = false; editedText = originalText },
+                            enabled = !isSaving,
+                        ) { Text("Cancel") }
+                        TextButton(
+                            onClick = { onSave?.invoke(editedText) },
+                            enabled = !isSaving,
+                        ) {
+                            if (isSaving) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text("Save")
+                            }
+                        }
+                    } else {
+                        if (onSave != null) {
+                            IconButton(onClick = { isEditing = true }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit")
+                            }
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Close")
+                        }
                     }
                 }
+
+                saveError?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                }
+
                 Spacer(Modifier.height(8.dp))
-                SelectionContainer(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    Text(
-                        text = text,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
+
+                if (isEditing) {
+                    OutlinedTextField(
+                        value = editedText,
+                        onValueChange = { editedText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false)
+                            .heightIn(min = 200.dp, max = 500.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                        ),
+                        enabled = !isSaving,
                     )
+                } else {
+                    SelectionContainer(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        Text(
+                            text = originalText,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
             }
         }

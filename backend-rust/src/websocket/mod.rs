@@ -300,7 +300,8 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         | WebSocketMessage::RenameFile { .. }
         | WebSocketMessage::CopyFiles { .. }
         | WebSocketMessage::MoveFiles { .. }
-        | WebSocketMessage::ReadBinaryFile { .. } => {
+        | WebSocketMessage::ReadBinaryFile { .. }
+        | WebSocketMessage::WriteFile { .. } => {
             file_cmds::handle(msg, &state.message_tx).await?;
         }
 

@@ -391,6 +391,12 @@ pub enum WebSocketMessage {
     ReadBinaryFile {
         path: String,
     },
+    // Binary file writing (creates or overwrites)
+    WriteFile {
+        path: String,
+        #[serde(rename = "contentBase64")]
+        content_base64: String,
+    },
     // File management
     DeleteFiles {
         paths: Vec<String>,
@@ -841,6 +847,13 @@ pub enum ServerMessage {
         content_base64: String,
         #[serde(rename = "mimeType")]
         mime_type: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    // Write file response
+    FileWritten {
+        path: String,
+        success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },

@@ -27,6 +27,8 @@ data class FileViewerState(
     val bytes: ByteArray? = null,
     val mimeType: String? = null,
     val error: String? = null,
+    val isSaving: Boolean = false,
+    val saveError: String? = null,
 )
 
 data class FileBrowserUiState(
@@ -177,6 +179,14 @@ class FileBrowserViewModel @Inject constructor(
         _state.update { it.copy(viewer = null) }
     }
 
+    fun saveFile(path: String, content: String) {
+        _state.update { it.copy(viewer = it.viewer?.copy(isSaving = true, saveError = null)) }
+        val encoded = android.util.Base64.encodeToString(
+            content.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP,
+        )
+        repository.writeFile(path, encoded)
+    }
+
     private fun observeEvents() {
         viewModelScope.launch {
             repository.filteredFileEvents().collect { msg ->
@@ -188,6 +198,7 @@ class FileBrowserViewModel @Inject constructor(
                     "binary-file-content" -> handleBinaryFileContent(msg)
                     "files-copied" -> handleFilesCopied(msg)
                     "files-moved" -> handleFilesMoved(msg)
+                    "file-written" -> handleFileWritten(msg)
                 }
             }
         }
@@ -249,6 +260,17 @@ class FileBrowserViewModel @Inject constructor(
     private fun handleError(msg: Map<String, Any?>) {
         val error = msg["error"] as? String ?: "File operation failed"
         _state.update { it.copy(error = error, isLoading = false) }
+    }
+
+    private fun handleFileWritten(msg: Map<String, Any?>) {
+        val success = msg["success"] as? Boolean ?: false
+        val error = msg["error"] as? String
+        if (success) {
+            // Update the cached bytes in viewer with the freshly-saved content
+            _state.update { it.copy(viewer = it.viewer?.copy(isSaving = false, saveError = null)) }
+        } else {
+            _state.update { it.copy(viewer = it.viewer?.copy(isSaving = false, saveError = error ?: "Save failed")) }
+        }
     }
 
     private fun parseEntry(map: Map<String, Any?>?): FileEntry? {

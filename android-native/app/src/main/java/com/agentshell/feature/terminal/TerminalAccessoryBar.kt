@@ -2,6 +2,8 @@ package com.agentshell.feature.terminal
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -12,13 +14,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Horizontal accessory bar with special terminal keys.
@@ -102,18 +112,18 @@ fun TerminalAccessoryBar(
         ModifierKey("SHIFT", shiftActive, onShiftToggle)
         BarKey("ESC") { handleKey("ESC") }
         BarKey("TAB") { handleKey("TAB") }
-        BarKey("\u25B2") { handleKey("UP") }
-        BarKey("\u25BC") { handleKey("DOWN") }
-        BarKey("\u25C0") { handleKey("LEFT") }
-        BarKey("\u25B6") { handleKey("RIGHT") }
+        RepeatableBarKey("\u25B2") { handleKey("UP") }
+        RepeatableBarKey("\u25BC") { handleKey("DOWN") }
+        RepeatableBarKey("\u25C0") { handleKey("LEFT") }
+        RepeatableBarKey("\u25B6") { handleKey("RIGHT") }
         BarKey("/") { handleKey("/") }
         BarKey("-") { handleKey("-") }
         BarKey("_") { handleKey("_") }
         BarKey(":") { handleKey(":") }
         BarKey("HOME") { handleKey("HOME") }
         BarKey("END") { handleKey("END") }
-        BarKey("PGUP") { handleKey("PGUP") }
-        BarKey("PGDN") { handleKey("PGDN") }
+        RepeatableBarKey("PGUP") { handleKey("PGUP") }
+        RepeatableBarKey("PGDN") { handleKey("PGDN") }
         BarKey("INS") { handleKey("INS") }
         BarKey("DEL") { handleKey("DEL") }
         BarKey("F1") { handleKey("F1") }
@@ -154,6 +164,53 @@ private fun BarKey(label: String, onClick: () -> Unit) {
             .clip(RoundedCornerShape(4.dp))
             .background(Color(0xFF303030))
             .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = Color.White, fontSize = 12.sp)
+    }
+}
+
+/**
+ * Key that fires once on press, then repeats after [initialDelayMs] ms
+ * at [repeatIntervalMs] ms intervals while held — like a physical keyboard key.
+ */
+@Composable
+private fun RepeatableBarKey(
+    label: String,
+    initialDelayMs: Long = 400L,
+    repeatIntervalMs: Long = 50L,
+    onClick: () -> Unit,
+) {
+    var isPressed by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 2.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (isPressed) Color(0xFF505050) else Color(0xFF303030))
+            .pointerInput(onClick) {
+                coroutineScope {
+                    while (true) {
+                        awaitPointerEventScope {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+                            isPressed = true
+                            val job = launch {
+                                onClick()
+                                delay(initialDelayMs)
+                                while (true) {
+                                    onClick()
+                                    delay(repeatIntervalMs)
+                                }
+                            }
+                            waitForUpOrCancellation()
+                            job.cancel()
+                            isPressed = false
+                        }
+                    }
+                }
+            }
             .padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {

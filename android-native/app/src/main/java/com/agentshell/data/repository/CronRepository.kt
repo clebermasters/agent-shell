@@ -47,8 +47,8 @@ class CronRepository @Inject constructor(
         wsService.send(mapOf("type" to "delete-cron-job", "id" to id))
     }
 
-    fun toggleJob(id: String) {
-        wsService.send(mapOf("type" to "toggle-cron-job", "id" to id))
+    fun toggleJob(id: String, enabled: Boolean) {
+        wsService.send(mapOf("type" to "toggle-cron-job", "id" to id, "enabled" to enabled))
     }
 
     fun testCommand(command: String, workdir: String? = null) {

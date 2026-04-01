@@ -55,11 +55,12 @@ class CronViewModel @Inject constructor(
     }
 
     fun toggleJob(id: String) {
-        repository.toggleJob(id)
-        // Optimistically toggle
+        val newEnabled = !(_state.value.jobs.firstOrNull { it.id == id }?.enabled ?: true)
+        repository.toggleJob(id, newEnabled)
+        // Optimistically update
         _state.update { s ->
             s.copy(jobs = s.jobs.map { j ->
-                if (j.id == id) j.copy(enabled = !j.enabled) else j
+                if (j.id == id) j.copy(enabled = newEnabled) else j
             })
         }
     }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::process::Command;
+use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::info;
 use uuid::Uuid;
@@ -121,26 +121,27 @@ impl CronManager {
     }
 
     pub async fn toggle_job(&self, id: &str, enabled: bool) -> Result<CronJob> {
-        let mut jobs = self.jobs.write().await;
-
-        if let Some(job) = jobs.get_mut(id) {
+        // Update in-memory state and get a snapshot — then release the lock before doing I/O.
+        let job = {
+            let mut jobs = self.jobs.write().await;
+            let job = jobs
+                .get_mut(id)
+                .ok_or_else(|| anyhow::anyhow!("Job not found: {}", id))?;
             job.enabled = enabled;
             job.updated_at = Some(Utc::now());
+            job.clone()
+        };
 
-            // Always remove first to avoid duplicates
-            self.remove_from_crontab(id).await?;
+        // Crontab I/O runs without holding the jobs lock, avoiding blocking the runtime
+        // while other tasks wait for lock access.
+        self.remove_from_crontab(id).await?;
+        self.add_to_crontab(&job).await?;
 
-            // Then add back with updated status
-            self.add_to_crontab(job).await?;
-
-            info!(
-                "Toggled cron job: {} ({}) - enabled: {}",
-                job.name, id, enabled
-            );
-            Ok(job.clone())
-        } else {
-            Err(anyhow::anyhow!("Job not found: {}", id))
-        }
+        info!(
+            "Toggled cron job: {} ({}) - enabled: {}",
+            job.name, id, enabled
+        );
+        Ok(job)
     }
 
     pub async fn test_command(&self, command: &str) -> Result<String> {
@@ -163,7 +164,7 @@ impl CronManager {
     // Private helper methods
 
     async fn load_from_crontab(&self) -> Result<()> {
-        let output = Command::new("crontab").arg("-l").output()?;
+        let output = Command::new("crontab").arg("-l").output().await?;
 
         if !output.status.success() {
             // No crontab or empty crontab is fine
@@ -172,23 +173,23 @@ impl CronManager {
 
         let crontab_content = String::from_utf8_lossy(&output.stdout);
         let mut jobs = self.jobs.write().await;
-
-        // Parse AgentShell-managed jobs from crontab
-        // Look for special comment markers
         let lines: Vec<&str> = crontab_content.lines().collect();
+
+        // --- Pass 1: Parse AgentShell-managed blocks, track which lines belong to them ---
+        let mut managed_indices = std::collections::HashSet::<usize>::new();
         let mut i = 0;
 
         while i < lines.len() {
             if lines[i].starts_with("# AgentShell-Job-Start:") {
+                managed_indices.insert(i);
                 if let Some(job_id) = lines[i].strip_prefix("# AgentShell-Job-Start:") {
                     let job_id = job_id.trim();
-
-                    // Parse job metadata from comments
                     let mut job_name = String::new();
                     let mut enabled = true;
 
                     i += 1;
                     while i < lines.len() && !lines[i].starts_with("# AgentShell-Job-End") {
+                        managed_indices.insert(i);
                         if lines[i].starts_with("# Name:") {
                             job_name = lines[i]
                                 .strip_prefix("# Name:")
@@ -196,15 +197,15 @@ impl CronManager {
                                 .trim()
                                 .to_string();
                         } else if lines[i].starts_with("# Enabled:") {
-                            enabled = lines[i].strip_prefix("# Enabled:").unwrap_or("true").trim()
+                            enabled = lines[i]
+                                .strip_prefix("# Enabled:")
+                                .unwrap_or("true")
+                                .trim()
                                 == "true";
                         } else if !lines[i].trim().is_empty() {
-                            // This could be the actual cron line (active or commented out)
-                            let line = if lines[i].starts_with("# ") && enabled == false {
-                                // Disabled job - remove the comment prefix
+                            let line = if lines[i].starts_with("# ") && !enabled {
                                 lines[i].strip_prefix("# ").unwrap_or(lines[i])
-                            } else if !lines[i].starts_with("#") {
-                                // Active job
+                            } else if !lines[i].starts_with('#') {
                                 lines[i]
                             } else {
                                 i += 1;
@@ -215,17 +216,14 @@ impl CronManager {
                             if parts.len() >= 6 {
                                 let schedule = parts[0..5].join(" ");
                                 let command = parts[5].to_string();
-
                                 let job = CronJob {
                                     id: job_id.to_string(),
                                     name: job_name.clone(),
-                                    schedule,
+                                    schedule: schedule.clone(),
                                     command,
                                     enabled,
                                     last_run: None,
-                                    next_run: self
-                                        .calculate_next_run(&parts[0..5].join(" "))
-                                        .unwrap_or(None),
+                                    next_run: self.calculate_next_run(&schedule).unwrap_or(None),
                                     output: None,
                                     created_at: Some(Utc::now()),
                                     updated_at: Some(Utc::now()),
@@ -238,24 +236,151 @@ impl CronManager {
                                     llm_provider: None,
                                     llm_model: None,
                                 };
-
                                 jobs.insert(job_id.to_string(), job);
                             }
                         }
                         i += 1;
                     }
+                    managed_indices.insert(i); // AgentShell-Job-End line
                 }
             }
             i += 1;
         }
 
-        info!("Loaded {} cron jobs from crontab", jobs.len());
+        // --- Pass 2: Adopt bare cron entries (not inside any AgentShell block) ---
+        let mut bare_entries_found = false;
+
+        for (idx, line) in lines.iter().enumerate() {
+            if managed_indices.contains(&idx) {
+                continue;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Handle commented cron lines: "#* * * * * cmd" or "# * * * * * cmd"
+            let (is_enabled, parse_line) = if trimmed.starts_with('#') {
+                (false, trimmed[1..].trim_start())
+            } else {
+                (true, trimmed)
+            };
+
+            let parts: Vec<&str> = parse_line.splitn(6, ' ').collect();
+            if parts.len() < 6 {
+                continue;
+            }
+
+            let schedule = parts[0..5].join(" ");
+            let command = parts[5].to_string();
+
+            if self.validate_cron_expression(&schedule).is_err() {
+                continue;
+            }
+
+            bare_entries_found = true;
+
+            // Deterministic ID from cron entry content
+            let id = {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut h = DefaultHasher::new();
+                schedule.hash(&mut h);
+                command.hash(&mut h);
+                format!("bare-{:016x}", h.finish())
+            };
+
+            if jobs.contains_key(&id) {
+                continue;
+            }
+
+            // Derive a display name from the command
+            let name = {
+                let mut n = String::new();
+                for part in command.split_whitespace() {
+                    if part.contains('/') {
+                        if let Some(base) = part.split('/').last() {
+                            if !base.is_empty() {
+                                n = base
+                                    .trim_end_matches(".py")
+                                    .trim_end_matches(".sh")
+                                    .to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+                if n.is_empty() {
+                    command.chars().take(40).collect()
+                } else {
+                    n
+                }
+            };
+
+            let next_run = if is_enabled {
+                self.calculate_next_run(&schedule).unwrap_or(None)
+            } else {
+                None
+            };
+
+            jobs.insert(
+                id.clone(),
+                CronJob {
+                    id,
+                    name,
+                    schedule,
+                    command,
+                    enabled: is_enabled,
+                    last_run: None,
+                    next_run,
+                    output: None,
+                    created_at: Some(Utc::now()),
+                    updated_at: Some(Utc::now()),
+                    environment: None,
+                    log_output: None,
+                    email_to: None,
+                    tmux_session: None,
+                    workdir: None,
+                    prompt: None,
+                    llm_provider: None,
+                    llm_model: None,
+                },
+            );
+        }
+
+        let job_count = jobs.len();
+
+        // If bare entries were found, rewrite the entire crontab with AgentShell markers
+        // so future toggle/delete/update operations work correctly.
+        if bare_entries_found {
+            let mut new_crontab = String::new();
+            let mut sorted: Vec<&CronJob> = jobs.values().collect();
+            sorted.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+            for job in sorted {
+                if job.enabled {
+                    new_crontab.push_str(&format!(
+                        "# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n{} {}\n# AgentShell-Job-End:{}\n\n",
+                        job.id, job.name, job.enabled, job.schedule, job.command, job.id
+                    ));
+                } else {
+                    new_crontab.push_str(&format!(
+                        "# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n# {} {}\n# AgentShell-Job-End:{}\n\n",
+                        job.id, job.name, job.enabled, job.schedule, job.command, job.id
+                    ));
+                }
+            }
+            drop(jobs); // Release write lock before I/O
+            self.write_crontab(&new_crontab).await?;
+            info!("Migrated {} cron entries to AgentShell format", job_count);
+        }
+
+        info!("Loaded {} cron jobs from crontab", job_count);
         Ok(())
     }
 
     async fn add_to_crontab(&self, job: &CronJob) -> Result<()> {
         // Get current crontab
-        let output = Command::new("crontab").arg("-l").output()?;
+        let output = Command::new("crontab").arg("-l").output().await?;
 
         let mut crontab_content = if output.status.success() {
             String::from_utf8_lossy(&output.stdout).to_string()
@@ -288,7 +413,7 @@ impl CronManager {
 
     async fn remove_from_crontab(&self, id: &str) -> Result<()> {
         // Get current crontab
-        let output = Command::new("crontab").arg("-l").output()?;
+        let output = Command::new("crontab").arg("-l").output().await?;
 
         if !output.status.success() {
             return Ok(());
@@ -323,8 +448,8 @@ impl CronManager {
     }
 
     async fn write_crontab(&self, content: &str) -> Result<()> {
-        use std::io::Write;
         use std::process::Stdio;
+        use tokio::io::AsyncWriteExt;
 
         let mut child = Command::new("crontab")
             .arg("-")
@@ -332,11 +457,11 @@ impl CronManager {
             .spawn()?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(content.as_bytes())?;
-            stdin.flush()?;
+            stdin.write_all(content.as_bytes()).await?;
+            stdin.flush().await?;
         }
 
-        let status = child.wait()?;
+        let status = child.wait().await?;
         if !status.success() {
             return Err(anyhow::anyhow!("Failed to write crontab"));
         }

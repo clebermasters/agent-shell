@@ -4,13 +4,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.agentshell.feature.cron.CronViewModel
 import com.agentshell.feature.alerts.AlertsScreen
 import com.agentshell.feature.chat.ChatScreen
 import com.agentshell.feature.cron.CronJobEditorScreen
@@ -175,9 +180,14 @@ fun AgentShellNavHost() {
                     defaultValue = null
                 },
             ),
-        ) {
-            // CronJobEditorScreen uses shared CronViewModel — existingJob comes from ViewModel state
+        ) { backStackEntry ->
+            val jobId = backStackEntry.arguments?.getString("jobId")
+            val homeEntry = remember(navController) { navController.getBackStackEntry(Routes.HOME) }
+            val cronViewModel: CronViewModel = hiltViewModel(homeEntry)
+            val cronState by cronViewModel.state.collectAsState()
+            val existingJob = jobId?.let { id -> cronState.jobs.firstOrNull { it.id == id } }
             CronJobEditorScreen(
+                existingJob = existingJob,
                 onNavigateUp = { navController.popBackStack() },
             )
         }

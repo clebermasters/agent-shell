@@ -219,6 +219,10 @@ pub(crate) async fn attach_to_session(
     // Small delay to ensure cleanup is complete
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
+    // Clone the shared kiro sender Arc — the PTY reader will check it dynamically
+    // on each output chunk. WatchChatLog sets the sender when kiro is detected.
+    let kiro_shared_tx = state.kiro_chat_output_tx.clone();
+
     // Create new PTY session with the exact dimensions requested by the client.
     // Previously we used max(tmux_window, requested) to avoid shrinking, but that
     // created a PTY larger than the client terminal.  When the client later resized
@@ -278,6 +282,7 @@ pub(crate) async fn attach_to_session(
 
     // Set up reader task — queues output during bootstrap, then direct-forwards
     let tx_clone = tx.clone();
+    let kiro_shared_tx_reader = kiro_shared_tx.clone();
     let client_id = state.client_id.clone();
     let reader_task = tokio::task::spawn_blocking(move || {
         let mut reader = reader;
@@ -342,12 +347,25 @@ pub(crate) async fn attach_to_session(
                                         break;
                                     }
                                 }
+                                // Forward raw output to kiro parser if registered
+                                if let Ok(guard) = kiro_shared_tx_reader.lock() {
+                                    if let Some(ref kiro_tx) = *guard {
+                                        let _ = kiro_tx.send(pending_output.clone());
+                                    }
+                                }
                             } else {
                                 // Bootstrap path: queue or overflow to direct
                                 match live_queue_tx_clone
                                     .try_send(pending_output.clone())
                                 {
-                                    Ok(_) => {}
+                                    Ok(_) => {
+                                        // Also forward to kiro during bootstrap
+                                        if let Ok(guard) = kiro_shared_tx_reader.lock() {
+                                            if let Some(ref kiro_tx) = *guard {
+                                                let _ = kiro_tx.send(pending_output.clone());
+                                            }
+                                        }
+                                    }
                                     Err(_) => {
                                         tracing::warn!("[history-bootstrap] queue overflow, switching to direct forward for client {}", client_id);
                                         bootstrap_done_reader
@@ -369,6 +387,12 @@ pub(crate) async fn attach_to_session(
                                                     client_id
                                                 );
                                                 break;
+                                            }
+                                        }
+                                        // Forward raw output to kiro parser if registered
+                                        if let Ok(guard) = kiro_shared_tx_reader.lock() {
+                                            if let Some(ref kiro_tx) = *guard {
+                                                let _ = kiro_tx.send(pending_output.clone());
                                             }
                                         }
                                     }
@@ -638,6 +662,7 @@ mod tests {
             chat_clear_store,
             client_manager,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+            kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
         };
         (ws_state, rx)
     }

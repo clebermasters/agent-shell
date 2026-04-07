@@ -66,6 +66,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         chat_clear_store: state.chat_clear_store.clone(),
         client_manager: state.client_manager.clone(),
         acp_client: state.acp_client.clone(),
+        kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
     };
 
     // Clone client_id for the spawned task

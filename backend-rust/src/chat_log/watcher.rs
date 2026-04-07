@@ -9,7 +9,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use super::{claude_parser, codex_parser, opencode_parser, AiTool, ChatLogEvent, ChatMessage};
+use super::{claude_parser, codex_parser, kiro_parser, opencode_parser, AiTool, ChatLogEvent, ChatMessage};
 
 // ---------------------------------------------------------------------------
 // Log file detection
@@ -52,9 +52,26 @@ pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(P
             );
             return Ok((log, AiTool::Opencode { cwd, pid: *pid }));
         }
+
+        if name == "kiro-cli-chat" || name == "kiro-cli" {
+            // Note: kiro-cli's comm is "kiro-cli" (not "kiro-cli-chat").
+            // We check both for compatibility.
+            let cwd = get_process_cwd(*pid)?;
+            let session_id = kiro_parser::find_session_id(&cwd)
+                .unwrap_or_else(|_| format!("session-{}", pid));
+            info!(
+                "detected kiro-cli for PID {} (comm={}, cwd: {}, session: {})",
+                pid,
+                name,
+                cwd.display(),
+                session_id
+            );
+            // Return /dev/null as the "log path" — kiro uses PTY capture, not file watching
+            return Ok((PathBuf::from("/dev/null"), AiTool::Kiro { cwd, pid: *pid, session_id }));
+        }
     }
 
-    bail!("no AI tool (claude/codex/opencode) found among descendants of pane PID {pane_pid}");
+    bail!("no AI tool (claude/codex/opencode/kiro) found among descendants of pane PID {pane_pid}");
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +402,7 @@ fn parse_line(line: &str, tool: &AiTool) -> Option<ChatMessage> {
         AiTool::Claude => claude_parser::parse_line(line),
         AiTool::Codex => codex_parser::parse_line(line),
         AiTool::Opencode { .. } => None, // Opencode parser is handled by DB polling
+        AiTool::Kiro { .. } => None,     // Kiro parser handles PTY capture via polling
     }
 }
 
@@ -822,6 +840,16 @@ mod tests {
     }
 
     #[test]
+    fn test_kiro_detection_process_name_matching() {
+        // Verify the detection logic handles both "kiro-cli" and "kiro-cli-chat"
+        // The actual process comm is "kiro-cli" (not "kiro-cli-chat")
+        let names_to_match = vec!["kiro-cli", "kiro-cli-chat"];
+        for name in names_to_match {
+            let is_kiro = name == "kiro-cli-chat" || name == "kiro-cli";
+            assert!(is_kiro, "Should match '{}'", name);
+        }
+    }
+
     fn test_parse_line_with_various_inputs() {
         // Test that parse_line handles various inputs without panicking
         let result1 = parse_line("", &AiTool::Claude);

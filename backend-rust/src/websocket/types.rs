@@ -46,6 +46,11 @@ pub(crate) struct WsState {
     pub client_manager: Arc<ClientManager>,
     #[allow(dead_code)]
     pub acp_client: Arc<tokio::sync::RwLock<Option<crate::acp::AcpClient>>>,
+    /// Shared kiro PTY output sender. Protected by std::sync::Mutex so the
+    /// blocking PTY reader thread can check it dynamically. WatchChatLog sets
+    /// this when kiro is detected; the PTY reader reads it on every output chunk.
+    /// This eliminates the ordering dependency between AttachSession and WatchChatLog.
+    pub kiro_chat_output_tx: Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<String>>>>,
 }
 
 // ── Chat history merging ──────────────────────────────────────────────────

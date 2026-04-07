@@ -862,7 +862,9 @@ mod tests {
             chat_clear_store: chat_clear_store.clone(),
             client_manager: client_manager.clone(),
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+            kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
         };
+        let notification_store = Arc::new(crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap());
         let app_state = Arc::new(crate::AppState {
             enable_audio_logs: false,
             broadcast_tx,
@@ -870,6 +872,7 @@ mod tests {
             chat_file_storage,
             chat_event_store,
             chat_clear_store,
+            notification_store,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
         });
         (ws_state, rx, app_state)
@@ -896,7 +899,9 @@ mod tests {
             chat_clear_store: chat_clear_store.clone(),
             client_manager: client_manager.clone(),
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+            kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
         };
+        let notification_store = Arc::new(crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap());
         let app_state = Arc::new(crate::AppState {
             enable_audio_logs: false,
             broadcast_tx,
@@ -904,6 +909,7 @@ mod tests {
             chat_file_storage,
             chat_event_store,
             chat_clear_store,
+            notification_store,
             acp_client: Arc::new(tokio::sync::RwLock::new(Some(acp_client))),
         });
         (ws_state, rx, app_state)

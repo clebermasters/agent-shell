@@ -304,6 +304,7 @@ mod tests {
             chat_clear_store,
             client_manager,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+            kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
         };
         // AudioAction::Start will attempt to start streaming — may fail without audio provider
         let result = handle_audio_control(&mut ws_state, AudioAction::Start).await;
@@ -344,6 +345,7 @@ mod tests {
             chat_clear_store,
             client_manager,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+            kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
         };
         // Stop with audio_tx=None should be a no-op
         let result = handle_audio_control(&mut ws_state, AudioAction::Stop).await;

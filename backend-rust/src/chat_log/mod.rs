@@ -1,5 +1,6 @@
 pub mod claude_parser;
 pub mod codex_parser;
+pub mod kiro_parser;
 pub mod opencode_parser;
 pub mod watcher;
 
@@ -71,6 +72,7 @@ pub enum AiTool {
     Claude,
     Codex,
     Opencode { cwd: PathBuf, pid: u32 },
+    Kiro { cwd: PathBuf, pid: u32, session_id: String },
 }
 
 /// Events emitted by the log watcher.

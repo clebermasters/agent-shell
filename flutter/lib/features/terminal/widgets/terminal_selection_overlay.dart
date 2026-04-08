@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shellterm/shellterm.dart';
+import 'package:xterm/xterm.dart';
 
 /// Full-screen overlay that extracts terminal buffer text and displays it
 /// using Flutter's native [SelectableText] widget. This completely bypasses
-/// shellterm's internal coordinate/painting system for selection, providing
+/// xterm's internal coordinate/painting system for selection, providing
 /// reliable text selection with native handles, magnifier, and copy toolbar.
 class TerminalSelectionOverlay extends StatefulWidget {
   final Terminal terminal;

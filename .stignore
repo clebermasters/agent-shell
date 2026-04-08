@@ -1,0 +1,147 @@
+backend-rust/chat_files/
+.worktrees/
+
+# Dependencies
+node_modules/
+
+# Production build
+dist/
+build/
+
+# Rust build artifacts
+backend-rust/target/
+**/*.rs.bk
+*.pdb
+backend-rust/chat_clear_state.json
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# SSL certificates (for HTTPS)
+certs/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Old/backup code
+old-backend/
+*.backup
+
+# Temporary TypeScript files
+*.d.ts.map
+
+# Backend specific logs
+backend-rust/*.log
+backend-rust/logs/
+
+# Claude Code logs (nested logs folders)
+**/logs/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cargo lock file (optional - some projects track it)
+# Cargo.lock
+
+# Rust debug symbols
+*.dSYM/
+
+# macOS specific
+.AppleDouble
+.LSOverride
+Icon
+
+# Windows specific
+desktop.ini
+
+# Linux specific
+*~
+
+# VS Code workspace
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+Session.vim
+.netrwhist
+tags
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Media / uploaded files (UUID-named uploads)
+*.mp3
+*.pdf
+# Ignore PNGs except project assets
+*.png
+!logo-square.png
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+agentshell-web.zip
+node_modules/
+dist/
+*.apk
+opencode.jsonbackend-rust/chat_files/
+backend-rust/chat_events.db
+scripts/.config/wireless_ip
+agentshell-linux.tar.gz
+logo-margin.zip
+agentshell-linux
+chat_events.db
+.omc

@@ -1,0 +1,6 @@
+.gradle/
+app/build/
+local.properties
+*.apk
+# Auto-generated from .env by Gradle — contains secrets (API keys, auth tokens)
+app/src/main/java/com/agentshell/core/config/BuildConfig.kt

@@ -26,21 +26,26 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -76,22 +81,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agentshell.data.model.GitBlameLine
 import com.agentshell.data.model.GitBranchInfo
 import com.agentshell.data.model.GitCommitInfo
+import com.agentshell.data.model.GitCompareResult
 import com.agentshell.data.model.GitFileChange
 import com.agentshell.data.model.GitGraphNode
+import com.agentshell.data.model.GitRepoInfo
+import com.agentshell.data.model.GitStashEntry
+import com.agentshell.data.model.GitTagInfo
 
 // Color constants
 private val AdditionColor = Color(0xFF22C55E)
@@ -168,6 +178,28 @@ fun GitScreen(
                     }
                 },
                 actions = {
+                    // Search toggle (Graph tab)
+                    IconButton(onClick = { viewModel.toggleSearchBar() }) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = "Search commits",
+                            modifier = Modifier.size(20.dp),
+                            tint = if (state.showSearchBar) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    // Repo info
+                    IconButton(onClick = { viewModel.showRepoInfo() }) {
+                        Icon(Icons.Default.Info, contentDescription = "Repository info", modifier = Modifier.size(20.dp))
+                    }
+                    // Auto-refresh toggle
+                    IconButton(onClick = { viewModel.toggleAutoRefresh() }) {
+                        Icon(
+                            Icons.Default.Autorenew,
+                            contentDescription = "Auto-refresh",
+                            modifier = Modifier.size(20.dp),
+                            tint = if (state.autoRefreshEnabled) AdditionColor else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                     IconButton(onClick = { viewModel.pull() }) {
                         Icon(Icons.Default.Download, contentDescription = "Pull", modifier = Modifier.size(20.dp))
                     }
@@ -232,6 +264,21 @@ fun GitScreen(
     if (state.showCommitDetailSheet && state.selectedCommit != null) {
         CommitDetailBottomSheet(state.selectedCommit!!, state, viewModel)
     }
+    if (state.showBlameSheet) {
+        BlameBottomSheet(state, viewModel)
+    }
+    if (state.showFileHistorySheet) {
+        FileHistoryBottomSheet(state, viewModel)
+    }
+    if (state.showCompareSheet) {
+        CompareBottomSheet(state, viewModel)
+    }
+    if (state.showRepoInfoSheet) {
+        RepoInfoBottomSheet(state, viewModel)
+    }
+    if (state.showStashSheet) {
+        StashListBottomSheet(state, viewModel)
+    }
 }
 
 // =============================================================================
@@ -293,6 +340,7 @@ private fun StatusTab(state: GitUiState, viewModel: GitViewModel) {
                         file = file,
                         statusColor = AdditionColor,
                         onTap = { viewModel.viewDiff(file.path, staged = true) },
+                        onShowFileHistory = { viewModel.showFileHistory(file.path) },
                         trailingAction = {
                             TextButton(onClick = { viewModel.unstageFile(file.path) }, modifier = Modifier.height(28.dp), contentPadding = PaddingValues(horizontal = 8.dp)) {
                                 Text("Unstage", fontSize = 10.sp)
@@ -316,6 +364,7 @@ private fun StatusTab(state: GitUiState, viewModel: GitViewModel) {
                         file = file,
                         statusColor = ModifiedColor,
                         onTap = { viewModel.viewDiff(file.path, staged = false) },
+                        onShowFileHistory = { viewModel.showFileHistory(file.path) },
                         trailingAction = {
                             TextButton(onClick = { viewModel.stageFile(file.path) }, modifier = Modifier.height(28.dp), contentPadding = PaddingValues(horizontal = 8.dp)) {
                                 Text("Stage", fontSize = 10.sp)
@@ -344,11 +393,15 @@ private fun StatusTab(state: GitUiState, viewModel: GitViewModel) {
                     SectionHeader(title = "Conflicts (${state.status.conflicts.size})", color = ConflictColor)
                 }
                 items(state.status.conflicts, key = { "conflict-$it" }) { path ->
-                    ConflictFileRow(path)
+                    ConflictFileRow(
+                        path = path,
+                        onOurs = { viewModel.resolveConflict(path, "ours") },
+                        onTheirs = { viewModel.resolveConflict(path, "theirs") },
+                    )
                 }
             }
 
-            // Commit button
+            // Commit / Amend buttons
             if (state.status.hasChanges) {
                 item {
                     Spacer(Modifier.height(12.dp))
@@ -369,6 +422,13 @@ private fun StatusTab(state: GitUiState, viewModel: GitViewModel) {
                         ) {
                             Text("Stash")
                         }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.amendCommit() },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    ) {
+                        Text("Amend Last Commit")
                     }
                 }
             }
@@ -406,16 +466,23 @@ private fun FileChangeRow(
     file: GitFileChange,
     statusColor: Color,
     onTap: () -> Unit,
+    onShowFileHistory: (() -> Unit)? = null,
     trailingAction: @Composable () -> Unit,
 ) {
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var showMenu by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp).combinedClickable(
             onClick = onTap,
             onLongClick = {
-                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(file.path))
-                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                if (onShowFileHistory != null) {
+                    showMenu = true
+                } else {
+                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(file.path))
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                }
             },
         ),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -459,6 +526,20 @@ private fun FileChangeRow(
             trailingAction()
         }
     }
+
+    if (showMenu && onShowFileHistory != null) {
+        AlertDialog(
+            onDismissRequest = { showMenu = false },
+            title = { Text(file.filename, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            text = { Text("Choose action for this file") },
+            confirmButton = {
+                TextButton(onClick = { showMenu = false; onTap() }) { Text("View Diff") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMenu = false; onShowFileHistory() }) { Text("File History") }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -491,19 +572,35 @@ private fun UntrackedFileRow(path: String, onStage: () -> Unit) {
 }
 
 @Composable
-private fun ConflictFileRow(path: String) {
+private fun ConflictFileRow(path: String, onOurs: () -> Unit, onTheirs: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
         colors = CardDefaults.cardColors(containerColor = ConflictColor.copy(alpha = 0.1f)),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("!", color = ConflictColor, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(path.substringAfterLast('/'), fontSize = 13.sp, modifier = Modifier.weight(1f))
-            Text("CONFLICT", fontSize = 10.sp, color = ConflictColor, fontWeight = FontWeight.Bold)
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("!", color = ConflictColor, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(path.substringAfterLast('/'), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Text("CONFLICT", fontSize = 10.sp, color = ConflictColor, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onOurs,
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                ) {
+                    Text("Ours", fontSize = 10.sp)
+                }
+                OutlinedButton(
+                    onClick = onTheirs,
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                ) {
+                    Text("Theirs", fontSize = 10.sp)
+                }
+            }
         }
     }
 }
@@ -517,6 +614,14 @@ private fun ConflictFileRow(path: String) {
 private fun BranchesTab(state: GitUiState, viewModel: GitViewModel) {
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf<String?>(null) }
+    var showMergeDialog by remember { mutableStateOf<String?>(null) }
+    var showDeleteTagDialog by remember { mutableStateOf<String?>(null) }
+    var showCreateTagDialog by rememberSaveable { mutableStateOf(false) }
+
+    // Load tags when this tab is shown
+    LaunchedEffect(Unit) {
+        viewModel.refreshTags()
+    }
 
     PullToRefreshBox(
         isRefreshing = state.isLoadingBranches,
@@ -530,8 +635,11 @@ private fun BranchesTab(state: GitUiState, viewModel: GitViewModel) {
             items(state.branches, key = { it.name }) { branch ->
                 BranchCard(
                     branch = branch,
+                    currentBranch = state.status.branch,
                     onCheckout = { viewModel.checkoutBranch(branch.name) },
                     onDelete = { showDeleteDialog = branch.name },
+                    onMerge = { showMergeDialog = branch.name },
+                    onCompare = { viewModel.showCompare(state.status.branch, branch.name) },
                 )
             }
 
@@ -544,6 +652,41 @@ private fun BranchesTab(state: GitUiState, viewModel: GitViewModel) {
                     Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("New Branch")
+                }
+            }
+
+            // Tags section
+            if (state.tags.isNotEmpty() || state.isLoadingTags) {
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    SectionHeader(title = "Tags (${state.tags.size})", color = ModifiedColor)
+                }
+
+                if (state.isLoadingTags) {
+                    item {
+                        Box(Modifier.fillMaxWidth().height(40.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        }
+                    }
+                } else {
+                    items(state.tags, key = { "tag-${it.name}" }) { tag ->
+                        TagCard(
+                            tag = tag,
+                            onDelete = { showDeleteTagDialog = tag.name },
+                        )
+                    }
+                }
+
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { showCreateTagDialog = true },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    ) {
+                        Icon(Icons.Default.Tag, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Create Tag")
+                    }
                 }
             }
         }
@@ -571,13 +714,85 @@ private fun BranchesTab(state: GitUiState, viewModel: GitViewModel) {
             },
         )
     }
+
+    showMergeDialog?.let { branchName ->
+        AlertDialog(
+            onDismissRequest = { showMergeDialog = null },
+            title = { Text("Merge Branch") },
+            text = { Text("Merge \"$branchName\" into current branch \"${state.status.branch}\"?") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.mergeBranch(branchName); showMergeDialog = null }) {
+                    Text("Merge")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMergeDialog = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    showDeleteTagDialog?.let { tagName ->
+        AlertDialog(
+            onDismissRequest = { showDeleteTagDialog = null },
+            title = { Text("Delete Tag") },
+            text = { Text("Delete tag \"$tagName\"? This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.deleteTag(tagName); showDeleteTagDialog = null }) {
+                    Text("Delete", color = DeletionColor)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteTagDialog = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showCreateTagDialog) {
+        CreateTagDialog(
+            commitHash = null,
+            onConfirm = { name -> viewModel.createTag(name); showCreateTagDialog = false },
+            onDismiss = { showCreateTagDialog = false },
+        )
+    }
+}
+
+@Composable
+private fun TagCard(tag: GitTagInfo, onDelete: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
+        colors = CardDefaults.cardColors(),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Tag, null, tint = ModifiedColor, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(tag.name, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(tag.hash.take(7), fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                    tag.date?.let { Text(formatRelativeDate(it), fontSize = 10.sp, color = MaterialTheme.colorScheme.outline) }
+                    if (tag.isAnnotated) {
+                        Text("annotated", fontSize = 10.sp, color = UntrackedColor)
+                    }
+                }
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.Delete, null, tint = DeletionColor, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
 }
 
 @Composable
 private fun BranchCard(
     branch: GitBranchInfo,
+    currentBranch: String,
     onCheckout: () -> Unit,
     onDelete: () -> Unit,
+    onMerge: () -> Unit,
+    onCompare: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
@@ -587,46 +802,64 @@ private fun BranchCard(
             CardDefaults.cardColors()
         },
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (branch.current) {
-                Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(branch.name, fontWeight = if (branch.current) FontWeight.Bold else FontWeight.Medium, fontSize = 14.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    branch.tracking?.let {
-                        Text("\u2192 $it", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (branch.current) {
+                    Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(branch.name, fontWeight = if (branch.current) FontWeight.Bold else FontWeight.Medium, fontSize = 14.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        branch.tracking?.let {
+                            Text("\u2192 $it", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                        }
+                        if ((branch.ahead ?: 0) > 0 || (branch.behind ?: 0) > 0) {
+                            Text(
+                                buildString {
+                                    branch.ahead?.takeIf { it > 0 }?.let { append("\u2191$it") }
+                                    branch.behind?.takeIf { it > 0 }?.let { if (isNotEmpty()) append(" "); append("\u2193$it") }
+                                },
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                        }
+                        branch.lastCommit?.let {
+                            Text(it, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
-                    if ((branch.ahead ?: 0) > 0 || (branch.behind ?: 0) > 0) {
-                        Text(
-                            buildString {
-                                branch.ahead?.takeIf { it > 0 }?.let { append("\u2191$it") }
-                                branch.behind?.takeIf { it > 0 }?.let { if (isNotEmpty()) append(" "); append("\u2193$it") }
-                            },
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
+                }
+                if (!branch.current) {
+                    OutlinedButton(
+                        onClick = onCheckout,
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                    ) {
+                        Text("Switch", fontSize = 11.sp)
                     }
-                    branch.lastCommit?.let {
-                        Text(it, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Delete, null, tint = DeletionColor, modifier = Modifier.size(16.dp))
                     }
                 }
             }
             if (!branch.current) {
-                OutlinedButton(
-                    onClick = onCheckout,
-                    modifier = Modifier.height(28.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp),
-                ) {
-                    Text("Switch", fontSize = 11.sp)
-                }
-                Spacer(Modifier.width(4.dp))
-                IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Delete, null, tint = DeletionColor, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onMerge,
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                    ) {
+                        Text("Merge into current", fontSize = 10.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onCompare,
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                    ) {
+                        Text("Compare", fontSize = 10.sp)
+                    }
                 }
             }
         }
@@ -645,6 +878,31 @@ private fun CreateBranchDialog(onConfirm: (String) -> Unit, onDismiss: () -> Uni
                 value = name,
                 onValueChange = { name = it.replace(" ", "-") },
                 label = { Text("Branch name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim()) }, enabled = name.isNotBlank()) {
+                Text("Create")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun CreateTagDialog(commitHash: String?, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by rememberSaveable { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Create Tag") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Tag name") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -687,130 +945,207 @@ private fun GraphTab(state: GitUiState, viewModel: GitViewModel) {
         onRefresh = { viewModel.refreshLog() },
         modifier = Modifier.fillMaxSize(),
     ) {
-        if (state.graphNodes.isEmpty() && !state.isLoadingLog) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No commits", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.outline)
-            }
-            return@PullToRefreshBox
-        }
-
-        // Compute max columns across all nodes for consistent width
-        val maxCol = (state.graphNodes.maxOfOrNull { node ->
-            maxOf(node.column, node.lanes.maxOfOrNull { it.column } ?: 0, node.connections.maxOfOrNull { maxOf(it.fromColumn, it.toColumn) } ?: 0)
-        } ?: 0) + 1
-        val colWidth = 20.dp
-        val graphWidth = colWidth * maxCol + 12.dp
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 16.dp),
-        ) {
-            itemsIndexed(state.graphNodes, key = { _, node -> node.hash }) { index, node ->
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Search bar
+            if (state.showSearchBar) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { viewModel.showCommitDetail(GitCommitInfo(node.hash, node.shortHash, node.message, node.author, node.date, node.parents, node.refs)) }
-                        .padding(vertical = 0.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Graph lanes
-                    val surfaceColor = MaterialTheme.colorScheme.surface
-                    Box(modifier = Modifier.width(graphWidth).height(36.dp)) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val cw = colWidth.toPx()
-                            val pad = 6.dp.toPx()
-                            val centerY = size.height / 2
-                            val strokeW = 2.dp.toPx()
-                            fun colX(c: Int) = c * cw + cw / 2 + pad
-
-                            // 1. Draw vertical pass-through lines for all active lanes
-                            for (lane in node.lanes) {
-                                val lx = colX(lane.column)
-                                val laneColor = Color(lane.color)
-                                if (lane.column != node.column) {
-                                    // Full vertical line (this lane just passes through)
-                                    drawLine(laneColor, Offset(lx, 0f), Offset(lx, size.height), strokeW)
-                                } else {
-                                    // This lane holds the commit node — draw top half only
-                                    drawLine(laneColor, Offset(lx, 0f), Offset(lx, centerY), strokeW)
+                    OutlinedTextField(
+                        value = state.searchQuery,
+                        onValueChange = { viewModel.updateSearchQuery(it) },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Search commits...") },
+                        leadingIcon = { Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp)) },
+                        trailingIcon = {
+                            if (state.searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.clearSearch() }) {
+                                    Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
                                 }
                             }
-
-                            // 2. Draw connections from this commit to the next row
-                            for (conn in node.connections) {
-                                val fromX = colX(conn.fromColumn)
-                                val toX = colX(conn.toColumn)
-                                val connColor = Color(conn.color)
-
-                                if (conn.fromColumn == conn.toColumn) {
-                                    // Straight down from center
-                                    drawLine(connColor, Offset(fromX, centerY), Offset(fromX, size.height), strokeW)
-                                } else {
-                                    // Diagonal: from commit center to target column at bottom
-                                    // Draw as two segments: vertical down then diagonal
-                                    val midY = centerY + (size.height - centerY) * 0.3f
-                                    drawLine(connColor, Offset(fromX, centerY), Offset(fromX, midY), strokeW)
-                                    drawLine(connColor, Offset(fromX, midY), Offset(toX, size.height), strokeW)
-                                }
-                            }
-
-                            // 3. Draw commit node dot (on top of lines)
-                            val nodeX = colX(node.column)
-                            val nodeColor = Color(node.color)
-                            val dotRadius = 4.5.dp.toPx()
-                            val innerRadius = 2.5.dp.toPx()
-
-                            drawCircle(nodeColor, dotRadius, Offset(nodeX, centerY))
-                            drawCircle(surfaceColor, innerRadius, Offset(nodeX, centerY))
-                            drawCircle(nodeColor, innerRadius, Offset(nodeX, centerY), style = Stroke(1.5.dp.toPx()))
-                        }
-                    }
-
-                    // Commit info
-                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                        // Ref badges
-                        if (node.refs.isNotEmpty()) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            ) {
-                                node.refs.forEach { ref ->
-                                    val isHead = ref.contains("HEAD")
-                                    val isTag = ref.startsWith("tag: ")
-                                    val bgColor = when {
-                                        isHead -> MaterialTheme.colorScheme.primary
-                                        isTag -> ModifiedColor
-                                        else -> Color(node.color)
-                                    }
-                                    Text(
-                                        ref.removePrefix("tag: "),
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = Color.White,
-                                        modifier = Modifier
-                                            .background(bgColor, RoundedCornerShape(4.dp))
-                                            .padding(horizontal = 5.dp, vertical = 1.dp),
-                                    )
-                                }
-                            }
-                        }
-                        Text(node.message, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(node.shortHash, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
-                            Text(node.author, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1)
-                            Text(formatRelativeDate(node.date), fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                        },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { viewModel.performSearch() }),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    FilledTonalButton(
+                        onClick = { viewModel.performSearch() },
+                        enabled = state.searchQuery.isNotBlank() && !state.isSearching,
+                        modifier = Modifier.height(56.dp),
+                    ) {
+                        if (state.isSearching) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Search")
                         }
                     }
                 }
             }
 
-            if (state.isLoadingLog) {
-                item {
-                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            // Show search results or normal graph
+            if (state.searchResults.isNotEmpty()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
+                    item {
+                        Text(
+                            "${state.searchResults.size} results for \"${state.searchQuery}\"",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
+                    items(state.searchResults, key = { "search-${it.hash}" }) { commit ->
+                        SearchResultRow(commit = commit, onClick = { viewModel.showCommitDetail(commit) })
                     }
                 }
+            } else {
+                if (state.graphNodes.isEmpty() && !state.isLoadingLog) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No commits", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.outline)
+                    }
+                    return@PullToRefreshBox
+                }
+
+                // Compute max columns across all nodes for consistent width
+                val maxCol = (state.graphNodes.maxOfOrNull { node ->
+                    maxOf(node.column, node.lanes.maxOfOrNull { it.column } ?: 0, node.connections.maxOfOrNull { maxOf(it.fromColumn, it.toColumn) } ?: 0)
+                } ?: 0) + 1
+                val colWidth = 20.dp
+                val graphWidth = colWidth * maxCol + 12.dp
+
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 16.dp),
+                ) {
+                    itemsIndexed(state.graphNodes, key = { _, node -> node.hash }) { index, node ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.showCommitDetail(GitCommitInfo(node.hash, node.shortHash, node.message, node.author, node.date, node.parents, node.refs)) }
+                                .padding(vertical = 0.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // Graph lanes
+                            val surfaceColor = MaterialTheme.colorScheme.surface
+                            Box(modifier = Modifier.width(graphWidth).height(36.dp)) {
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val cw = colWidth.toPx()
+                                    val pad = 6.dp.toPx()
+                                    val centerY = size.height / 2
+                                    val strokeW = 2.dp.toPx()
+                                    fun colX(c: Int) = c * cw + cw / 2 + pad
+
+                                    // 1. Draw vertical pass-through lines for all active lanes
+                                    for (lane in node.lanes) {
+                                        val lx = colX(lane.column)
+                                        val laneColor = Color(lane.color)
+                                        if (lane.column != node.column) {
+                                            // Full vertical line (this lane just passes through)
+                                            drawLine(laneColor, Offset(lx, 0f), Offset(lx, size.height), strokeW)
+                                        } else {
+                                            // This lane holds the commit node — draw top half only
+                                            drawLine(laneColor, Offset(lx, 0f), Offset(lx, centerY), strokeW)
+                                        }
+                                    }
+
+                                    // 2. Draw connections from this commit to the next row
+                                    for (conn in node.connections) {
+                                        val fromX = colX(conn.fromColumn)
+                                        val toX = colX(conn.toColumn)
+                                        val connColor = Color(conn.color)
+
+                                        if (conn.fromColumn == conn.toColumn) {
+                                            // Straight down from center
+                                            drawLine(connColor, Offset(fromX, centerY), Offset(fromX, size.height), strokeW)
+                                        } else {
+                                            // Diagonal: from commit center to target column at bottom
+                                            val midY = centerY + (size.height - centerY) * 0.3f
+                                            drawLine(connColor, Offset(fromX, centerY), Offset(fromX, midY), strokeW)
+                                            drawLine(connColor, Offset(fromX, midY), Offset(toX, size.height), strokeW)
+                                        }
+                                    }
+
+                                    // 3. Draw commit node dot (on top of lines)
+                                    val nodeX = colX(node.column)
+                                    val nodeColor = Color(node.color)
+                                    val dotRadius = 4.5.dp.toPx()
+                                    val innerRadius = 2.5.dp.toPx()
+
+                                    drawCircle(nodeColor, dotRadius, Offset(nodeX, centerY))
+                                    drawCircle(surfaceColor, innerRadius, Offset(nodeX, centerY))
+                                    drawCircle(nodeColor, innerRadius, Offset(nodeX, centerY), style = Stroke(1.5.dp.toPx()))
+                                }
+                            }
+
+                            // Commit info
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                // Ref badges
+                                if (node.refs.isNotEmpty()) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                    ) {
+                                        node.refs.forEach { ref ->
+                                            val isHead = ref.contains("HEAD")
+                                            val isTag = ref.startsWith("tag: ")
+                                            val bgColor = when {
+                                                isHead -> MaterialTheme.colorScheme.primary
+                                                isTag -> ModifiedColor
+                                                else -> Color(node.color)
+                                            }
+                                            Text(
+                                                ref.removePrefix("tag: "),
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color.White,
+                                                modifier = Modifier
+                                                    .background(bgColor, RoundedCornerShape(4.dp))
+                                                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(node.message, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(node.shortHash, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                                    Text(node.author, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1)
+                                    Text(formatRelativeDate(node.date), fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                }
+                            }
+                        }
+                    }
+
+                    if (state.isLoadingLog) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchResultRow(commit: GitCommitInfo, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp).clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(commit.message, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(2.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(commit.shortHash, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                Text(commit.author, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(formatRelativeDate(commit.date), fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
             }
         }
     }
@@ -1019,6 +1354,9 @@ private fun CommitDetailBottomSheet(commit: GitCommitInfo, state: GitUiState, vi
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var showCherryPickDialog by remember { mutableStateOf(false) }
+    var showRevertDialog by remember { mutableStateOf(false) }
+    var showCreateTagDialog by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = { viewModel.hideCommitDetail() },
@@ -1078,6 +1416,37 @@ private fun CommitDetailBottomSheet(commit: GitCommitInfo, state: GitUiState, vi
             HorizontalDivider()
             Spacer(Modifier.height(8.dp))
 
+            // Action buttons
+            Text("Actions", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { showCherryPickDialog = true },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Cherry Pick", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = { showRevertDialog = true },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Revert", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = { showCreateTagDialog = true },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Tag", fontSize = 12.sp)
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
+
             // Changed files section
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -1115,7 +1484,7 @@ private fun CommitDetailBottomSheet(commit: GitCommitInfo, state: GitUiState, vi
                                 .combinedClickable(
                                     onClick = { viewModel.viewCommitFileDiff(commit.hash, file.path) },
                                     onLongClick = {
-                                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(file.path))
+                                        viewModel.showFileHistory(file.path)
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                     },
                                 ),
@@ -1150,6 +1519,441 @@ private fun CommitDetailBottomSheet(commit: GitCommitInfo, state: GitUiState, vi
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
                                     )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showCherryPickDialog) {
+        AlertDialog(
+            onDismissRequest = { showCherryPickDialog = false },
+            title = { Text("Cherry Pick") },
+            text = { Text("Apply commit ${commit.shortHash} to the current branch?") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cherryPick(commit.hash); showCherryPickDialog = false }) {
+                    Text("Cherry Pick")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCherryPickDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showRevertDialog) {
+        AlertDialog(
+            onDismissRequest = { showRevertDialog = false },
+            title = { Text("Revert Commit") },
+            text = { Text("Create a new commit that reverses ${commit.shortHash}?") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.revertCommit(commit.hash); showRevertDialog = false }) {
+                    Text("Revert")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRevertDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showCreateTagDialog) {
+        CreateTagDialog(
+            commitHash = commit.hash,
+            onConfirm = { name -> viewModel.createTag(name, commit.hash); showCreateTagDialog = false },
+            onDismiss = { showCreateTagDialog = false },
+        )
+    }
+}
+
+// =============================================================================
+// BLAME BOTTOM SHEET
+// =============================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BlameBottomSheet(state: GitUiState, viewModel: GitViewModel) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = { viewModel.hideBlame() },
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+        ) {
+            Text(
+                "Blame: ${state.blamePath?.substringAfterLast('/') ?: ""}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            if (state.isLoadingBlame) {
+                Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (state.blameLines.isEmpty()) {
+                Text("No blame data", color = MaterialTheme.colorScheme.outline)
+            } else {
+                // Build a map of hash -> color index for alternating backgrounds
+                val hashList = state.blameLines.map { it.hash }.distinct()
+                val hashColorMap = hashList.withIndex().associate { (i, hash) -> hash to i }
+
+                LazyColumn(modifier = Modifier.fillMaxWidth().height(500.dp)) {
+                    items(state.blameLines, key = { "blame-${it.lineNumber}" }) { line ->
+                        val colorIndex = hashColorMap[line.hash] ?: 0
+                        val bgColor = if (colorIndex % 2 == 0) {
+                            MaterialTheme.colorScheme.surface
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().background(bgColor).padding(horizontal = 4.dp, vertical = 1.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            // Line number
+                            Text(
+                                "${line.lineNumber}",
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.width(32.dp),
+                            )
+                            // Hash
+                            Text(
+                                line.hash.take(7),
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.width(52.dp),
+                            )
+                            // Author
+                            Text(
+                                line.author.take(12),
+                                fontSize = 9.sp,
+                                color = MaterialTheme.colorScheme.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.width(80.dp),
+                            )
+                            // Content
+                            Text(
+                                line.content,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// FILE HISTORY BOTTOM SHEET
+// =============================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FileHistoryBottomSheet(state: GitUiState, viewModel: GitViewModel) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = { viewModel.hideFileHistory() },
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+        ) {
+            Text(
+                "History: ${state.fileHistoryPath?.substringAfterLast('/') ?: ""}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            if (state.isLoadingFileHistory) {
+                Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (state.fileHistory.isEmpty()) {
+                Text("No history found", color = MaterialTheme.colorScheme.outline)
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxWidth().height(500.dp)) {
+                    items(state.fileHistory, key = { "fh-${it.hash}" }) { commit ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable {
+                                state.fileHistoryPath?.let { path ->
+                                    viewModel.viewCommitFileDiff(commit.hash, path)
+                                }
+                            },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                Text(commit.message, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                                Spacer(Modifier.height(2.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(commit.shortHash, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                                    Text(commit.author, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(formatRelativeDate(commit.date), fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// COMPARE BOTTOM SHEET
+// =============================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CompareBottomSheet(state: GitUiState, viewModel: GitViewModel) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val result = state.compareResult
+
+    ModalBottomSheet(
+        onDismissRequest = { viewModel.hideCompare() },
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+        ) {
+            Text("Compare Branches", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+
+            if (state.isLoadingCompare) {
+                Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (result == null) {
+                Text("No comparison data", color = MaterialTheme.colorScheme.outline)
+            } else {
+                // Base vs compare header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(result.baseBranch, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("\u2194", fontSize = 16.sp, color = MaterialTheme.colorScheme.outline)
+                    Text(result.compareBranch, fontWeight = FontWeight.Bold, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Ahead/behind counts
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = AdditionColor.copy(alpha = 0.1f)),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text("${result.ahead}", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = AdditionColor)
+                            Text("Ahead", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                    Card(
+                        modifier = Modifier.weight(1f),
+                        colors = CardDefaults.cardColors(containerColor = DeletionColor.copy(alpha = 0.1f)),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text("${result.behind}", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = DeletionColor)
+                            Text("Behind", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                }
+
+                if (result.commits.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Text("Unique commits in ${result.compareBranch}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
+                    Spacer(Modifier.height(4.dp))
+
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(300.dp)) {
+                        items(result.commits, key = { "cmp-${it.hash}" }) { commit ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                    Text(commit.message, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(commit.shortHash, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                                        Text(commit.author, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1)
+                                        Text(formatRelativeDate(commit.date), fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// REPO INFO BOTTOM SHEET
+// =============================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RepoInfoBottomSheet(state: GitUiState, viewModel: GitViewModel) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val info = state.repoInfo
+
+    ModalBottomSheet(
+        onDismissRequest = { viewModel.hideRepoInfo() },
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+        ) {
+            Text("Repository Info", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+
+            if (state.isLoadingRepoInfo) {
+                Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (info == null) {
+                Text("No repository info", color = MaterialTheme.colorScheme.outline)
+            } else {
+                DetailRow("Branch", info.currentBranch)
+                DetailRow("Commits", info.totalCommits.toString())
+                DetailRow("Branches", info.branchCount.toString())
+                DetailRow("Tags", info.tagCount.toString())
+                if (info.repoSize.isNotEmpty()) {
+                    DetailRow("Repo size", info.repoSize)
+                }
+
+                if (info.remotes.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Text("Remotes", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(4.dp))
+                    info.remotes.forEach { remote ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(remote.name, fontWeight = FontWeight.Medium, fontSize = 12.sp)
+                                    if (remote.remoteType.isNotEmpty()) {
+                                        Text(remote.remoteType, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                    }
+                                }
+                                SelectionContainer {
+                                    Text(remote.url, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                info.lastCommit?.let { last ->
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Text("Last Commit", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(4.dp))
+                    DetailRow("Hash", last.shortHash)
+                    DetailRow("Message", last.message)
+                    DetailRow("Author", last.author)
+                    DetailRow("Date", formatRelativeDate(last.date))
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// STASH LIST BOTTOM SHEET
+// =============================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StashListBottomSheet(state: GitUiState, viewModel: GitViewModel) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = { viewModel.hideStashList() },
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+        ) {
+            Text("Stash List", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+
+            if (state.isLoadingStash) {
+                Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else if (state.stashEntries.isEmpty()) {
+                Text("No stash entries", color = MaterialTheme.colorScheme.outline)
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxWidth().height(500.dp)) {
+                    items(state.stashEntries, key = { "stash-${it.index}" }) { entry ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            "stash@{${entry.index}}",
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                        Text(formatRelativeDate(entry.date), fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                                    }
+                                    Text(entry.message, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = { viewModel.stashApply(entry.index) },
+                                    modifier = Modifier.height(28.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                ) {
+                                    Text("Apply", fontSize = 10.sp)
+                                }
+                                Spacer(Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = { viewModel.stashDrop(entry.index) },
+                                    modifier = Modifier.size(28.dp),
+                                ) {
+                                    Icon(Icons.Default.Delete, null, tint = DeletionColor, modifier = Modifier.size(16.dp))
                                 }
                             }
                         }

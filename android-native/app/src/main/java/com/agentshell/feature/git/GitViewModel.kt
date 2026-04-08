@@ -2,17 +2,24 @@ package com.agentshell.feature.git
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.agentshell.data.model.GitBlameLine
 import com.agentshell.data.model.GitBranchInfo
 import com.agentshell.data.model.GitCommitInfo
+import com.agentshell.data.model.GitCompareResult
 import com.agentshell.data.model.GitDiffData
 import com.agentshell.data.model.GitFileChange
 import com.agentshell.data.model.GitGraphNode
 import com.agentshell.data.model.GitOperationResult
+import com.agentshell.data.model.GitRemoteInfo
+import com.agentshell.data.model.GitRepoInfo
+import com.agentshell.data.model.GitStashEntry
 import com.agentshell.data.model.GitStatusData
-import com.agentshell.data.model.LaneInfo
+import com.agentshell.data.model.GitTagInfo
 import com.agentshell.data.model.LaneConnection
+import com.agentshell.data.model.LaneInfo
 import com.agentshell.data.repository.GitRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -66,6 +73,46 @@ data class GitUiState(
     // Operations
     val operationResult: GitOperationResult? = null,
     val error: String? = null,
+
+    // Search
+    val searchQuery: String = "",
+    val searchResults: List<GitCommitInfo> = emptyList(),
+    val isSearching: Boolean = false,
+    val showSearchBar: Boolean = false,
+
+    // File history
+    val fileHistoryPath: String? = null,
+    val fileHistory: List<GitCommitInfo> = emptyList(),
+    val isLoadingFileHistory: Boolean = false,
+    val showFileHistorySheet: Boolean = false,
+
+    // Blame
+    val blameLines: List<GitBlameLine> = emptyList(),
+    val blamePath: String? = null,
+    val isLoadingBlame: Boolean = false,
+    val showBlameSheet: Boolean = false,
+
+    // Compare
+    val compareResult: GitCompareResult? = null,
+    val isLoadingCompare: Boolean = false,
+    val showCompareSheet: Boolean = false,
+
+    // Repo info
+    val repoInfo: GitRepoInfo? = null,
+    val isLoadingRepoInfo: Boolean = false,
+    val showRepoInfoSheet: Boolean = false,
+
+    // Tags
+    val tags: List<GitTagInfo> = emptyList(),
+    val isLoadingTags: Boolean = false,
+
+    // Stash list
+    val stashEntries: List<GitStashEntry> = emptyList(),
+    val isLoadingStash: Boolean = false,
+    val showStashSheet: Boolean = false,
+
+    // Auto-refresh
+    val autoRefreshEnabled: Boolean = false,
 )
 
 enum class GitTab { STATUS, BRANCHES, GRAPH }
@@ -248,7 +295,7 @@ class GitViewModel @Inject constructor(
         repository.deleteBranch(name, s.sessionName, s.path)
     }
 
-    // -- Stash --
+    // -- Stash (push/pop) --
 
     fun stashPush() {
         val s = _state.value
@@ -278,6 +325,163 @@ class GitViewModel @Inject constructor(
         repository.requestCommitDiff(commitHash, filePath, s.sessionName, s.path)
     }
 
+    // -- Search --
+
+    fun toggleSearchBar() {
+        _state.update { it.copy(showSearchBar = !it.showSearchBar, searchQuery = "", searchResults = emptyList()) }
+    }
+
+    fun updateSearchQuery(query: String) {
+        _state.update { it.copy(searchQuery = query) }
+    }
+
+    fun performSearch() {
+        val s = _state.value
+        if (s.searchQuery.isBlank()) return
+        _state.update { it.copy(isSearching = true) }
+        repository.search(s.searchQuery, sessionName = s.sessionName, path = s.path)
+    }
+
+    fun clearSearch() {
+        _state.update { it.copy(searchQuery = "", searchResults = emptyList(), isSearching = false) }
+    }
+
+    // -- File history --
+
+    fun showFileHistory(filePath: String) {
+        _state.update { it.copy(showFileHistorySheet = true, fileHistoryPath = filePath, fileHistory = emptyList(), isLoadingFileHistory = true) }
+        val s = _state.value
+        repository.requestFileHistory(filePath, sessionName = s.sessionName, path = s.path)
+    }
+
+    fun hideFileHistory() {
+        _state.update { it.copy(showFileHistorySheet = false, fileHistoryPath = null, fileHistory = emptyList()) }
+    }
+
+    // -- Cherry-pick & Revert --
+
+    fun cherryPick(commitHash: String) {
+        val s = _state.value
+        repository.cherryPick(commitHash, s.sessionName, s.path)
+    }
+
+    fun revertCommit(commitHash: String) {
+        val s = _state.value
+        repository.revert(commitHash, s.sessionName, s.path)
+    }
+
+    // -- Merge --
+
+    fun mergeBranch(branch: String) {
+        val s = _state.value
+        repository.merge(branch, s.sessionName, s.path)
+    }
+
+    // -- Blame --
+
+    fun showBlame(filePath: String) {
+        _state.update { it.copy(showBlameSheet = true, blamePath = filePath, blameLines = emptyList(), isLoadingBlame = true) }
+        val s = _state.value
+        repository.requestBlame(filePath, s.sessionName, s.path)
+    }
+
+    fun hideBlame() {
+        _state.update { it.copy(showBlameSheet = false, blamePath = null, blameLines = emptyList()) }
+    }
+
+    // -- Compare --
+
+    fun showCompare(baseBranch: String, compareBranch: String) {
+        _state.update { it.copy(showCompareSheet = true, compareResult = null, isLoadingCompare = true) }
+        val s = _state.value
+        repository.requestCompare(baseBranch, compareBranch, s.sessionName, s.path)
+    }
+
+    fun hideCompare() {
+        _state.update { it.copy(showCompareSheet = false, compareResult = null) }
+    }
+
+    // -- Repo info --
+
+    fun showRepoInfo() {
+        _state.update { it.copy(showRepoInfoSheet = true, repoInfo = null, isLoadingRepoInfo = true) }
+        val s = _state.value
+        repository.requestRepoInfo(s.sessionName, s.path)
+    }
+
+    fun hideRepoInfo() {
+        _state.update { it.copy(showRepoInfoSheet = false) }
+    }
+
+    // -- Amend --
+
+    fun amendCommit(message: String? = null) {
+        val s = _state.value
+        repository.amend(message, s.sessionName, s.path)
+    }
+
+    // -- Tags --
+
+    fun refreshTags() {
+        _state.update { it.copy(isLoadingTags = true) }
+        val s = _state.value
+        repository.requestTags(s.sessionName, s.path)
+    }
+
+    fun createTag(name: String, commitHash: String? = null, message: String? = null) {
+        val s = _state.value
+        repository.createTag(name, commitHash, message, s.sessionName, s.path)
+    }
+
+    fun deleteTag(name: String) {
+        val s = _state.value
+        repository.deleteTag(name, s.sessionName, s.path)
+    }
+
+    // -- Stash list --
+
+    fun showStashList() {
+        _state.update { it.copy(showStashSheet = true, stashEntries = emptyList(), isLoadingStash = true) }
+        val s = _state.value
+        repository.requestStashList(s.sessionName, s.path)
+    }
+
+    fun hideStashList() {
+        _state.update { it.copy(showStashSheet = false) }
+    }
+
+    fun stashApply(index: Int) {
+        val s = _state.value
+        repository.stash("apply stash@{$index}", s.sessionName, s.path)
+    }
+
+    fun stashDrop(index: Int) {
+        val s = _state.value
+        repository.stash("drop stash@{$index}", s.sessionName, s.path)
+    }
+
+    // -- Conflict resolution --
+
+    fun resolveConflict(filePath: String, resolution: String) {
+        val s = _state.value
+        repository.resolveConflict(filePath, resolution, s.sessionName, s.path)
+    }
+
+    // -- Auto-refresh --
+
+    fun toggleAutoRefresh() {
+        val wasEnabled = _state.value.autoRefreshEnabled
+        _state.update { it.copy(autoRefreshEnabled = !wasEnabled) }
+        if (!wasEnabled) {
+            viewModelScope.launch {
+                while (_state.value.autoRefreshEnabled) {
+                    delay(5000)
+                    refreshStatus()
+                }
+            }
+        }
+    }
+
     // -- Clear messages --
 
     fun clearError() {
@@ -302,9 +506,16 @@ class GitViewModel @Inject constructor(
                     "git-branches-result" -> handleBranchesResult(msg)
                     "git-commit-files-result" -> handleCommitFilesResult(msg)
                     "git-operation-result" -> handleOperationResult(msg)
+                    "git-search-result" -> handleSearchResult(msg)
+                    "git-file-history-result" -> handleFileHistoryResult(msg)
+                    "git-blame-result" -> handleBlameResult(msg)
+                    "git-compare-result" -> handleCompareResult(msg)
+                    "git-repo-info-result" -> handleRepoInfoResult(msg)
+                    "git-tags-result" -> handleTagsResult(msg)
+                    "git-stash-list-result" -> handleStashListResult(msg)
                     "error" -> {
                         val message = msg["message"] as? String ?: "Unknown error"
-                        _state.update { it.copy(error = message, isLoadingStatus = false, isLoadingDiff = false, isLoadingLog = false, isLoadingBranches = false) }
+                        _state.update { it.copy(error = message, isLoadingStatus = false, isLoadingDiff = false, isLoadingLog = false, isLoadingBranches = false, isSearching = false, isLoadingFileHistory = false, isLoadingBlame = false, isLoadingCompare = false, isLoadingRepoInfo = false, isLoadingTags = false, isLoadingStash = false) }
                     }
                 }
             }
@@ -430,9 +641,104 @@ class GitViewModel @Inject constructor(
                     refreshBranches()
                     refreshStatus()
                 }
+                "cherry-pick", "revert", "merge", "amend", "resolve-conflict" -> {
+                    refreshStatus()
+                    refreshLog()
+                }
+                "create-tag", "delete-tag" -> refreshTags()
                 "push" -> { /* no refresh needed */ }
             }
         }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleSearchResult(msg: Map<String, Any?>) {
+        val commits = (msg["commits"] as? List<Map<String, Any?>>)?.map { parseCommit(it) } ?: emptyList()
+        _state.update { it.copy(searchResults = commits, isSearching = false) }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleFileHistoryResult(msg: Map<String, Any?>) {
+        val commits = (msg["commits"] as? List<Map<String, Any?>>)?.map { parseCommit(it) } ?: emptyList()
+        _state.update { it.copy(fileHistory = commits, isLoadingFileHistory = false) }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleBlameResult(msg: Map<String, Any?>) {
+        val lines = (msg["lines"] as? List<Map<String, Any?>>)?.map { l ->
+            GitBlameLine(
+                lineNumber = (l["lineNumber"] as? Number)?.toInt() ?: 0,
+                hash = l["hash"] as? String ?: "",
+                author = l["author"] as? String ?: "",
+                date = l["date"] as? String ?: "",
+                content = l["content"] as? String ?: "",
+            )
+        } ?: emptyList()
+        _state.update { it.copy(blameLines = lines, isLoadingBlame = false) }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleCompareResult(msg: Map<String, Any?>) {
+        val commits = (msg["commits"] as? List<Map<String, Any?>>)?.map { parseCommit(it) } ?: emptyList()
+        val result = GitCompareResult(
+            baseBranch = msg["baseBranch"] as? String ?: "",
+            compareBranch = msg["compareBranch"] as? String ?: "",
+            ahead = (msg["ahead"] as? Number)?.toInt() ?: 0,
+            behind = (msg["behind"] as? Number)?.toInt() ?: 0,
+            commits = commits,
+        )
+        _state.update { it.copy(compareResult = result, isLoadingCompare = false) }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleRepoInfoResult(msg: Map<String, Any?>) {
+        val remotes = (msg["remotes"] as? List<Map<String, Any?>>)?.map { r ->
+            GitRemoteInfo(
+                name = r["name"] as? String ?: "",
+                url = r["url"] as? String ?: "",
+                remoteType = r["remoteType"] as? String ?: "",
+            )
+        } ?: emptyList()
+
+        val lastCommitMap = msg["lastCommit"] as? Map<String, Any?>
+        val lastCommit = lastCommitMap?.let { parseCommit(it) }
+
+        val repoInfo = GitRepoInfo(
+            remotes = remotes,
+            totalCommits = (msg["totalCommits"] as? Number)?.toLong() ?: 0L,
+            currentBranch = msg["currentBranch"] as? String ?: "",
+            branchCount = (msg["branchCount"] as? Number)?.toInt() ?: 0,
+            tagCount = (msg["tagCount"] as? Number)?.toInt() ?: 0,
+            repoSize = msg["repoSize"] as? String ?: "",
+            lastCommit = lastCommit,
+        )
+        _state.update { it.copy(repoInfo = repoInfo, isLoadingRepoInfo = false) }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleTagsResult(msg: Map<String, Any?>) {
+        val tags = (msg["tags"] as? List<Map<String, Any?>>)?.map { t ->
+            GitTagInfo(
+                name = t["name"] as? String ?: "",
+                hash = t["hash"] as? String ?: "",
+                message = t["message"] as? String,
+                date = t["date"] as? String,
+                isAnnotated = t["isAnnotated"] as? Boolean ?: false,
+            )
+        } ?: emptyList()
+        _state.update { it.copy(tags = tags, isLoadingTags = false) }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleStashListResult(msg: Map<String, Any?>) {
+        val entries = (msg["entries"] as? List<Map<String, Any?>>)?.map { e ->
+            GitStashEntry(
+                index = (e["index"] as? Number)?.toInt() ?: 0,
+                message = e["message"] as? String ?: "",
+                date = e["date"] as? String ?: "",
+            )
+        } ?: emptyList()
+        _state.update { it.copy(stashEntries = entries, isLoadingStash = false) }
     }
 
     // -------------------------------------------------------------------------

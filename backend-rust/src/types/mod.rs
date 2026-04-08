@@ -517,6 +517,110 @@ pub enum WebSocketMessage {
         #[serde(rename = "filePath")]
         file_path: String,
     },
+    // Search commits
+    GitSearch {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        query: String,
+        author: Option<String>,
+        since: Option<String>,
+        limit: Option<usize>,
+    },
+    // File history
+    GitFileHistory {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "filePath")]
+        file_path: String,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    },
+    // Cherry-pick
+    GitCherryPick {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "commitHash")]
+        commit_hash: String,
+    },
+    // Revert
+    GitRevert {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "commitHash")]
+        commit_hash: String,
+    },
+    // Merge
+    GitMerge {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        branch: String,
+    },
+    // Blame
+    GitBlame {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "filePath")]
+        file_path: String,
+    },
+    // Compare branches
+    GitCompare {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "baseBranch")]
+        base_branch: String,
+        #[serde(rename = "compareBranch")]
+        compare_branch: String,
+    },
+    // Repo info
+    GitRepoInfo {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+    },
+    // Amend last commit
+    GitAmend {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        message: Option<String>,
+    },
+    // Tags
+    GitListTags {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+    },
+    GitCreateTag {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        name: String,
+        #[serde(rename = "commitHash")]
+        commit_hash: Option<String>,
+        message: Option<String>,
+    },
+    GitDeleteTag {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        name: String,
+    },
+    // Resolve conflict
+    GitResolveConflict {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "filePath")]
+        file_path: String,
+        resolution: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1000,6 +1104,88 @@ pub enum ServerMessage {
         commit_hash: String,
         files: Vec<GitFileChange>,
     },
+    GitSearchResult {
+        query: String,
+        commits: Vec<GitCommitInfo>,
+    },
+    GitFileHistoryResult {
+        #[serde(rename = "filePath")]
+        file_path: String,
+        commits: Vec<GitCommitInfo>,
+        #[serde(rename = "hasMore")]
+        has_more: bool,
+    },
+    GitBlameResult {
+        #[serde(rename = "filePath")]
+        file_path: String,
+        lines: Vec<GitBlameLine>,
+    },
+    GitCompareResult {
+        #[serde(rename = "baseBranch")]
+        base_branch: String,
+        #[serde(rename = "compareBranch")]
+        compare_branch: String,
+        ahead: i32,
+        behind: i32,
+        commits: Vec<GitCommitInfo>,
+    },
+    GitRepoInfoResult {
+        remotes: Vec<GitRemoteInfo>,
+        #[serde(rename = "totalCommits")]
+        total_commits: u64,
+        #[serde(rename = "currentBranch")]
+        current_branch: String,
+        #[serde(rename = "branchCount")]
+        branch_count: u32,
+        #[serde(rename = "tagCount")]
+        tag_count: u32,
+        #[serde(rename = "repoSize")]
+        repo_size: String,
+        #[serde(rename = "lastCommit")]
+        last_commit: Option<GitCommitInfo>,
+    },
+    GitTagsResult {
+        tags: Vec<GitTagInfo>,
+    },
+    GitStashListResult {
+        entries: Vec<GitStashEntry>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameLine {
+    pub line_number: u32,
+    pub hash: String,
+    pub author: String,
+    pub date: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemoteInfo {
+    pub name: String,
+    pub url: String,
+    pub remote_type: String, // "fetch" or "push"
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTagInfo {
+    pub name: String,
+    pub hash: String,
+    pub message: Option<String>,
+    pub date: Option<String>,
+    pub is_annotated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashEntry {
+    pub index: u32,
+    pub message: String,
+    pub date: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

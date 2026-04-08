@@ -322,7 +322,20 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         | WebSocketMessage::GitPull { .. }
         | WebSocketMessage::GitStash { .. }
         | WebSocketMessage::GitCommitFiles { .. }
-        | WebSocketMessage::GitCommitDiff { .. } => {
+        | WebSocketMessage::GitCommitDiff { .. }
+        | WebSocketMessage::GitSearch { .. }
+        | WebSocketMessage::GitFileHistory { .. }
+        | WebSocketMessage::GitCherryPick { .. }
+        | WebSocketMessage::GitRevert { .. }
+        | WebSocketMessage::GitMerge { .. }
+        | WebSocketMessage::GitBlame { .. }
+        | WebSocketMessage::GitCompare { .. }
+        | WebSocketMessage::GitRepoInfo { .. }
+        | WebSocketMessage::GitAmend { .. }
+        | WebSocketMessage::GitListTags { .. }
+        | WebSocketMessage::GitCreateTag { .. }
+        | WebSocketMessage::GitDeleteTag { .. }
+        | WebSocketMessage::GitResolveConflict { .. } => {
             git_cmds::handle(msg, &state.message_tx).await?;
         }
 

@@ -136,3 +136,69 @@ data class GitOperationResult(
     val message: String? = null,
     val error: String? = null,
 )
+
+// ---------------------------------------------------------------------------
+// Blame
+// ---------------------------------------------------------------------------
+
+data class GitBlameLine(
+    val lineNumber: Int,
+    val hash: String,
+    val author: String,
+    val date: String,
+    val content: String,
+)
+
+// ---------------------------------------------------------------------------
+// Compare
+// ---------------------------------------------------------------------------
+
+data class GitCompareResult(
+    val baseBranch: String,
+    val compareBranch: String,
+    val ahead: Int,
+    val behind: Int,
+    val commits: List<GitCommitInfo> = emptyList(),
+)
+
+// ---------------------------------------------------------------------------
+// Repo Info
+// ---------------------------------------------------------------------------
+
+data class GitRepoInfo(
+    val remotes: List<GitRemoteInfo> = emptyList(),
+    val totalCommits: Long = 0,
+    val currentBranch: String = "",
+    val branchCount: Int = 0,
+    val tagCount: Int = 0,
+    val repoSize: String = "",
+    val lastCommit: GitCommitInfo? = null,
+)
+
+data class GitRemoteInfo(
+    val name: String,
+    val url: String,
+    val remoteType: String = "",
+)
+
+// ---------------------------------------------------------------------------
+// Tags
+// ---------------------------------------------------------------------------
+
+data class GitTagInfo(
+    val name: String,
+    val hash: String,
+    val message: String? = null,
+    val date: String? = null,
+    val isAnnotated: Boolean = false,
+)
+
+// ---------------------------------------------------------------------------
+// Stash
+// ---------------------------------------------------------------------------
+
+data class GitStashEntry(
+    val index: Int,
+    val message: String,
+    val date: String,
+)

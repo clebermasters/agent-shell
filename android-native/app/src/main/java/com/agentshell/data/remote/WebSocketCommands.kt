@@ -783,7 +783,144 @@ fun WebSocketService.gitCommitDiff(sessionName: String? = null, path: String? = 
     })
 }
 
-/** Stash operations: push, pop, list. */
+/** Search commits by message, author, or date. */
+fun WebSocketService.gitSearch(sessionName: String? = null, path: String? = null, query: String, author: String? = null, since: String? = null, limit: Int = 50) {
+    send(buildMap {
+        put("type", "git-search")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("query", query)
+        if (author != null) put("author", author)
+        if (since != null) put("since", since)
+        put("limit", limit)
+    })
+}
+
+/** Get commit history for a specific file. */
+fun WebSocketService.gitFileHistory(sessionName: String? = null, path: String? = null, filePath: String, limit: Int = 50, offset: Int = 0) {
+    send(buildMap {
+        put("type", "git-file-history")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("filePath", filePath)
+        put("limit", limit)
+        put("offset", offset)
+    })
+}
+
+/** Cherry-pick a commit. */
+fun WebSocketService.gitCherryPick(sessionName: String? = null, path: String? = null, commitHash: String) {
+    send(buildMap {
+        put("type", "git-cherry-pick")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("commitHash", commitHash)
+    })
+}
+
+/** Revert a commit. */
+fun WebSocketService.gitRevert(sessionName: String? = null, path: String? = null, commitHash: String) {
+    send(buildMap {
+        put("type", "git-revert")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("commitHash", commitHash)
+    })
+}
+
+/** Merge a branch into current. */
+fun WebSocketService.gitMerge(sessionName: String? = null, path: String? = null, branch: String) {
+    send(buildMap {
+        put("type", "git-merge")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("branch", branch)
+    })
+}
+
+/** Get blame annotations for a file. */
+fun WebSocketService.gitBlame(sessionName: String? = null, path: String? = null, filePath: String) {
+    send(buildMap {
+        put("type", "git-blame")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("filePath", filePath)
+    })
+}
+
+/** Compare two branches. */
+fun WebSocketService.gitCompare(sessionName: String? = null, path: String? = null, baseBranch: String, compareBranch: String) {
+    send(buildMap {
+        put("type", "git-compare")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("baseBranch", baseBranch)
+        put("compareBranch", compareBranch)
+    })
+}
+
+/** Get repository info. */
+fun WebSocketService.gitRepoInfo(sessionName: String? = null, path: String? = null) {
+    send(buildMap {
+        put("type", "git-repo-info")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+    })
+}
+
+/** Amend last commit. */
+fun WebSocketService.gitAmend(sessionName: String? = null, path: String? = null, message: String? = null) {
+    send(buildMap {
+        put("type", "git-amend")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        if (message != null) put("message", message)
+    })
+}
+
+/** List tags. */
+fun WebSocketService.gitListTags(sessionName: String? = null, path: String? = null) {
+    send(buildMap {
+        put("type", "git-list-tags")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+    })
+}
+
+/** Create a tag. */
+fun WebSocketService.gitCreateTag(sessionName: String? = null, path: String? = null, name: String, commitHash: String? = null, message: String? = null) {
+    send(buildMap {
+        put("type", "git-create-tag")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("name", name)
+        if (commitHash != null) put("commitHash", commitHash)
+        if (message != null) put("message", message)
+    })
+}
+
+/** Delete a tag. */
+fun WebSocketService.gitDeleteTag(sessionName: String? = null, path: String? = null, name: String) {
+    send(buildMap {
+        put("type", "git-delete-tag")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("name", name)
+    })
+}
+
+/** Resolve a merge conflict. */
+fun WebSocketService.gitResolveConflict(sessionName: String? = null, path: String? = null, filePath: String, resolution: String) {
+    send(buildMap {
+        put("type", "git-resolve-conflict")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("filePath", filePath)
+        put("resolution", resolution)
+    })
+}
+
+/** Stash operations: push, pop, list, drop, apply. */
 fun WebSocketService.gitStash(sessionName: String? = null, path: String? = null, action: String) {
     send(buildMap {
         put("type", "git-stash")

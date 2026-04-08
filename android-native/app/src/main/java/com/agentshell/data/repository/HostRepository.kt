@@ -64,16 +64,17 @@ class HostRepository @Inject constructor(
      * Format: "host:port,Label|host:port,Label"
      */
     fun loadBuildTimeHosts(): List<Host> {
-        return AppConfig.parseServerList(BuildConfig.DEFAULT_SERVER_LIST).mapNotNull { (addressPort, label) ->
+        return AppConfig.parseServerList(BuildConfig.DEFAULT_SERVER_LIST).mapIndexedNotNull { index, (addressPort, label) ->
             val colonIndex = addressPort.lastIndexOf(':')
-            if (colonIndex < 0) return@mapNotNull null
+            if (colonIndex < 0) return@mapIndexedNotNull null
             val address = addressPort.substring(0, colonIndex)
-            val port = addressPort.substring(colonIndex + 1).toIntOrNull() ?: return@mapNotNull null
+            val port = addressPort.substring(colonIndex + 1).toIntOrNull() ?: return@mapIndexedNotNull null
             Host(
                 id = UUID.randomUUID().toString(),
                 name = label,
                 address = address,
                 port = port,
+                sortOrder = index,
             )
         }
     }

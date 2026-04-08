@@ -10,7 +10,7 @@ import com.agentshell.data.model.PanelLayoutEntity
 
 @Database(
     entities = [Host::class, PanelLayoutEntity::class, PanelEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -43,6 +43,12 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_panels_layoutId ON panels(layoutId)")
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE hosts ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

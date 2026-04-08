@@ -103,8 +103,8 @@ class HomeViewModel @Inject constructor(
             if (hosts.isEmpty()) {
                 val defaults = hostRepository.loadBuildTimeHosts()
                 defaults.forEach { hostRepository.saveHost(it) }
-                // Prefer a local (non-TLS) server — matches Flutter's default behavior
-                val preferred = defaults.firstOrNull { !it.isSecure } ?: defaults.firstOrNull()
+                // Select first entry from SERVER_LIST (index 0 = sortOrder 0)
+                val preferred = defaults.firstOrNull()
                 preferred?.let { hostRepository.selectHost(it.id) }
             } else if (hostRepository.getSelectedHostOnce() == null) {
                 hostRepository.selectHost(hosts.first().id)

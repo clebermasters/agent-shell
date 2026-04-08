@@ -12,7 +12,8 @@ data class Host(
     val name: String,
     val address: String,
     val port: Int,
-    val lastConnected: Long? = null
+    val lastConnected: Long? = null,
+    val sortOrder: Int = 0,
 ) {
     val isSecure: Boolean
         get() = port == 443

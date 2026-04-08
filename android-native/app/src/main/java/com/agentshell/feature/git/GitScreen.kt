@@ -1,8 +1,10 @@
 package com.agentshell.feature.git
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -398,6 +400,7 @@ private fun SectionHeader(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FileChangeRow(
     file: GitFileChange,
@@ -405,8 +408,16 @@ private fun FileChangeRow(
     onTap: () -> Unit,
     trailingAction: @Composable () -> Unit,
 ) {
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp).clickable(onClick = onTap),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp).combinedClickable(
+            onClick = onTap,
+            onLongClick = {
+                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(file.path))
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            },
+        ),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(
@@ -450,10 +461,19 @@ private fun FileChangeRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun UntrackedFileRow(path: String, onStage: () -> Unit) {
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp).combinedClickable(
+            onClick = {},
+            onLongClick = {
+                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(path))
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            },
+        ),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(

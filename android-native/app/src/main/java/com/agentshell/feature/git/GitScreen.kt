@@ -694,9 +694,12 @@ private fun GraphTab(state: GitUiState, viewModel: GitViewModel) {
             return@PullToRefreshBox
         }
 
-        val maxCol = (state.graphNodes.maxOfOrNull { it.column } ?: 0) + 1
-        val colWidth = 24.dp
-        val graphWidth = colWidth * maxCol + 8.dp
+        // Compute max columns across all nodes for consistent width
+        val maxCol = (state.graphNodes.maxOfOrNull { node ->
+            maxOf(node.column, node.lanes.maxOfOrNull { it.column } ?: 0, node.connections.maxOfOrNull { maxOf(it.fromColumn, it.toColumn) } ?: 0)
+        } ?: 0) + 1
+        val colWidth = 20.dp
+        val graphWidth = colWidth * maxCol + 12.dp
 
         LazyColumn(
             state = listState,
@@ -704,71 +707,63 @@ private fun GraphTab(state: GitUiState, viewModel: GitViewModel) {
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
             itemsIndexed(state.graphNodes, key = { _, node -> node.hash }) { index, node ->
-                val nextNode = state.graphNodes.getOrNull(index + 1)
-
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { viewModel.showCommitDetail(GitCommitInfo(node.hash, node.shortHash, node.message, node.author, node.date, node.parents, node.refs)) }
-                        .padding(vertical = 1.dp),
+                        .padding(vertical = 0.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Graph column
+                    // Graph lanes
                     val surfaceColor = MaterialTheme.colorScheme.surface
-                    Box(modifier = Modifier.width(graphWidth).height(40.dp)) {
+                    Box(modifier = Modifier.width(graphWidth).height(36.dp)) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
-                            val nodeColor = Color(node.color)
-                            val nodeX = (node.column * colWidth.toPx()) + colWidth.toPx() / 2 + 4.dp.toPx()
+                            val cw = colWidth.toPx()
+                            val pad = 6.dp.toPx()
                             val centerY = size.height / 2
+                            val strokeW = 2.dp.toPx()
+                            fun colX(c: Int) = c * cw + cw / 2 + pad
 
-                            // Draw vertical line from top to center (from parent above)
-                            drawLine(
-                                color = nodeColor,
-                                start = Offset(nodeX, 0f),
-                                end = Offset(nodeX, centerY),
-                                strokeWidth = 2.dp.toPx(),
-                            )
-
-                            // Draw vertical line from center to bottom (to child below)
-                            if (nextNode != null) {
-                                drawLine(
-                                    color = nodeColor,
-                                    start = Offset(nodeX, centerY),
-                                    end = Offset(nodeX, size.height),
-                                    strokeWidth = 2.dp.toPx(),
-                                )
+                            // 1. Draw vertical pass-through lines for all active lanes
+                            for (lane in node.lanes) {
+                                val lx = colX(lane.column)
+                                val laneColor = Color(lane.color)
+                                if (lane.column != node.column) {
+                                    // Full vertical line (this lane just passes through)
+                                    drawLine(laneColor, Offset(lx, 0f), Offset(lx, size.height), strokeW)
+                                } else {
+                                    // This lane holds the commit node — draw top half only
+                                    drawLine(laneColor, Offset(lx, 0f), Offset(lx, centerY), strokeW)
+                                }
                             }
 
-                            // Draw merge lines to parents in other columns
-                            if (node.parents.size > 1) {
-                                // We only draw a hint line to the right
-                                val mergeX = nodeX + colWidth.toPx()
-                                drawLine(
-                                    color = nodeColor.copy(alpha = 0.5f),
-                                    start = Offset(nodeX, centerY),
-                                    end = Offset(mergeX, size.height),
-                                    strokeWidth = 1.5.dp.toPx(),
-                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f)),
-                                )
+                            // 2. Draw connections from this commit to the next row
+                            for (conn in node.connections) {
+                                val fromX = colX(conn.fromColumn)
+                                val toX = colX(conn.toColumn)
+                                val connColor = Color(conn.color)
+
+                                if (conn.fromColumn == conn.toColumn) {
+                                    // Straight down from center
+                                    drawLine(connColor, Offset(fromX, centerY), Offset(fromX, size.height), strokeW)
+                                } else {
+                                    // Diagonal: from commit center to target column at bottom
+                                    // Draw as two segments: vertical down then diagonal
+                                    val midY = centerY + (size.height - centerY) * 0.3f
+                                    drawLine(connColor, Offset(fromX, centerY), Offset(fromX, midY), strokeW)
+                                    drawLine(connColor, Offset(fromX, midY), Offset(toX, size.height), strokeW)
+                                }
                             }
 
-                            // Draw commit node circle
-                            drawCircle(
-                                color = nodeColor,
-                                radius = 5.dp.toPx(),
-                                center = Offset(nodeX, centerY),
-                            )
-                            drawCircle(
-                                color = surfaceColor,
-                                radius = 3.dp.toPx(),
-                                center = Offset(nodeX, centerY),
-                            )
-                            drawCircle(
-                                color = nodeColor,
-                                radius = 3.dp.toPx(),
-                                center = Offset(nodeX, centerY),
-                                style = Stroke(width = 1.5.dp.toPx()),
-                            )
+                            // 3. Draw commit node dot (on top of lines)
+                            val nodeX = colX(node.column)
+                            val nodeColor = Color(node.color)
+                            val dotRadius = 4.5.dp.toPx()
+                            val innerRadius = 2.5.dp.toPx()
+
+                            drawCircle(nodeColor, dotRadius, Offset(nodeX, centerY))
+                            drawCircle(surfaceColor, innerRadius, Offset(nodeX, centerY))
+                            drawCircle(nodeColor, innerRadius, Offset(nodeX, centerY), style = Stroke(1.5.dp.toPx()))
                         }
                     }
 

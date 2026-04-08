@@ -107,9 +107,24 @@ data class GitGraphNode(
     val refs: List<String> = emptyList(),
     val column: Int = 0,
     val color: Long = 0,
+    // Active lanes passing through this row (vertical lines)
+    val lanes: List<LaneInfo> = emptyList(),
+    // Connections from this row to the next (diagonal/merge lines)
+    val connections: List<LaneConnection> = emptyList(),
 ) {
     val isMerge: Boolean get() = parents.size > 1
 }
+
+data class LaneInfo(
+    val column: Int,
+    val color: Long,
+)
+
+data class LaneConnection(
+    val fromColumn: Int,
+    val toColumn: Int,
+    val color: Long,
+)
 
 // ---------------------------------------------------------------------------
 // Git Operation Result

@@ -9,6 +9,8 @@ import com.agentshell.data.model.GitFileChange
 import com.agentshell.data.model.GitGraphNode
 import com.agentshell.data.model.GitOperationResult
 import com.agentshell.data.model.GitStatusData
+import com.agentshell.data.model.LaneInfo
+import com.agentshell.data.model.LaneConnection
 import com.agentshell.data.repository.GitRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -432,57 +434,75 @@ class GitViewModel @Inject constructor(
     )
 
     /**
-     * Compute column positions for a topological commit graph.
-     * Each active branch gets its own column. When a commit merges,
-     * its second parent's column is freed.
+     * Compute a full multi-lane graph layout with active lanes and connections.
+     *
+     * `activeLanes` is a list where index = column, value = commit hash
+     * expected in that lane (or null if the lane is free). As we process
+     * each commit top-to-bottom:
+     *   1. Find which lane this commit occupies (reserved by a child, or allocate new).
+     *   2. Record all currently active lanes for vertical-line drawing.
+     *   3. Route each parent: first parent inherits the lane; extra parents
+     *      either reuse an existing reservation or get a new lane.
+     *   4. Record connections (fromCol → toCol) for diagonal-line drawing.
      */
     private fun computeGraphLayout(commits: List<GitCommitInfo>): List<GitGraphNode> {
         if (commits.isEmpty()) return emptyList()
 
-        // Map from commit hash to the column it occupies
-        val activeColumns = mutableListOf<String?>() // column index -> commit hash occupying it (or null = free)
-        val hashToColumn = mutableMapOf<String, Int>()
+        // lane index → hash that will arrive in that lane (null = free)
+        val activeLanes = mutableListOf<String?>()
         val hashToColor = mutableMapOf<String, Long>()
 
-        fun allocateColumn(hash: String): Int {
-            // Reuse the first free column
-            val freeIdx = activeColumns.indexOf(null)
-            return if (freeIdx >= 0) {
-                activeColumns[freeIdx] = hash
-                freeIdx
+        fun allocateLane(hash: String): Int {
+            val free = activeLanes.indexOf(null)
+            return if (free >= 0) {
+                activeLanes[free] = hash
+                free
             } else {
-                activeColumns.add(hash)
-                activeColumns.size - 1
+                activeLanes.add(hash)
+                activeLanes.size - 1
             }
         }
 
-        return commits.map { commit ->
-            // If this commit already has a column assigned (from a child), use it
-            val col = hashToColumn[commit.hash] ?: allocateColumn(commit.hash)
-            hashToColumn[commit.hash] = col
+        fun colorForColumn(col: Int): Long = branchColors[col % branchColors.size]
 
-            // Assign color based on column
-            val color = hashToColor[commit.hash] ?: branchColors[col % branchColors.size]
+        return commits.map { commit ->
+            // 1. Find this commit's column
+            val col = activeLanes.indexOf(commit.hash).let { idx ->
+                if (idx >= 0) idx else allocateLane(commit.hash)
+            }
+            val color = hashToColor[commit.hash] ?: colorForColumn(col)
             hashToColor[commit.hash] = color
 
-            // Free this column (we've processed this commit)
-            if (col < activeColumns.size) {
-                activeColumns[col] = null
+            // 2. Snapshot active lanes BEFORE modifying (for drawing vertical lines)
+            val lanesSnapshot = activeLanes.mapIndexedNotNull { i, h ->
+                if (h != null) LaneInfo(i, hashToColor[h] ?: colorForColumn(i)) else null
             }
 
-            // Assign columns to parents
+            // 3. Free this commit's lane
+            activeLanes[col] = null
+
+            // 4. Route parents and build connections
+            val connections = mutableListOf<LaneConnection>()
+
             commit.parents.forEachIndexed { idx, parentHash ->
-                if (parentHash !in hashToColumn) {
+                // Check if parent already has a lane reserved (by another child)
+                val existingLane = activeLanes.indexOf(parentHash)
+
+                if (existingLane >= 0) {
+                    // Parent already reserved → draw connection to its lane
+                    connections.add(LaneConnection(col, existingLane, hashToColor[parentHash] ?: colorForColumn(existingLane)))
+                } else {
                     if (idx == 0) {
-                        // First parent inherits current column
-                        activeColumns[col] = parentHash
-                        hashToColumn[parentHash] = col
+                        // First parent inherits this commit's lane
+                        activeLanes[col] = parentHash
                         hashToColor[parentHash] = color
+                        connections.add(LaneConnection(col, col, color))
                     } else {
-                        // Merge parent gets a new column
-                        val parentCol = allocateColumn(parentHash)
-                        hashToColumn[parentHash] = parentCol
-                        hashToColor[parentHash] = branchColors[parentCol % branchColors.size]
+                        // Merge parent → new lane
+                        val parentCol = allocateLane(parentHash)
+                        val parentColor = colorForColumn(parentCol)
+                        hashToColor[parentHash] = parentColor
+                        connections.add(LaneConnection(col, parentCol, parentColor))
                     }
                 }
             }
@@ -497,6 +517,8 @@ class GitViewModel @Inject constructor(
                 refs = commit.refs,
                 column = col,
                 color = color,
+                lanes = lanesSnapshot,
+                connections = connections,
             )
         }
     }

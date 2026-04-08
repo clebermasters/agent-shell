@@ -12,7 +12,7 @@ class FileBrowserRepository @Inject constructor(
     companion object {
         private val FILE_TYPES = setOf(
             "files-list",
-            "file-deleted",
+            "files-deleted",
             "file-renamed",
             "file-operation-error",
             "binary-file-content",
@@ -31,7 +31,7 @@ class FileBrowserRepository @Inject constructor(
     }
 
     fun deleteFile(path: String, recursive: Boolean = false) {
-        wsService.send(mapOf("type" to "delete-file", "path" to path, "recursive" to recursive))
+        wsService.send(mapOf("type" to "delete-files", "paths" to listOf(path), "recursive" to recursive))
     }
 
     fun renameFile(path: String, newName: String) {

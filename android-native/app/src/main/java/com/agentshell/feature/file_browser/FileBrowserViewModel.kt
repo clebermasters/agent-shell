@@ -192,7 +192,7 @@ class FileBrowserViewModel @Inject constructor(
             repository.filteredFileEvents().collect { msg ->
                 when (msg["type"] as? String) {
                     "files-list" -> handleFileList(msg)
-                    "file-deleted" -> handleFileDeleted(msg)
+                    "files-deleted" -> handleFilesDeleted(msg)
                     "file-renamed" -> handleFileRenamed(msg)
                     "file-operation-error" -> handleError(msg)
                     "binary-file-content" -> handleBinaryFileContent(msg)
@@ -211,9 +211,13 @@ class FileBrowserViewModel @Inject constructor(
         _state.update { it.copy(entries = entries, isLoading = false) }
     }
 
-    private fun handleFileDeleted(msg: Map<String, Any?>) {
-        val path = msg["path"] as? String ?: return
-        _state.update { s -> s.copy(entries = s.entries.filter { it.path != path }) }
+    @Suppress("UNCHECKED_CAST")
+    private fun handleFilesDeleted(msg: Map<String, Any?>) {
+        val success = msg["success"] as? Boolean ?: false
+        if (!success) {
+            val error = msg["error"] as? String ?: "Delete failed"
+            _state.update { it.copy(error = error) }
+        }
         // Refresh directory after delete
         repository.listDirectory(_state.value.currentPath)
     }

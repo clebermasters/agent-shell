@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:xterm/xterm.dart';
+import 'package:shellterm/shellterm.dart';
 import 'websocket_service.dart';
 
 // flutter_pty uses dart:ffi which is not available on web

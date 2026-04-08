@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:xterm/xterm.dart';
+import 'package:shellterm/shellterm.dart';
 
 /// Full-screen overlay that extracts terminal buffer text and displays it
 /// using Flutter's native [SelectableText] widget. This completely bypasses

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:xterm/xterm.dart';
+import 'package:shellterm/shellterm.dart';
 import 'package:flutter_background_service/flutter_background_service.dart'
     if (dart.library.html) '../../../core/utils/background_service_stub.dart';
 import 'package:shared_preferences/shared_preferences.dart';

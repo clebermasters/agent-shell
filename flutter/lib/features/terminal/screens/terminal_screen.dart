@@ -191,7 +191,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     }
 
     // Send to backend via terminal provider
-    ref.read(terminalProvider.notifier).sendData(session, finalData);
+    if (!mounted) return;
+    _cachedNotifier?.sendData(session, finalData);
 
     // Reset soft modifiers if they were used
     if (wasModified) {
@@ -276,11 +277,13 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   }
 
   void _handleResize(int cols, int rows) {
-    ref.read(terminalProvider.notifier).resize(widget.sessionName, cols, rows);
+    if (!mounted) return;
+    _cachedNotifier?.resize(widget.sessionName, cols, rows);
   }
 
   void _handleInput(String data) {
-    ref.read(terminalProvider.notifier).sendData(widget.sessionName, data);
+    if (!mounted) return;
+    _cachedNotifier?.sendData(widget.sessionName, data);
   }
 
   void _openFileBrowser() {
@@ -368,7 +371,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   }
 
   Future<void> _handleVoiceButton(TerminalState terminalState) async {
-    final terminalNotifier = ref.read(terminalProvider.notifier);
+    if (!mounted) return;
+    final terminalNotifier = _cachedNotifier;
+    if (terminalNotifier == null) return;
 
     if (terminalState.isRecording) {
       final audioPath = await terminalNotifier.stopVoiceRecording();
@@ -451,7 +456,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     if (_lastKeyboardVisible && !isNativeKeyboardVisible) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        final terminal = ref.read(terminalProvider).terminal;
+        final terminal = terminalState.terminal;
         if (terminal != null) {
           final cols = terminal.viewWidth;
           final rows = terminal.viewHeight;

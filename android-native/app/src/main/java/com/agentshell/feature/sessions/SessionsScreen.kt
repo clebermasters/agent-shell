@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
@@ -79,6 +80,7 @@ fun SessionsScreen(
     onNavigateToChat: (sessionName: String, windowIndex: Int) -> Unit,
     onNavigateToAcpChat: (sessionId: String, cwd: String) -> Unit,
     onNavigateToHosts: () -> Unit,
+    onNavigateToGit: (sessionName: String, path: String, isAcp: Boolean) -> Unit = { _, _, _ -> },
     viewModel: SessionsViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -186,6 +188,7 @@ fun SessionsScreen(
                         onKill = { session ->
                             viewModel.killSession(session.name)
                         },
+                        onGit = { session -> onNavigateToGit(session.name, "", false) },
                     )
                     1 -> AcpSessionList(
                         sessions = uiState.acpSessions,
@@ -201,6 +204,7 @@ fun SessionsScreen(
                         },
                         onLongPress = { session -> viewModel.enterSelectionMode(session.sessionId) },
                         onDelete = { session -> viewModel.deleteAcpSession(session.sessionId) },
+                        onGit = { session -> onNavigateToGit(session.sessionId, session.cwd, true) },
                     )
                 }
             }
@@ -229,6 +233,7 @@ private fun TmuxSessionList(
     onTap: (TmuxSession) -> Unit,
     onChat: (TmuxSession) -> Unit,
     onKill: (TmuxSession) -> Unit,
+    onGit: (TmuxSession) -> Unit,
 ) {
     if (isLoading && sessions.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -253,6 +258,7 @@ private fun TmuxSessionList(
                 onTap = { onTap(session) },
                 onChat = { onChat(session) },
                 onKill = { onKill(session) },
+                onGit = { onGit(session) },
             )
         }
     }
@@ -265,6 +271,7 @@ private fun TmuxSessionCard(
     onTap: () -> Unit,
     onChat: () -> Unit,
     onKill: () -> Unit,
+    onGit: () -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showKillDialog by remember { mutableStateOf(false) }
@@ -315,12 +322,27 @@ private fun TmuxSessionCard(
                 Spacer(Modifier.width(4.dp))
                 Text("Chat", fontSize = 12.sp)
             }
+            Spacer(Modifier.width(6.dp))
+            OutlinedButton(
+                onClick = onGit,
+                modifier = Modifier.height(30.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) {
+                Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Git", fontSize = 12.sp)
+            }
             Spacer(Modifier.width(4.dp))
             Box {
                 IconButton(onClick = { showMenu = true }, modifier = Modifier.size(30.dp)) {
                     Icon(Icons.Default.MoreVert, contentDescription = "Options", modifier = Modifier.size(18.dp))
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Git") },
+                        leadingIcon = { Icon(Icons.Default.Code, null) },
+                        onClick = { showMenu = false; onGit() },
+                    )
                     DropdownMenuItem(
                         text = { Text("Kill Session", color = MaterialTheme.colorScheme.error) },
                         leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
@@ -358,6 +380,7 @@ private fun AcpSessionList(
     onTap: (AcpSession) -> Unit,
     onLongPress: (AcpSession) -> Unit,
     onDelete: (AcpSession) -> Unit,
+    onGit: (AcpSession) -> Unit,
 ) {
     if (isLoading && sessions.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -384,6 +407,7 @@ private fun AcpSessionList(
                 onTap = { onTap(session) },
                 onLongPress = { onLongPress(session) },
                 onDelete = { onDelete(session) },
+                onGit = { onGit(session) },
             )
         }
     }
@@ -398,6 +422,7 @@ private fun AcpSessionCard(
     onTap: () -> Unit,
     onLongPress: () -> Unit,
     onDelete: () -> Unit,
+    onGit: () -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -430,18 +455,29 @@ private fun AcpSessionCard(
             supportingContent = { Text(session.cwd, style = MaterialTheme.typography.bodySmall) },
             trailingContent = {
                 if (!isSelectionMode) {
-                    Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.Edit, contentDescription = "Options")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(
+                            onClick = onGit,
+                            modifier = Modifier.height(30.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                        ) {
+                            Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Git", fontSize = 12.sp)
                         }
-                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
-                                },
-                                onClick = { showMenu = false; showDeleteDialog = true },
-                            )
+                        Box {
+                            IconButton(onClick = { showMenu = true }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Options")
+                            }
+                            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                                    },
+                                    onClick = { showMenu = false; showDeleteDialog = true },
+                                )
+                            }
                         }
                     }
                 }

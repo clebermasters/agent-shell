@@ -4,6 +4,7 @@ mod client_manager;
 mod cron_cmds;
 mod dotfiles_cmds;
 mod file_cmds;
+mod git_cmds;
 mod session_cmds;
 mod system_cmds;
 mod terminal_cmds;
@@ -304,6 +305,23 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         | WebSocketMessage::ReadBinaryFile { .. }
         | WebSocketMessage::WriteFile { .. } => {
             file_cmds::handle(msg, &state.message_tx).await?;
+        }
+
+        // Git operations — delegated to git_cmds
+        WebSocketMessage::GitStatus { .. }
+        | WebSocketMessage::GitDiff { .. }
+        | WebSocketMessage::GitLog { .. }
+        | WebSocketMessage::GitBranches { .. }
+        | WebSocketMessage::GitCheckout { .. }
+        | WebSocketMessage::GitCreateBranch { .. }
+        | WebSocketMessage::GitDeleteBranch { .. }
+        | WebSocketMessage::GitStage { .. }
+        | WebSocketMessage::GitUnstage { .. }
+        | WebSocketMessage::GitCommit { .. }
+        | WebSocketMessage::GitPush { .. }
+        | WebSocketMessage::GitPull { .. }
+        | WebSocketMessage::GitStash { .. } => {
+            git_cmds::handle(msg, &state.message_tx).await?;
         }
 
         // ACP handlers — delegated to acp_cmds

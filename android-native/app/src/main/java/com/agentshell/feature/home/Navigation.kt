@@ -25,6 +25,7 @@ import com.agentshell.feature.dotfiles.DotfileEditorScreen
 import com.agentshell.feature.dotfiles.DotfileTemplatesScreen
 import com.agentshell.feature.dotfiles.DotfilesScreen
 import com.agentshell.feature.file_browser.FileBrowserScreen
+import com.agentshell.feature.git.GitScreen
 import com.agentshell.feature.splitscreen.SplitScreenScreen
 import com.agentshell.feature.hosts.HostSelectionScreen
 import com.agentshell.feature.sessions.SessionsScreen
@@ -45,8 +46,13 @@ object Routes {
     const val DOTFILE_EDITOR = "dotfile_editor"
     const val DOTFILE_TEMPLATES = "dotfile_templates"
     const val SPLIT_SCREEN = "split_screen?layoutId={layoutId}"
+    const val GIT = "git/{sessionName}?path={path}&isAcp={isAcp}"
     const val LOGIN = "login"
 
+    fun git(sessionName: String, path: String = "", isAcp: Boolean = false): String {
+        val encodedPath = android.net.Uri.encode(path, "")
+        return "git/$sessionName?path=$encodedPath&isAcp=$isAcp"
+    }
     fun splitScreen(layoutId: String? = null) = if (layoutId != null) "split_screen?layoutId=$layoutId" else "split_screen"
     fun terminal(sessionName: String, isSwipeNav: Boolean = false) = "terminal/$sessionName?isSwipeNav=$isSwipeNav"
     fun chat(sessionName: String, windowIndex: Int, isAcp: Boolean = false, isSwipeNav: Boolean = false) = "chat/$sessionName/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav"
@@ -79,6 +85,7 @@ fun AgentShellNavHost() {
                         onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
                         onNavigateToAcpChat = { id, _ -> navController.navigate(Routes.chat(id, 0, isAcp = true)) },
                         onNavigateToHosts = { navController.navigate(Routes.HOST_SELECTION) },
+                        onNavigateToGit = { name, path, isAcp -> navController.navigate(Routes.git(name, path, isAcp)) },
                     )
                 },
                 cronContent = {
@@ -267,6 +274,27 @@ fun AgentShellNavHost() {
             val layoutId = backStackEntry.arguments?.getString("layoutId")
             SplitScreenScreen(
                 layoutId = layoutId,
+                onNavigateBack = { navController.popBackStack() },
+            )
+        }
+
+        // ── Git Repository Manager ───────────────────────────────────────────
+        composable(
+            route = Routes.GIT,
+            arguments = listOf(
+                navArgument("sessionName") { type = NavType.StringType },
+                navArgument("path") { type = NavType.StringType; defaultValue = "/" },
+                navArgument("isAcp") { type = NavType.BoolType; defaultValue = false },
+            ),
+        ) { backStackEntry ->
+            val sessionName = backStackEntry.arguments?.getString("sessionName") ?: ""
+            val rawPath = backStackEntry.arguments?.getString("path") ?: ""
+            val path = rawPath.takeIf { it.isNotEmpty() && it != "/" }
+            val isAcp = backStackEntry.arguments?.getBoolean("isAcp") ?: false
+            GitScreen(
+                sessionName = sessionName,
+                initialPath = path,
+                isAcp = isAcp,
                 onNavigateBack = { navController.popBackStack() },
             )
         }

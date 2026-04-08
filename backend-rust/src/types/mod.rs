@@ -419,6 +419,88 @@ pub enum WebSocketMessage {
         #[serde(rename = "destinationPath")]
         destination_path: String,
     },
+    // Git operations
+    GitStatus {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+    },
+    GitDiff {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "filePath")]
+        file_path: Option<String>,
+        staged: Option<bool>,
+    },
+    GitLog {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    },
+    GitBranches {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+    },
+    GitCheckout {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        branch: String,
+    },
+    GitCreateBranch {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        branch: String,
+        #[serde(rename = "startPoint")]
+        start_point: Option<String>,
+    },
+    GitDeleteBranch {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        branch: String,
+    },
+    GitStage {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        files: Vec<String>,
+    },
+    GitUnstage {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        files: Vec<String>,
+    },
+    GitCommit {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        message: String,
+    },
+    GitPush {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        remote: Option<String>,
+        branch: Option<String>,
+    },
+    GitPull {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+    },
+    GitStash {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        action: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -857,6 +939,92 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    // Git responses
+    GitStatusResult {
+        branch: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        upstream: Option<String>,
+        ahead: i32,
+        behind: i32,
+        staged: Vec<GitFileChange>,
+        modified: Vec<GitFileChange>,
+        untracked: Vec<String>,
+        conflicts: Vec<String>,
+    },
+    GitDiffResult {
+        #[serde(rename = "filePath")]
+        file_path: String,
+        diff: String,
+        additions: u32,
+        deletions: u32,
+    },
+    GitLogResult {
+        commits: Vec<GitCommitInfo>,
+        #[serde(rename = "hasMore")]
+        has_more: bool,
+    },
+    GitBranchesResult {
+        branches: Vec<GitBranchInfo>,
+    },
+    GitGraphResult {
+        nodes: Vec<GitGraphNode>,
+        #[serde(rename = "hasMore")]
+        has_more: bool,
+    },
+    GitOperationResult {
+        operation: String,
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileChange {
+    pub path: String,
+    pub status: String,       // "M", "A", "D", "R", "C"
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitInfo {
+    pub hash: String,
+    pub short_hash: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
+    pub parents: Vec<String>,
+    pub refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchInfo {
+    pub name: String,
+    pub current: bool,
+    pub tracking: Option<String>,
+    pub ahead: Option<i32>,
+    pub behind: Option<i32>,
+    pub last_commit: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitGraphNode {
+    pub hash: String,
+    pub short_hash: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
+    pub parents: Vec<String>,
+    pub refs: Vec<String>,
+    pub column: i32,
+    pub color: u32,
 }
 
 #[cfg(test)]

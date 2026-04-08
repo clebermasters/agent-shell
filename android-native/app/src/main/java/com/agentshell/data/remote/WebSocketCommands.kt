@@ -618,7 +618,162 @@ fun WebSocketService.renameFile(path: String, newName: String) {
 }
 
 // =============================================================================
-// 10. AUDIO COMMANDS
+// 10. GIT COMMANDS
+// =============================================================================
+
+/** Request git status for a session's working directory. */
+fun WebSocketService.gitStatus(sessionName: String? = null, path: String? = null) {
+    send(buildMap {
+        put("type", "git-status")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+    })
+}
+
+/** Request a diff for a specific file or the whole working tree. */
+fun WebSocketService.gitDiff(
+    sessionName: String? = null,
+    path: String? = null,
+    filePath: String? = null,
+    staged: Boolean = false,
+) {
+    send(buildMap {
+        put("type", "git-diff")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        if (filePath != null) put("filePath", filePath)
+        if (staged) put("staged", true)
+    })
+}
+
+/** Request git log (commit history). */
+fun WebSocketService.gitLog(
+    sessionName: String? = null,
+    path: String? = null,
+    limit: Int = 50,
+    offset: Int = 0,
+) {
+    send(buildMap {
+        put("type", "git-log")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("limit", limit)
+        put("offset", offset)
+    })
+}
+
+/** Request list of local branches. */
+fun WebSocketService.gitBranches(sessionName: String? = null, path: String? = null) {
+    send(buildMap {
+        put("type", "git-branches")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+    })
+}
+
+/** Switch to a branch. */
+fun WebSocketService.gitCheckout(sessionName: String? = null, path: String? = null, branch: String) {
+    send(buildMap {
+        put("type", "git-checkout")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("branch", branch)
+    })
+}
+
+/** Create a new branch. */
+fun WebSocketService.gitCreateBranch(
+    sessionName: String? = null,
+    path: String? = null,
+    branch: String,
+    startPoint: String? = null,
+) {
+    send(buildMap {
+        put("type", "git-create-branch")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("branch", branch)
+        if (startPoint != null) put("startPoint", startPoint)
+    })
+}
+
+/** Delete a branch. */
+fun WebSocketService.gitDeleteBranch(sessionName: String? = null, path: String? = null, branch: String) {
+    send(buildMap {
+        put("type", "git-delete-branch")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("branch", branch)
+    })
+}
+
+/** Stage files for commit. */
+fun WebSocketService.gitStage(sessionName: String? = null, path: String? = null, files: List<String>) {
+    send(buildMap {
+        put("type", "git-stage")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("files", files)
+    })
+}
+
+/** Unstage files. */
+fun WebSocketService.gitUnstage(sessionName: String? = null, path: String? = null, files: List<String>) {
+    send(buildMap {
+        put("type", "git-unstage")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("files", files)
+    })
+}
+
+/** Commit staged changes. */
+fun WebSocketService.gitCommit(sessionName: String? = null, path: String? = null, message: String) {
+    send(buildMap {
+        put("type", "git-commit")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("message", message)
+    })
+}
+
+/** Push to remote. */
+fun WebSocketService.gitPush(
+    sessionName: String? = null,
+    path: String? = null,
+    remote: String? = null,
+    branch: String? = null,
+) {
+    send(buildMap {
+        put("type", "git-push")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        if (remote != null) put("remote", remote)
+        if (branch != null) put("branch", branch)
+    })
+}
+
+/** Pull from remote. */
+fun WebSocketService.gitPull(sessionName: String? = null, path: String? = null) {
+    send(buildMap {
+        put("type", "git-pull")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+    })
+}
+
+/** Stash operations: push, pop, list. */
+fun WebSocketService.gitStash(sessionName: String? = null, path: String? = null, action: String) {
+    send(buildMap {
+        put("type", "git-stash")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("action", action)
+    })
+}
+
+// =============================================================================
+// 11. AUDIO COMMANDS
 // =============================================================================
 
 /**

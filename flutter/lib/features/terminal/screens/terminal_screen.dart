@@ -54,6 +54,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   // Voice button visibility (persisted)
   bool _showVoiceButton = true;
 
+  // Cached notifier to use in dispose (ref is invalid after dispose)
+  TerminalNotifier? _cachedNotifier;
+
   // Modifier states for accessory bar + native keyboard
   bool _ctrlActive = false;
   bool _altActive = false;
@@ -102,7 +105,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
 
     // Connect to the terminal session
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final terminalNotifier = ref.read(terminalProvider.notifier);
+      _cachedNotifier = ref.read(terminalProvider.notifier);
+      final terminalNotifier = _cachedNotifier!;
       terminalNotifier.connect(
         widget.sessionName,
         windowIndex: widget.windowIndex,
@@ -126,18 +130,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     _focusNode.removeListener(_onFocusChange);
     WidgetsBinding.instance.removeObserver(this);
     _clearActiveSession();
-    ref.read(terminalProvider.notifier).disconnect();
+    _cachedNotifier?.disconnect();
     _focusNode.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
     if (state == AppLifecycleState.paused) {
       _wasKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
     } else if (state == AppLifecycleState.resumed) {
       // Ensure the websocket is alive or force it to reconnect
-      ref.read(terminalProvider.notifier).checkConnection();
+      _cachedNotifier?.checkConnection();
 
       if (_wasKeyboardVisible && !_showCustomKeyboard && !_isSelectionMode) {
         Future.delayed(const Duration(milliseconds: 500), () {

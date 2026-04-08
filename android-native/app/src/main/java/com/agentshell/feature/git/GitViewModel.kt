@@ -60,6 +60,8 @@ data class GitUiState(
     // Commit detail
     val showCommitDetailSheet: Boolean = false,
     val selectedCommit: GitCommitInfo? = null,
+    val commitFiles: List<GitFileChange> = emptyList(),
+    val isLoadingCommitFiles: Boolean = false,
 
     // Operations
     val operationResult: GitOperationResult? = null,
@@ -261,11 +263,19 @@ class GitViewModel @Inject constructor(
     // -- Commit detail --
 
     fun showCommitDetail(commit: GitCommitInfo) {
-        _state.update { it.copy(showCommitDetailSheet = true, selectedCommit = commit) }
+        _state.update { it.copy(showCommitDetailSheet = true, selectedCommit = commit, commitFiles = emptyList(), isLoadingCommitFiles = true) }
+        val s = _state.value
+        repository.requestCommitFiles(commit.hash, s.sessionName, s.path)
     }
 
     fun hideCommitDetail() {
-        _state.update { it.copy(showCommitDetailSheet = false, selectedCommit = null) }
+        _state.update { it.copy(showCommitDetailSheet = false, selectedCommit = null, commitFiles = emptyList()) }
+    }
+
+    fun viewCommitFileDiff(commitHash: String, filePath: String) {
+        _state.update { it.copy(isLoadingDiff = true, showDiffSheet = true, diffIsStaged = false) }
+        val s = _state.value
+        repository.requestCommitDiff(commitHash, filePath, s.sessionName, s.path)
     }
 
     // -- Clear messages --
@@ -290,6 +300,7 @@ class GitViewModel @Inject constructor(
                     "git-diff-result" -> handleDiffResult(msg)
                     "git-log-result" -> handleLogResult(msg)
                     "git-branches-result" -> handleBranchesResult(msg)
+                    "git-commit-files-result" -> handleCommitFilesResult(msg)
                     "git-operation-result" -> handleOperationResult(msg)
                     "error" -> {
                         val message = msg["message"] as? String ?: "Unknown error"
@@ -387,6 +398,12 @@ class GitViewModel @Inject constructor(
         } ?: emptyList()
 
         _state.update { it.copy(branches = branches, isLoadingBranches = false) }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun handleCommitFilesResult(msg: Map<String, Any?>) {
+        val files = (msg["files"] as? List<Map<String, Any?>>)?.map { parseFileChange(it) } ?: emptyList()
+        _state.update { it.copy(commitFiles = files, isLoadingCommitFiles = false) }
     }
 
     private fun handleOperationResult(msg: Map<String, Any?>) {

@@ -501,6 +501,22 @@ pub enum WebSocketMessage {
         path: Option<String>,
         action: String,
     },
+    GitCommitFiles {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "commitHash")]
+        commit_hash: String,
+    },
+    GitCommitDiff {
+        #[serde(rename = "sessionName")]
+        session_name: Option<String>,
+        path: Option<String>,
+        #[serde(rename = "commitHash")]
+        commit_hash: String,
+        #[serde(rename = "filePath")]
+        file_path: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -978,6 +994,11 @@ pub enum ServerMessage {
         message: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+    },
+    GitCommitFilesResult {
+        #[serde(rename = "commitHash")]
+        commit_hash: String,
+        files: Vec<GitFileChange>,
     },
 }
 

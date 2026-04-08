@@ -75,6 +75,12 @@ pub(crate) async fn handle(
         WebSocketMessage::GitStash { session_name, path, action } => {
             handle_git_stash(tx, session_name, path, action).await?;
         }
+        WebSocketMessage::GitCommitFiles { session_name, path, commit_hash } => {
+            handle_git_commit_files(tx, session_name, path, commit_hash).await?;
+        }
+        WebSocketMessage::GitCommitDiff { session_name, path, commit_hash, file_path } => {
+            handle_git_commit_diff(tx, session_name, path, commit_hash, file_path).await?;
+        }
         _ => {}
     }
     Ok(())
@@ -736,6 +742,137 @@ async fn handle_git_stash(
         .await;
 
     send_operation_result(tx, "stash", output).await
+}
+
+// ---------------------------------------------------------------------------
+// git commit-files (files changed in a specific commit)
+// ---------------------------------------------------------------------------
+async fn handle_git_commit_files(
+    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    session_name: Option<String>,
+    path: Option<String>,
+    commit_hash: String,
+) -> anyhow::Result<()> {
+    let cwd = match resolve_cwd(&session_name, &path) {
+        Ok(c) => c,
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
+    };
+
+    // Get file list with status and numstat in one shot
+    let output = tokio::process::Command::new("git")
+        .args(["diff-tree", "--no-commit-id", "-r", "--name-status", &commit_hash])
+        .current_dir(&cwd)
+        .output()
+        .await;
+
+    let numstat_output = tokio::process::Command::new("git")
+        .args(["diff-tree", "--no-commit-id", "-r", "--numstat", &commit_hash])
+        .current_dir(&cwd)
+        .output()
+        .await;
+
+    match (output, numstat_output) {
+        (Ok(status_out), Ok(numstat_out)) => {
+            let status_str = String::from_utf8_lossy(&status_out.stdout);
+            let numstat_str = String::from_utf8_lossy(&numstat_out.stdout);
+
+            // Parse numstat into a map: file -> (adds, dels)
+            let mut stats: std::collections::HashMap<String, (Option<u32>, Option<u32>)> = std::collections::HashMap::new();
+            for line in numstat_str.lines() {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() >= 3 {
+                    let adds = parts[0].parse::<u32>().ok();
+                    let dels = parts[1].parse::<u32>().ok();
+                    stats.insert(parts[2].to_string(), (adds, dels));
+                }
+            }
+
+            let mut files = Vec::new();
+            for line in status_str.lines() {
+                if line.is_empty() { continue; }
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() >= 2 {
+                    let status = parts[0].chars().next().unwrap_or('M').to_string();
+                    let file_path = parts[1].to_string();
+                    let (additions, deletions) = stats.get(&file_path).copied().unwrap_or((None, None));
+                    files.push(GitFileChange {
+                        path: file_path,
+                        status,
+                        additions,
+                        deletions,
+                    });
+                }
+            }
+
+            send_message(tx, ServerMessage::GitCommitFilesResult {
+                commit_hash,
+                files,
+            }).await?;
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            error!("git diff-tree failed: {}", e);
+            send_message(tx, ServerMessage::Error {
+                message: format!("git diff-tree failed: {}", e),
+            }).await?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// git commit-diff (diff for a specific file in a specific commit)
+// ---------------------------------------------------------------------------
+async fn handle_git_commit_diff(
+    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    session_name: Option<String>,
+    path: Option<String>,
+    commit_hash: String,
+    file_path: String,
+) -> anyhow::Result<()> {
+    let cwd = match resolve_cwd(&session_name, &path) {
+        Ok(c) => c,
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
+    };
+
+    let output = tokio::process::Command::new("git")
+        .args(["diff", &format!("{}^..{}", commit_hash, commit_hash), "--", &file_path])
+        .current_dir(&cwd)
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            let diff = String::from_utf8_lossy(&out.stdout).to_string();
+            let mut additions = 0u32;
+            let mut deletions = 0u32;
+            for line in diff.lines() {
+                if line.starts_with('+') && !line.starts_with("+++") {
+                    additions += 1;
+                } else if line.starts_with('-') && !line.starts_with("---") {
+                    deletions += 1;
+                }
+            }
+            send_message(tx, ServerMessage::GitDiffResult {
+                file_path,
+                diff,
+                additions,
+                deletions,
+            }).await?;
+        }
+        Err(e) => {
+            error!("git diff for commit failed: {}", e);
+            send_message(tx, ServerMessage::Error {
+                message: format!("git diff failed: {}", e),
+            }).await?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

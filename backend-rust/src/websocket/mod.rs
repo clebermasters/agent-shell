@@ -320,7 +320,9 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         | WebSocketMessage::GitCommit { .. }
         | WebSocketMessage::GitPush { .. }
         | WebSocketMessage::GitPull { .. }
-        | WebSocketMessage::GitStash { .. } => {
+        | WebSocketMessage::GitStash { .. }
+        | WebSocketMessage::GitCommitFiles { .. }
+        | WebSocketMessage::GitCommitDiff { .. } => {
             git_cmds::handle(msg, &state.message_tx).await?;
         }
 

@@ -230,7 +230,7 @@ fun GitScreen(
         CommitBottomSheet(state, viewModel)
     }
     if (state.showCommitDetailSheet && state.selectedCommit != null) {
-        CommitDetailBottomSheet(state.selectedCommit!!, viewModel)
+        CommitDetailBottomSheet(state.selectedCommit!!, state, viewModel)
     }
 }
 
@@ -1013,10 +1013,12 @@ private fun CommitBottomSheet(state: GitUiState, viewModel: GitViewModel) {
 // COMMIT DETAIL BOTTOM SHEET
 // =============================================================================
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun CommitDetailBottomSheet(commit: GitCommitInfo, viewModel: GitViewModel) {
+private fun CommitDetailBottomSheet(commit: GitCommitInfo, state: GitUiState, viewModel: GitViewModel) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
 
     ModalBottomSheet(
         onDismissRequest = { viewModel.hideCommitDetail() },
@@ -1070,6 +1072,89 @@ private fun CommitDetailBottomSheet(commit: GitCommitInfo, viewModel: GitViewMod
             DetailRow("Full Hash", commit.hash)
             if (commit.parents.isNotEmpty()) {
                 DetailRow("Parents", commit.parents.joinToString(", ") { it.take(7) })
+            }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(8.dp))
+
+            // Changed files section
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Changed Files",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (state.commitFiles.isNotEmpty()) {
+                    Text("${state.commitFiles.size} files", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+
+            if (state.isLoadingCommitFiles) {
+                Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+            } else if (state.commitFiles.isEmpty()) {
+                Text("No files changed", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(vertical = 8.dp))
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxWidth().height(250.dp)) {
+                    items(state.commitFiles, key = { it.path }) { file ->
+                        val statusColor = when (file.status) {
+                            "A" -> AdditionColor
+                            "D" -> DeletionColor
+                            "M" -> ModifiedColor
+                            "R" -> UntrackedColor
+                            else -> ModifiedColor
+                        }
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                                .combinedClickable(
+                                    onClick = { viewModel.viewCommitFileDiff(commit.hash, file.path) },
+                                    onLongClick = {
+                                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(file.path))
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    },
+                                ),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    file.status,
+                                    color = statusColor,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.width(18.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(file.filename, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (file.directory.isNotEmpty()) {
+                                        Text(file.directory, fontSize = 9.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                                if (file.additions != null || file.deletions != null) {
+                                    Text(
+                                        buildAnnotatedString {
+                                            file.additions?.let { withStyle(SpanStyle(color = AdditionColor)) { append("+$it") } }
+                                            if (file.additions != null && file.deletions != null) append(" ")
+                                            file.deletions?.let { withStyle(SpanStyle(color = DeletionColor)) { append("-$it") } }
+                                        },
+                                        fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

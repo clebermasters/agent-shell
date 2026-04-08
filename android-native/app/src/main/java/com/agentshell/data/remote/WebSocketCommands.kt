@@ -762,6 +762,27 @@ fun WebSocketService.gitPull(sessionName: String? = null, path: String? = null) 
     })
 }
 
+/** Get files changed in a specific commit. */
+fun WebSocketService.gitCommitFiles(sessionName: String? = null, path: String? = null, commitHash: String) {
+    send(buildMap {
+        put("type", "git-commit-files")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("commitHash", commitHash)
+    })
+}
+
+/** Get diff for a specific file in a specific commit. */
+fun WebSocketService.gitCommitDiff(sessionName: String? = null, path: String? = null, commitHash: String, filePath: String) {
+    send(buildMap {
+        put("type", "git-commit-diff")
+        if (sessionName != null) put("sessionName", sessionName)
+        if (path != null) put("path", path)
+        put("commitHash", commitHash)
+        put("filePath", filePath)
+    })
+}
+
 /** Stash operations: push, pop, list. */
 fun WebSocketService.gitStash(sessionName: String? = null, path: String? = null, action: String) {
     send(buildMap {

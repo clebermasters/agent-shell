@@ -14,6 +14,8 @@ import com.agentshell.data.remote.gitStage
 import com.agentshell.data.remote.gitStash
 import com.agentshell.data.remote.gitStatus
 import com.agentshell.data.remote.gitUnstage
+import com.agentshell.data.remote.gitCommitFiles
+import com.agentshell.data.remote.gitCommitDiff
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
 import javax.inject.Inject
@@ -31,6 +33,7 @@ class GitRepository @Inject constructor(
             "git-branches-result",
             "git-graph-result",
             "git-operation-result",
+            "git-commit-files-result",
             "error",
         )
     }
@@ -104,5 +107,13 @@ class GitRepository @Inject constructor(
 
     fun stash(action: String, sessionName: String? = null, path: String? = null) {
         wsService.gitStash(sessionName, path, action)
+    }
+
+    fun requestCommitFiles(commitHash: String, sessionName: String? = null, path: String? = null) {
+        wsService.gitCommitFiles(sessionName, path, commitHash)
+    }
+
+    fun requestCommitDiff(commitHash: String, filePath: String, sessionName: String? = null, path: String? = null) {
+        wsService.gitCommitDiff(sessionName, path, commitHash, filePath)
     }
 }

@@ -520,6 +520,8 @@ class SessionsViewModel @Inject constructor(
             startupCommand = favorite.startupCommand,
             startupArgs = favorite.startupArgs,
         )
+        val tagIds = _uiState.value.favoriteTagMap[favorite.id] ?: emptyList()
+        tagIds.forEach { tagId -> wsService.assignTagToSession(favorite.name, tagId) }
         viewModelScope.launch {
             delay(500)
             requestSessions()

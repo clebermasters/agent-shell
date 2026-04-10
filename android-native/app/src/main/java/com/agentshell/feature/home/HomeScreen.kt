@@ -53,7 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.agentshell.core.widgets.ConnectionStatusBanner
-import com.agentshell.data.model.ClaudeUsage
+import com.agentshell.data.model.AiUsage
 import com.agentshell.feature.system.AlertBanner
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -308,11 +308,11 @@ private fun formatResetCountdown(resetsAt: String): String {
 }
 
 @Composable
-private fun ClaudeUsageBanner(usage: ClaudeUsage) {
+private fun ClaudeUsageBanner(usage: AiUsage) {
     // Hide banner entirely when there's an error (not logged in, no credentials, etc.)
     if (usage.error != null) return
-    val fh = usage.fiveHour
-    val sd = usage.sevenDay
+    val fh = usage.primary
+    val sd = usage.secondary
     if (fh == null && sd == null) return
 
     Row(
@@ -346,13 +346,15 @@ private fun ClaudeUsageBanner(usage: ClaudeUsage) {
         }
         // Right: reset countdown
         fh?.let {
-            val countdown = formatResetCountdown(it.resetsAt)
-            if (countdown.isNotEmpty()) {
-                Text(
-                    text = "resets $countdown",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            it.resetsAt?.let { resetsAt ->
+                val countdown = formatResetCountdown(resetsAt)
+                if (countdown.isNotEmpty()) {
+                    Text(
+                        text = "resets $countdown",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

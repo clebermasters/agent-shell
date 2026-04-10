@@ -89,7 +89,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.unit.sp
-import com.agentshell.data.model.ClaudeUsage
+import com.agentshell.data.model.AiUsage
 import com.agentshell.feature.common.SwipeableSessionContainer
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -110,6 +110,7 @@ fun ChatScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
+    val codexUsage by viewModel.codexUsage.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var showScrollButton by remember { mutableStateOf(false) }
@@ -315,13 +316,20 @@ fun ChatScreen(
                 .padding(innerPadding),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Claude usage banner (only when session runs Claude)
-                if (uiState.detectedTool == "claude") {
-                    val usage = claudeUsage?.takeIf { it.error == null }
-                    val hasApiUsage = usage?.fiveHour != null || usage?.sevenDay != null
+                // Provider usage banner for tmux-backed AI chats
+                if (uiState.detectedTool == "claude" || uiState.detectedTool == "codex") {
+                    val usage = when (uiState.detectedTool) {
+                        "codex" -> codexUsage?.takeIf { it.error == null }
+                        else -> claudeUsage?.takeIf { it.error == null }
+                    }
+                    val hasUsage = usage?.primary != null || usage?.secondary != null
                     val hasCtxUsage = uiState.contextWindowUsage != null
-                    if (hasApiUsage || hasCtxUsage) {
-                        ChatClaudeUsageBanner(usage, uiState.contextWindowUsage, uiState.modelName)
+                    if (hasUsage || hasCtxUsage) {
+                        ChatUsageBanner(
+                            usage = usage,
+                            contextWindowUsage = uiState.contextWindowUsage,
+                            modelName = uiState.modelName,
+                        )
                     }
                 }
 
@@ -755,12 +763,21 @@ private fun chatResetCountdown(resetsAt: String): String {
 }
 
 @Composable
-private fun ChatClaudeUsageBanner(usage: ClaudeUsage?, contextWindowUsage: Double? = null, modelName: String? = null) {
-    val fh = usage?.fiveHour
-    val sd = usage?.sevenDay
+private fun ChatUsageBanner(usage: AiUsage?, contextWindowUsage: Double? = null, modelName: String? = null) {
+    val primary = usage?.primary
+    val secondary = usage?.secondary
+    val progressValue = primary?.utilization ?: contextWindowUsage
+    val progressColor = progressValue?.let(::chatUsageColor)
+    val metaParts = buildList {
+        usage?.provider?.takeIf { it.isNotBlank() }?.let {
+            add(it.replaceFirstChar { ch -> ch.titlecase() })
+        }
+        usage?.planType?.takeIf { it.isNotBlank() }?.let { add(it.replace('_', ' ')) }
+        usage?.limitName?.takeIf { it.isNotBlank() && !it.equals("codex", ignoreCase = true) }?.let { add(it) }
+        modelName?.takeIf { it.isNotBlank() }?.let { add(it) }
+    }
 
-    // Model name label
-    modelName?.let {
+    if (metaParts.isNotEmpty()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -768,7 +785,7 @@ private fun ChatClaudeUsageBanner(usage: ClaudeUsage?, contextWindowUsage: Doubl
                 .padding(horizontal = 12.dp, vertical = 2.dp),
         ) {
             Text(
-                text = it,
+                text = metaParts.joinToString(" · "),
                 fontSize = 10.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -784,17 +801,17 @@ private fun ChatClaudeUsageBanner(usage: ClaudeUsage?, contextWindowUsage: Doubl
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            fh?.let {
+            primary?.let {
                 Text(
-                    text = "5h ${it.utilization.toInt()}%",
+                    text = "${it.label} ${it.utilization.toInt()}%",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = chatUsageColor(it.utilization),
                 )
             }
-            sd?.let {
+            secondary?.let {
                 Text(
-                    text = "7d ${it.utilization.toInt()}%",
+                    text = "${it.label} ${it.utilization.toInt()}%",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = chatUsageColor(it.utilization),
@@ -809,8 +826,8 @@ private fun ChatClaudeUsageBanner(usage: ClaudeUsage?, contextWindowUsage: Doubl
                 )
             }
         }
-        fh?.let {
-            val countdown = chatResetCountdown(it.resetsAt)
+        primary?.resetsAt?.let { resetsAt ->
+            val countdown = chatResetCountdown(resetsAt)
             if (countdown.isNotEmpty()) {
                 Text(
                     text = "resets $countdown",
@@ -820,11 +837,11 @@ private fun ChatClaudeUsageBanner(usage: ClaudeUsage?, contextWindowUsage: Doubl
             }
         }
     }
-    fh?.let {
+    if (progressValue != null && progressColor != null) {
         LinearProgressIndicator(
-            progress = { (it.utilization / 100.0).toFloat().coerceIn(0f, 1f) },
+            progress = { (progressValue / 100.0).toFloat().coerceIn(0f, 1f) },
             modifier = Modifier.fillMaxWidth().height(2.dp),
-            color = chatUsageColor(it.utilization),
+            color = progressColor,
             trackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         )
     }

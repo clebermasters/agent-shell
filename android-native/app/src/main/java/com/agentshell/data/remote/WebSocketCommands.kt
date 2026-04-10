@@ -591,6 +591,11 @@ fun WebSocketService.requestClaudeUsage() {
     send(mapOf("type" to "get-claude-usage"))
 }
 
+/** Request Codex plan usage metrics. */
+fun WebSocketService.requestCodexUsage() {
+    send(mapOf("type" to "get-codex-usage"))
+}
+
 // =============================================================================
 // 9. FILE COMMANDS
 // =============================================================================

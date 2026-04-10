@@ -1,11 +1,12 @@
 package com.agentshell.data.repository
 
-import com.agentshell.data.model.ClaudeUsage
+import com.agentshell.data.model.AiUsage
 import com.agentshell.data.model.ProcessInfo
 import com.agentshell.data.model.SystemStats
-import com.agentshell.data.model.UsageBucket
+import com.agentshell.data.model.UsageWindow
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.remote.requestClaudeUsage
+import com.agentshell.data.remote.requestCodexUsage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,8 +20,11 @@ class SystemRepository @Inject constructor(
     private val _stats = MutableStateFlow<SystemStats?>(null)
     val stats: StateFlow<SystemStats?> = _stats.asStateFlow()
 
-    private val _claudeUsage = MutableStateFlow<ClaudeUsage?>(null)
-    val claudeUsage: StateFlow<ClaudeUsage?> = _claudeUsage.asStateFlow()
+    private val _claudeUsage = MutableStateFlow<AiUsage?>(null)
+    val claudeUsage: StateFlow<AiUsage?> = _claudeUsage.asStateFlow()
+
+    private val _codexUsage = MutableStateFlow<AiUsage?>(null)
+    val codexUsage: StateFlow<AiUsage?> = _codexUsage.asStateFlow()
 
     fun requestStats() {
         wsService.send(mapOf("type" to "get-stats"))
@@ -30,22 +34,56 @@ class SystemRepository @Inject constructor(
         wsService.requestClaudeUsage()
     }
 
+    fun requestCodexUsage() {
+        wsService.requestCodexUsage()
+    }
+
     @Suppress("UNCHECKED_CAST")
     fun parseClaudeUsage(msg: Map<String, Any?>) {
         try {
-            fun parseBucket(key: String): UsageBucket? {
+            fun parseBucket(key: String, label: String): UsageWindow? {
                 val obj = msg[key] as? Map<String, Any?> ?: return null
-                return UsageBucket(
+                return UsageWindow(
+                    label = label,
                     utilization = (obj["utilization"] as? Number)?.toDouble() ?: return null,
-                    resetsAt = obj["resetsAt"] as? String ?: obj["resets_at"] as? String ?: "",
+                    resetsAt = obj["resetsAt"] as? String ?: obj["resets_at"] as? String,
                 )
             }
             val err = msg["error"] as? String
-            _claudeUsage.value = ClaudeUsage(
-                fiveHour = parseBucket("fiveHour") ?: parseBucket("five_hour"),
-                sevenDay = parseBucket("sevenDay") ?: parseBucket("seven_day"),
-                sevenDaySonnet = parseBucket("sevenDaySonnet") ?: parseBucket("seven_day_sonnet"),
+            _claudeUsage.value = AiUsage(
+                provider = "claude",
+                primary = parseBucket("fiveHour", "5h") ?: parseBucket("five_hour", "5h"),
+                secondary = parseBucket("sevenDay", "7d") ?: parseBucket("seven_day", "7d"),
                 error = err,
+            )
+        } catch (_: Exception) { }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun parseCodexUsage(msg: Map<String, Any?>) {
+        try {
+            fun parseWindow(key: String, fallbackLabel: String): UsageWindow? {
+                val obj = msg[key] as? Map<String, Any?> ?: return null
+                val durationMins = (obj["windowDurationMins"] as? Number)?.toLong()
+                    ?: (obj["window_duration_mins"] as? Number)?.toLong()
+                return UsageWindow(
+                    label = formatWindowLabel(durationMins, fallbackLabel),
+                    utilization = (obj["usedPercent"] as? Number)?.toDouble()
+                        ?: (obj["used_percent"] as? Number)?.toDouble()
+                        ?: return null,
+                    resetsAt = obj["resetsAt"] as? String ?: obj["resets_at"] as? String,
+                    windowDurationMins = durationMins,
+                )
+            }
+
+            _codexUsage.value = AiUsage(
+                provider = "codex",
+                primary = parseWindow("primary", "session"),
+                secondary = parseWindow("secondary", "week"),
+                planType = msg["planType"] as? String ?: msg["plan_type"] as? String,
+                limitId = msg["limitId"] as? String ?: msg["limit_id"] as? String,
+                limitName = msg["limitName"] as? String ?: msg["limit_name"] as? String,
+                error = msg["error"] as? String,
             )
         } catch (_: Exception) { }
     }
@@ -138,5 +176,14 @@ class SystemRepository @Inject constructor(
             hours > 0  -> "${hours}h ${minutes}m"
             else       -> "${minutes}m"
         }
+    }
+
+    private fun formatWindowLabel(durationMins: Long?, fallback: String): String = when {
+        durationMins == null -> fallback
+        durationMins == 300L -> "5h"
+        durationMins == 10080L -> "7d"
+        durationMins % 1440L == 0L -> "${durationMins / 1440L}d"
+        durationMins % 60L == 0L -> "${durationMins / 60L}h"
+        else -> "${durationMins}m"
     }
 }

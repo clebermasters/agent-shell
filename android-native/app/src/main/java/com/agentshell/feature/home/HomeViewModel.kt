@@ -155,6 +155,9 @@ class HomeViewModel @Inject constructor(
                     "claude-usage" -> {
                         systemRepository.parseClaudeUsage(message)
                     }
+                    "codex-usage" -> {
+                        systemRepository.parseCodexUsage(message)
+                    }
                     "sessions-list", "session_list" -> {
                         @Suppress("UNCHECKED_CAST")
                         val rawList = message["sessions"] as? List<Map<String, Any?>> ?: emptyList()
@@ -235,6 +238,7 @@ class HomeViewModel @Inject constructor(
             wsService.connectionStatus.first { it == ConnectionStatus.CONNECTED }
             while (true) {
                 systemRepository.requestClaudeUsage()
+                systemRepository.requestCodexUsage()
                 delay(300_000) // 5 minutes — Anthropic rate-limits this endpoint
             }
         }

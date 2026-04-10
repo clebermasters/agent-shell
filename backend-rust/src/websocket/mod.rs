@@ -272,6 +272,10 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             system_cmds::handle_get_claude_usage(&state.message_tx).await?;
         }
 
+        WebSocketMessage::GetCodexUsage => {
+            system_cmds::handle_get_codex_usage(&state.message_tx).await?;
+        }
+
         // Cron management — delegated to cron_cmds
         WebSocketMessage::ListCronJobs
         | WebSocketMessage::CreateCronJob { .. }

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use tracing::warn;
 
 use super::{ChatMessage, ContentBlock};
@@ -28,12 +29,13 @@ pub fn parse_line(line: &str) -> Option<ChatMessage> {
         }
     };
 
+    let timestamp = parse_timestamp(&v);
     let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
     let payload = v.get("payload");
 
     match line_type {
-        "event_msg" => payload.and_then(|p| parse_event_msg(p)),
-        "response_item" => payload.and_then(|p| parse_response_item(p)),
+        "event_msg" => payload.and_then(|p| parse_event_msg(p, timestamp)),
+        "response_item" => payload.and_then(|p| parse_response_item(p, timestamp)),
         _ => None,
     }
 }
@@ -42,21 +44,28 @@ pub fn parse_line(line: &str) -> Option<ChatMessage> {
 // Event message parsing
 // ---------------------------------------------------------------------------
 
-fn parse_event_msg(payload: &serde_json::Value) -> Option<ChatMessage> {
+fn parse_event_msg(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
     let event_type = payload
         .get("type")
         .and_then(|t| t.as_str())
         .unwrap_or("");
 
     match event_type {
-        "user_message" => parse_user_message(payload),
-        "agent_message" => parse_agent_message(payload),
-        "exec_command_end" => parse_exec_command_end(payload),
+        "user_message" => parse_user_message(payload, timestamp),
+        "agent_message" => parse_agent_message(payload, timestamp),
+        "exec_command_end" => parse_exec_command_end(payload, timestamp),
+        "patch_apply_end" => parse_patch_apply_end(payload, timestamp),
         _ => None,
     }
 }
 
-fn parse_user_message(payload: &serde_json::Value) -> Option<ChatMessage> {
+fn parse_user_message(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
     let message = payload.get("message")?.as_str()?.to_string();
     if message.is_empty() {
         return None;
@@ -64,12 +73,15 @@ fn parse_user_message(payload: &serde_json::Value) -> Option<ChatMessage> {
 
     Some(ChatMessage {
         role: "user".to_string(),
-        timestamp: None,
+        timestamp,
         blocks: vec![ContentBlock::Text { text: message }],
     })
 }
 
-fn parse_agent_message(payload: &serde_json::Value) -> Option<ChatMessage> {
+fn parse_agent_message(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
     let message = payload.get("message")?.as_str()?.to_string();
     if message.is_empty() {
         return None;
@@ -77,12 +89,15 @@ fn parse_agent_message(payload: &serde_json::Value) -> Option<ChatMessage> {
 
     Some(ChatMessage {
         role: "assistant".to_string(),
-        timestamp: None,
+        timestamp,
         blocks: vec![ContentBlock::Text { text: message }],
     })
 }
 
-fn parse_exec_command_end(payload: &serde_json::Value) -> Option<ChatMessage> {
+fn parse_exec_command_end(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
     let command_parts: Vec<String> = payload
         .get("command")
         .and_then(|v| v.as_array())
@@ -125,8 +140,47 @@ fn parse_exec_command_end(payload: &serde_json::Value) -> Option<ChatMessage> {
 
     Some(ChatMessage {
         role: "assistant".to_string(),
-        timestamp: None,
+        timestamp,
         blocks,
+    })
+}
+
+fn parse_patch_apply_end(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
+    let stdout = payload
+        .get("stdout")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let stderr = payload
+        .get("stderr")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let success = payload
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let content = combine_output(stdout, stderr);
+    let summary = if success {
+        summarize_output_or_placeholder(content.as_deref())
+    } else if !stderr.is_empty() {
+        truncate(stderr, 120)
+    } else {
+        "patch failed".to_string()
+    };
+
+    Some(ChatMessage {
+        role: "assistant".to_string(),
+        timestamp,
+        blocks: vec![ContentBlock::ToolResult {
+            tool_name: "apply_patch".to_string(),
+            summary,
+            content,
+        }],
     })
 }
 
@@ -134,19 +188,28 @@ fn parse_exec_command_end(payload: &serde_json::Value) -> Option<ChatMessage> {
 // Response item parsing
 // ---------------------------------------------------------------------------
 
-fn parse_response_item(payload: &serde_json::Value) -> Option<ChatMessage> {
+fn parse_response_item(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
     let item_type = payload
         .get("type")
         .and_then(|t| t.as_str())
         .unwrap_or("");
 
     match item_type {
-        "function_call" => parse_function_call(payload),
+        "function_call" => parse_function_call(payload, timestamp),
+        "function_call_output" => parse_function_call_output(payload, timestamp),
+        "custom_tool_call" => parse_custom_tool_call(payload, timestamp),
+        "web_search_call" => parse_web_search_call(payload, timestamp),
         _ => None,
     }
 }
 
-fn parse_function_call(payload: &serde_json::Value) -> Option<ChatMessage> {
+fn parse_function_call(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
     let name = payload.get("name")?.as_str()?.to_string();
 
     // Skip exec_command — we get full info from exec_command_end event
@@ -163,11 +226,77 @@ fn parse_function_call(payload: &serde_json::Value) -> Option<ChatMessage> {
 
     Some(ChatMessage {
         role: "assistant".to_string(),
-        timestamp: None,
+        timestamp,
         blocks: vec![ContentBlock::ToolCall {
             name,
             summary,
             input,
+        }],
+    })
+}
+
+fn parse_function_call_output(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
+    let output = payload.get("output").and_then(|v| v.as_str())?.trim();
+    if output.is_empty() || looks_like_exec_command_output(output) {
+        return None;
+    }
+
+    Some(ChatMessage {
+        role: "assistant".to_string(),
+        timestamp,
+        blocks: vec![ContentBlock::ToolResult {
+            tool_name: payload
+                .get("call_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tool")
+                .to_string(),
+            summary: summarize_output_or_placeholder(Some(output)),
+            content: Some(output.to_string()),
+        }],
+    })
+}
+
+fn parse_custom_tool_call(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
+    let name = payload.get("name")?.as_str()?.to_string();
+    let input = payload
+        .get("input")
+        .and_then(|v| v.as_str())
+        .map(|s| serde_json::json!({ "input": truncate(s, 500) }));
+
+    Some(ChatMessage {
+        role: "assistant".to_string(),
+        timestamp,
+        blocks: vec![ContentBlock::ToolCall {
+            summary: name.clone(),
+            name,
+            input,
+        }],
+    })
+}
+
+fn parse_web_search_call(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
+    let query = payload
+        .get("action")
+        .and_then(|v| v.get("query"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())?;
+
+    Some(ChatMessage {
+        role: "assistant".to_string(),
+        timestamp,
+        blocks: vec![ContentBlock::ToolCall {
+            name: "web_search".to_string(),
+            summary: truncate(query, 120),
+            input: Some(serde_json::json!({ "query": query })),
         }],
     })
 }
@@ -212,19 +341,24 @@ pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
 
                 if event_type == "token_count" {
                     if let Some(info) = payload.get("info") {
-                        if let Some(total_usage) = info.get("total_token_usage") {
-                            let input = total_usage
-                                .get("input_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            let output = total_usage
-                                .get("output_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            last_tokens = Some(input + output);
-                        }
-                        context_window = info.get("model_context_window").and_then(|v| v.as_u64());
+                        last_tokens = info
+                            .get("last_token_usage")
+                            .and_then(extract_total_tokens)
+                            .or_else(|| {
+                                info.get("total_token_usage")
+                                    .and_then(extract_total_tokens)
+                            })
+                            .or(last_tokens);
+                        context_window = info
+                            .get("model_context_window")
+                            .and_then(|v| v.as_u64())
+                            .or(context_window);
                     }
+                } else if event_type == "task_started" {
+                    context_window = payload
+                        .get("model_context_window")
+                        .and_then(|v| v.as_u64())
+                        .or(context_window);
                 }
             }
             "turn_context" => {
@@ -251,6 +385,37 @@ pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn parse_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
+    value
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn extract_total_tokens(total_usage: &serde_json::Value) -> Option<u64> {
+    total_usage
+        .get("total_tokens")
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            let input = total_usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cached_input = total_usage
+                .get("cached_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let output = total_usage
+                .get("output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let reasoning_output = total_usage
+                .get("reasoning_output_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let total = input + cached_input + output + reasoning_output;
+            (total > 0).then_some(total)
+        })
+}
 
 fn format_command(parts: &[String]) -> String {
     if parts.is_empty() {
@@ -290,10 +455,37 @@ fn summarize_output(text: &str) -> String {
     truncate(text, 120)
 }
 
+fn summarize_output_or_placeholder(text: Option<&str>) -> String {
+    match text {
+        Some(text) if !text.trim().is_empty() => summarize_output(text.trim()),
+        _ => "(empty)".to_string(),
+    }
+}
+
+fn combine_output(stdout: &str, stderr: &str) -> Option<String> {
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(stdout.to_string()),
+        (true, false) => Some(stderr.to_string()),
+        (false, false) => Some(format!("{stdout}\n\nstderr:\n{stderr}")),
+    }
+}
+
+fn looks_like_exec_command_output(output: &str) -> bool {
+    output.starts_with("Command: ")
+        && output.contains("Process exited with code")
+        && output.contains("\nOutput:")
+}
+
 fn generate_tool_summary(name: &str, input: Option<&serde_json::Value>) -> String {
     match name {
         "read_file" | "write_file" | "create_file" => input
             .and_then(|v| v.get("path"))
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 120))
+            .unwrap_or_else(|| name.to_string()),
+        "search_query" => input
+            .and_then(|v| v.get("q"))
             .and_then(|v| v.as_str())
             .map(|s| truncate(s, 120))
             .unwrap_or_else(|| name.to_string()),
@@ -314,6 +506,7 @@ mod tests {
         let line = r#"{"timestamp":"2025-05-07T17:24:21.123Z","type":"event_msg","payload":{"type":"user_message","message":"hello","images":[],"local_images":[],"text_elements":[]}}"#;
         let msg = parse_line(line).expect("should parse");
         assert_eq!(msg.role, "user");
+        assert!(msg.timestamp.is_some());
         assert_eq!(msg.blocks.len(), 1);
         match &msg.blocks[0] {
             ContentBlock::Text { text } => assert_eq!(text, "hello"),
@@ -326,6 +519,7 @@ mod tests {
         let line = r#"{"timestamp":"2025-05-07T17:24:22.456Z","type":"event_msg","payload":{"type":"agent_message","message":"I'll fix this.","phase":"commentary","memory_citation":null}}"#;
         let msg = parse_line(line).expect("should parse");
         assert_eq!(msg.role, "assistant");
+        assert!(msg.timestamp.is_some());
         assert_eq!(msg.blocks.len(), 1);
         match &msg.blocks[0] {
             ContentBlock::Text { text } => assert_eq!(text, "I'll fix this."),
@@ -397,6 +591,77 @@ mod tests {
     }
 
     #[test]
+    fn parse_function_call_output() {
+        let line = r#"{"timestamp":"2025-05-07T17:24:24.100Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_123","output":"src/main.rs\nsrc/lib.rs"}}"#;
+        let msg = parse_line(line).expect("should parse");
+        assert_eq!(msg.role, "assistant");
+        match &msg.blocks[0] {
+            ContentBlock::ToolResult {
+                tool_name,
+                summary,
+                content,
+            } => {
+                assert_eq!(tool_name, "call_123");
+                assert_eq!(summary, "2 lines");
+                assert_eq!(content.as_deref(), Some("src/main.rs\nsrc/lib.rs"));
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skip_exec_command_function_call_output() {
+        let line = r#"{"timestamp":"2025-05-07T17:24:24.200Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_123","output":"Command: /bin/bash -lc pwd\nChunk ID: abc\nWall time: 0.0\nProcess exited with code 0\nOutput:\n/tmp\n"}}"#;
+        assert!(parse_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_custom_tool_call() {
+        let line = r#"{"timestamp":"2025-05-07T17:24:24.300Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"call_456","input":"*** Begin Patch\n*** End Patch\n"}}"#;
+        let msg = parse_line(line).expect("should parse");
+        match &msg.blocks[0] {
+            ContentBlock::ToolCall { name, summary, input } => {
+                assert_eq!(name, "apply_patch");
+                assert_eq!(summary, "apply_patch");
+                assert!(input.is_some());
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_web_search_call() {
+        let line = r#"{"timestamp":"2025-05-07T17:24:24.400Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"search","query":"codex usage"}}}"#;
+        let msg = parse_line(line).expect("should parse");
+        match &msg.blocks[0] {
+            ContentBlock::ToolCall { name, summary, input } => {
+                assert_eq!(name, "web_search");
+                assert_eq!(summary, "codex usage");
+                assert!(input.is_some());
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_patch_apply_end() {
+        let line = r#"{"timestamp":"2025-05-07T17:24:25.000Z","type":"event_msg","payload":{"type":"patch_apply_end","stdout":"Success. Updated the following files:\nM src/main.rs\n","stderr":"","success":true}}"#;
+        let msg = parse_line(line).expect("should parse");
+        match &msg.blocks[0] {
+            ContentBlock::ToolResult {
+                tool_name,
+                summary,
+                content,
+            } => {
+                assert_eq!(tool_name, "apply_patch");
+                assert_eq!(summary, "2 lines");
+                assert!(content.as_deref().unwrap_or("").contains("src/main.rs"));
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn skip_exec_command_function_call() {
         let line = r#"{"timestamp":"2025-05-07T17:24:24.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call_xyz"}}"#;
         assert!(
@@ -454,12 +719,12 @@ mod tests {
         let path = dir.path().join("rollout.jsonl");
         std::fs::write(
             &path,
-            r#"{"timestamp":"...","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":50000,"output_tokens":5000,"total_tokens":55000},"model_context_window":200000}}}
+            r#"{"timestamp":"2025-05-07T17:24:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":50000,"cached_input_tokens":10000,"output_tokens":5000,"reasoning_output_tokens":2000,"total_tokens":67000},"total_token_usage":{"input_tokens":300000,"cached_input_tokens":10000,"output_tokens":5000,"reasoning_output_tokens":2000,"total_tokens":317000},"model_context_window":200000}}}
 "#,
         ).unwrap();
 
         let info = extract_context_usage(&path).expect("should extract");
-        assert!((info.usage_pct - 27.5).abs() < 0.1); // (50000+5000)/200000 * 100
+        assert!((info.usage_pct - 33.5).abs() < 0.1); // 67000/200000 * 100
     }
 
     #[test]
@@ -468,13 +733,15 @@ mod tests {
         let path = dir.path().join("rollout.jsonl");
         std::fs::write(
             &path,
-            r#"{"timestamp":"...","type":"turn_context","payload":{"model":"o3","cwd":"/tmp"}}
-{"timestamp":"...","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10000,"output_tokens":2000,"total_tokens":12000},"model_context_window":200000}}}
+            r#"{"timestamp":"2025-05-07T17:24:00Z","type":"event_msg","payload":{"type":"task_started","model_context_window":258400}}
+{"timestamp":"2025-05-07T17:24:01Z","type":"turn_context","payload":{"model":"o3","cwd":"/tmp"}}
+{"timestamp":"2025-05-07T17:24:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10000,"output_tokens":2000,"total_tokens":12000}}}}
 "#,
         ).unwrap();
 
         let info = extract_context_usage(&path).expect("should extract");
         assert_eq!(info.model, "o3");
+        assert!((info.usage_pct - (12000.0 / 258400.0 * 100.0)).abs() < 0.1);
     }
 
     #[test]

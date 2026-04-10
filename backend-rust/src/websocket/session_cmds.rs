@@ -276,6 +276,11 @@ pub(crate) async fn handle_rename_window(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tokio_util::sync::CancellationToken;
+
+    use crate::AppState;
     use super::*;
     use tokio::sync::mpsc;
     use crate::websocket::types::BroadcastMessage;
@@ -285,6 +290,24 @@ mod tests {
         mpsc::UnboundedReceiver<BroadcastMessage>,
     ) {
         mpsc::unbounded_channel()
+    }
+
+    fn make_app_state(dir: &std::path::Path) -> Arc<AppState> {
+        let (broadcast_tx, _) = mpsc::unbounded_channel();
+        let client_manager = Arc::new(crate::websocket::client_manager::ClientManager::new());
+        Arc::new(AppState {
+            enable_audio_logs: false,
+            broadcast_tx,
+            client_manager,
+            chat_file_storage: Arc::new(crate::chat_file_storage::ChatFileStorage::new(dir.to_path_buf())),
+            chat_event_store: Arc::new(crate::chat_event_store::ChatEventStore::new(dir.to_path_buf()).unwrap()),
+            chat_clear_store: Arc::new(crate::chat_clear_store::ChatClearStore::new(&dir.to_path_buf())),
+            acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+            notification_store: Arc::new(crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap()),
+            favorite_store: Arc::new(crate::favorite_store::FavoriteStore::new(dir.to_path_buf()).unwrap()),
+            tag_store: Arc::new(crate::tag_store::TagStore::new(dir.to_path_buf()).unwrap()),
+            shutdown_token: CancellationToken::new(),
+        })
     }
 
     #[tokio::test]
@@ -337,8 +360,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_kill_session_nonexistent() {
+        let dir = tempfile::TempDir::new().unwrap();
         let (tx, mut rx) = make_tx();
-        let result = handle_kill_session(&tx, "nonexistent-session-xyz".to_string()).await;
+        let app_state = make_app_state(dir.path());
+        let result = handle_kill_session(&tx, app_state, "nonexistent-session-xyz".to_string()).await;
         assert!(result.is_ok());
         assert!(rx.try_recv().is_ok());
     }

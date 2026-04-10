@@ -108,11 +108,12 @@ class ChatViewModel @Inject constructor(
     private val audioService: AudioService,
     private val whisperService: WhisperService,
     private val app: Application,
-    systemRepository: SystemRepository,
+    private val systemRepository: SystemRepository,
     val audioPlayerManager: AudioPlayerManager,
 ) : ViewModel() {
 
     val claudeUsage = systemRepository.claudeUsage
+    val codexUsage = systemRepository.codexUsage
 
     private val webSocketService: WebSocketService get() = chatRepository.webSocketService
 
@@ -490,6 +491,11 @@ class ChatViewModel @Inject constructor(
                 contextWindowUsage = ctxUsage,
                 modelName = model ?: it.modelName,
             )
+        }
+
+        when (tool) {
+            "claude" -> systemRepository.requestClaudeUsage()
+            "codex" -> systemRepository.requestCodexUsage()
         }
     }
 

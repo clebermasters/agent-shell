@@ -1673,6 +1673,8 @@ mod tests {
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
         let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
         let notification_store = Arc::new(crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap());
+        let favorite_store = Arc::new(crate::favorite_store::FavoriteStore::new(dir.to_path_buf()).unwrap());
+        let tag_store = Arc::new(crate::tag_store::TagStore::new(dir.to_path_buf()).unwrap());
         Arc::new(crate::AppState {
             enable_audio_logs: false,
             broadcast_tx,
@@ -1682,6 +1684,9 @@ mod tests {
             chat_clear_store,
             notification_store,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+            favorite_store,
+            tag_store,
+            shutdown_token: tokio_util::sync::CancellationToken::new(),
         })
     }
 }

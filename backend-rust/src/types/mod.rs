@@ -32,6 +32,16 @@ pub struct UsageBucket {
     pub resets_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderUsageWindow {
+    pub used_percent: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_duration_mins: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessInfo {
@@ -242,6 +252,7 @@ pub enum WebSocketMessage {
     // System stats
     GetStats,
     GetClaudeUsage,
+    GetCodexUsage,
     // Cron management
     ListCronJobs,
     CreateCronJob {
@@ -808,6 +819,18 @@ pub enum ServerMessage {
         five_hour: Option<UsageBucket>,
         seven_day: Option<UsageBucket>,
         seven_day_sonnet: Option<UsageBucket>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    CodexUsage {
+        primary: Option<ProviderUsageWindow>,
+        secondary: Option<ProviderUsageWindow>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        plan_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -1566,7 +1589,7 @@ mod tests {
         let json = r#"{"type":"create-session","name":"my-sess"}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WebSocketMessage::CreateSession { name } => {
+            WebSocketMessage::CreateSession { name, .. } => {
                 assert_eq!(name, Some("my-sess".to_string()))
             }
             _ => panic!("Expected CreateSession"),
@@ -1578,7 +1601,7 @@ mod tests {
         let json = r#"{"type":"create-session"}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WebSocketMessage::CreateSession { name } => assert_eq!(name, None),
+            WebSocketMessage::CreateSession { name, .. } => assert_eq!(name, None),
             _ => panic!("Expected CreateSession"),
         }
     }

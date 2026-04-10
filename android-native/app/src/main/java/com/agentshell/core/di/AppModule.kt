@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import com.agentshell.data.local.AppDatabase
+import com.agentshell.data.local.FavoriteSessionDao
 import com.agentshell.data.local.HostDao
 import com.agentshell.data.local.PanelLayoutDao
 import com.agentshell.data.local.PreferencesDataStore
@@ -34,7 +35,7 @@ object AppModule {
             AppDatabase::class.java,
             "agentshell_db"
         )
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             .build()
     }
 
@@ -48,6 +49,12 @@ object AppModule {
     @Singleton
     fun providePanelLayoutDao(database: AppDatabase): PanelLayoutDao {
         return database.panelLayoutDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideFavoriteSessionDao(database: AppDatabase): FavoriteSessionDao {
+        return database.favoriteSessionDao()
     }
 
     @Provides

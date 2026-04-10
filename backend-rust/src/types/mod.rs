@@ -32,6 +32,15 @@ pub struct UsageBucket {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub cpu_usage: f32,
+    pub memory_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SystemStats {
     pub cpu: CpuInfo,
     pub memory: MemoryInfo,
@@ -40,6 +49,8 @@ pub struct SystemStats {
     pub hostname: String,
     pub platform: String,
     pub arch: String,
+    pub top_processes_by_cpu: Vec<ProcessInfo>,
+    pub top_processes_by_memory: Vec<ProcessInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,6 +199,8 @@ pub enum WebSocketMessage {
     // Session management
     CreateSession {
         name: Option<String>,
+        #[serde(rename = "startDirectory", default)]
+        start_directory: Option<String>,
     },
     KillSession {
         #[serde(rename = "sessionName")]
@@ -662,6 +675,10 @@ pub enum ServerMessage {
         data: String,
     },
     Disconnected,
+    ServerShuttingDown {
+        #[serde(rename = "reconnectDelayMs")]
+        reconnect_delay_ms: u64,
+    },
     WindowsList {
         #[serde(rename = "sessionName")]
         session_name: String,

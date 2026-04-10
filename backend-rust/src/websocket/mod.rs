@@ -105,6 +105,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     });
 
     // Handle incoming messages
+    let shutdown_token = state.shutdown_token.clone();
     loop {
         tokio::select! {
             msg = receiver.next() => {
@@ -150,11 +151,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 info!("[CONN] Backend→Flutter sender DIED, closing receiver ({})", client_id);
                 break;
             }
+            _ = shutdown_token.cancelled() => {
+                info!("[CONN] Server shutting down, gracefully closing client ({})", client_id);
+                break;
+            }
         }
     }
 
-    // Cleanup
-    terminal_cmds::cleanup_session(&ws_state).await;
+    // Cleanup - use graceful mode to preserve tmux sessions on server shutdown
+    let is_shutdown = state.shutdown_token.is_cancelled();
+    terminal_cmds::cleanup_session(&ws_state, is_shutdown).await;
     state.client_manager.remove_client(&client_id).await;
     info!("WebSocket connection closed: {}", client_id);
 }
@@ -214,8 +220,8 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         }
 
         // Session management — delegated to session_cmds
-        WebSocketMessage::CreateSession { name } => {
-            session_cmds::handle_create_session(&state.message_tx, name).await?;
+        WebSocketMessage::CreateSession { name, start_directory } => {
+            session_cmds::handle_create_session(&state.message_tx, name, start_directory).await?;
         }
 
         WebSocketMessage::KillSession { session_name } => {

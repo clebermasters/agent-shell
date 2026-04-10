@@ -590,23 +590,30 @@ pub(crate) async fn attach_to_session(
     Ok(())
 }
 
-pub(crate) async fn cleanup_session(state: &WsState) {
-    info!("Cleaning up session for client: {}", state.client_id);
+pub(crate) async fn cleanup_session(state: &WsState, graceful: bool) {
+    info!("Cleaning up session for client: {} (graceful={})", state.client_id, graceful);
 
     // Clean up PTY session
     let mut pty_guard = state.current_pty.lock().await;
     if let Some(pty) = pty_guard.take() {
         info!("Cleaning up PTY for tmux session: {}", pty.tmux_session);
 
-        // Kill the child process first
-        {
-            let mut child = pty.child.lock().await;
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        if graceful {
+            // Graceful shutdown: don't kill child process, let PTY EOF naturally.
+            // The tmux attach-session process will exit on its own when the PTY closes.
+            // The tmux session itself is unaffected (owned by tmux server daemon).
+            info!("Graceful cleanup: dropping PTY handles for session {}", pty.tmux_session);
+        } else {
+            // Normal disconnect: kill the child process
+            {
+                let mut child = pty.child.lock().await;
+                let _ = child.kill();
+                let _ = child.wait();
+            }
 
-        // Abort the reader task
-        pty.reader_task.abort();
+            // Abort the reader task
+            pty.reader_task.abort();
+        }
 
         // Writer and master will be dropped automatically
     }
@@ -723,7 +730,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let (ws_state, _rx) = make_ws_state(dir.path());
         // Should not panic with nothing active
-        cleanup_session(&ws_state).await;
+        cleanup_session(&ws_state, false).await;
     }
 
     #[tokio::test]
@@ -733,7 +740,7 @@ mod tests {
         // Set a chat_log_handle to verify it gets aborted
         let handle = tokio::spawn(async { tokio::time::sleep(tokio::time::Duration::from_secs(60)).await });
         *ws_state.chat_log_handle.lock().await = Some(handle);
-        cleanup_session(&ws_state).await;
+        cleanup_session(&ws_state, false).await;
         // After cleanup, handle should be taken (None)
         assert!(ws_state.chat_log_handle.lock().await.is_none());
     }

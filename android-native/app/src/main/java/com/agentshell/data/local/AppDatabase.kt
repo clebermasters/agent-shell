@@ -4,18 +4,20 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.agentshell.data.model.FavoriteSession
 import com.agentshell.data.model.Host
 import com.agentshell.data.model.PanelEntity
 import com.agentshell.data.model.PanelLayoutEntity
 
 @Database(
-    entities = [Host::class, PanelLayoutEntity::class, PanelEntity::class],
-    version = 3,
+    entities = [Host::class, PanelLayoutEntity::class, PanelEntity::class, FavoriteSession::class],
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun hostDao(): HostDao
     abstract fun panelLayoutDao(): PanelLayoutDao
+    abstract fun favoriteSessionDao(): FavoriteSessionDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -49,6 +51,20 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE hosts ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS favorite_sessions (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        path TEXT NOT NULL,
+                        sortOrder INTEGER NOT NULL DEFAULT 0,
+                        createdAt INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
             }
         }
     }

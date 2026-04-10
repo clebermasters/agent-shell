@@ -302,6 +302,21 @@ class WebSocketService @Inject constructor(
                     pongTimeoutJob = null
                 }
 
+                // Handle server graceful shutdown — reconnect after the suggested delay
+                if (type == "server-shutting-down") {
+                    val delayMs = json.optLong("reconnectDelayMs", 2000L)
+                    println("[CONN] Server shutting down — will reconnect in ${delayMs}ms")
+                    cancelTimers()
+                    _isConnected = false
+                    _connectionStatus.value = ConnectionStatus.RECONNECTING
+                    reconnectAttempts = 0
+                    reconnectJob = scope.launch {
+                        delay(delayMs)
+                        doConnect()
+                    }
+                    return
+                }
+
                 val messageMap = jsonObjectToMap(json)
                 scope.launch { _messages.emit(messageMap) }
             } catch (e: Exception) {

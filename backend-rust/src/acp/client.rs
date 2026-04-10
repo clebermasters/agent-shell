@@ -131,12 +131,12 @@ impl AcpClient {
 
         let pending = self.pending.clone();
         let event_tx = self.event_tx.clone();
-        let initialized = self.initialized.clone();
+        let initialized_reader = self.initialized.clone();
 
         // Spawn reader task
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
-        
+
         tokio::spawn(async move {
             let mut last_event_time: Option<std::time::Instant> = None;
             while let Ok(Some(line)) = lines.next_line().await {
@@ -212,6 +212,15 @@ impl AcpClient {
                     }
                 }
             }
+            // Drain all pending requests so callers don't hang until timeout
+            {
+                let mut pending = pending.lock().await;
+                for (_, callback) in pending.drain() {
+                    callback(Err("ACP process exited".to_string()));
+                }
+            }
+            // Mark as uninitialized so future calls know to re-start
+            *initialized_reader.write().await = false;
             tracing::warn!("[CONN] Backend→ACP reader task ENDED — opencode process may have died");
         });
 
@@ -243,7 +252,7 @@ impl AcpClient {
         
         match result {
             Ok(result) => {
-                *initialized.write().await = true;
+                *self.initialized.write().await = true;
                 tracing::info!("ACP client initialized successfully");
                 let init_result: InitializeResult = serde_json::from_value(result)
                     .map_err(|e| format!("Failed to parse initialize result: {}", e))?;

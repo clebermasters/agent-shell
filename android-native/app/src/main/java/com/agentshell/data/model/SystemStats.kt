@@ -3,6 +3,16 @@ package com.agentshell.data.model
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class ProcessInfo(
+    val pid: Long,
+    val name: String,
+    val cpuUsage: Double,
+    val memoryBytes: Long,
+) {
+    val memoryFormatted: String get() = memoryBytes.formatBytes()
+}
+
+@Serializable
 data class SystemStats(
     val cpuUsage: Double,
     val cpuCores: Int,
@@ -21,25 +31,16 @@ data class SystemStats(
     val platform: String,
     val arch: String,
     val uptime: String,
-    val timestamp: Long
+    val timestamp: Long,
+    val topCpuProcesses: List<ProcessInfo> = emptyList(),
+    val topMemProcesses: List<ProcessInfo> = emptyList(),
 ) {
-    val memoryUsedFormatted: String
-        get() = memoryUsed.formatBytes()
-
-    val memoryTotalFormatted: String
-        get() = memoryTotal.formatBytes()
-
-    val memoryFreeFormatted: String
-        get() = memoryFree.formatBytes()
-
-    val diskUsedFormatted: String
-        get() = diskUsed.formatBytes()
-
-    val diskTotalFormatted: String
-        get() = diskTotal.formatBytes()
-
-    val diskFreeFormatted: String
-        get() = diskFree.formatBytes()
+    val memoryUsedFormatted: String get() = memoryUsed.formatBytes()
+    val memoryTotalFormatted: String get() = memoryTotal.formatBytes()
+    val memoryFreeFormatted: String get() = memoryFree.formatBytes()
+    val diskUsedFormatted: String get() = diskUsed.formatBytes()
+    val diskTotalFormatted: String get() = diskTotal.formatBytes()
+    val diskFreeFormatted: String get() = diskFree.formatBytes()
 }
 
 fun Long.formatBytes(): String {

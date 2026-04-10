@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.agentshell.data.model.ProcessInfo
 import com.agentshell.data.model.SystemStats
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,6 +82,32 @@ fun SystemScreen(
                     progressColor = usageColor(state.stats?.diskUsage),
                 )
 
+                // Top CPU Processes
+                state.stats?.topCpuProcesses?.takeIf { it.isNotEmpty() }?.let { processes ->
+                    TopProcessesCard(
+                        title = "Top CPU Processes",
+                        icon = Icons.Default.Memory,
+                        processes = processes,
+                        valueLabel = { p -> "${"%.1f".format(p.cpuUsage)}%" },
+                        barColor = usageColor(processes.firstOrNull()?.cpuUsage),
+                        maxValue = processes.maxOfOrNull { it.cpuUsage }?.toFloat()?.coerceAtLeast(1f) ?: 1f,
+                        barValue = { p -> p.cpuUsage.toFloat() },
+                    )
+                }
+
+                // Top Memory Processes
+                state.stats?.topMemProcesses?.takeIf { it.isNotEmpty() }?.let { processes ->
+                    TopProcessesCard(
+                        title = "Top Memory Processes",
+                        icon = Icons.Default.Storage,
+                        processes = processes,
+                        valueLabel = { p -> p.memoryFormatted },
+                        barColor = Color(0xFF6366F1),
+                        maxValue = processes.maxOfOrNull { it.memoryBytes }?.toFloat()?.coerceAtLeast(1f) ?: 1f,
+                        barValue = { p -> p.memoryBytes.toFloat() },
+                    )
+                }
+
                 // Uptime card
                 Card(modifier = Modifier.fillMaxWidth()) {
                     ListItem(
@@ -99,6 +126,57 @@ fun SystemScreen(
                 // System info card
                 state.stats?.takeIf { it.hostname.isNotEmpty() }?.let { stats ->
                     SystemInfoCard(stats)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopProcessesCard(
+    title: String,
+    icon: ImageVector,
+    processes: List<ProcessInfo>,
+    valueLabel: (ProcessInfo) -> String,
+    barColor: Color,
+    maxValue: Float,
+    barValue: (ProcessInfo) -> Float,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, contentDescription = null, tint = barColor)
+                Spacer(Modifier.width(8.dp))
+                Text(title, style = MaterialTheme.typography.titleMedium)
+            }
+            Spacer(Modifier.height(12.dp))
+            processes.forEach { process ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        process.name,
+                        fontSize = 12.sp,
+                        modifier = Modifier.width(110.dp),
+                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    LinearProgressIndicator(
+                        progress = { (barValue(process) / maxValue).coerceIn(0f, 1f) },
+                        modifier = Modifier.weight(1f).height(6.dp),
+                        color = barColor,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        valueLabel(process),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.width(52.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

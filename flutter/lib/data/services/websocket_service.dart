@@ -139,6 +139,22 @@ class WebSocketService {
         _notificationController.add(notification);
         return;
       }
+      if (type == 'server-shutting-down') {
+        final delayMs = message['reconnectDelayMs'] as int? ?? 2000;
+        // ignore: avoid_print
+        print('[CONN] Server shutting down — will reconnect in ${delayMs}ms');
+        _pingTimer?.cancel();
+        _pongTimeoutTimer?.cancel();
+        _reconnectTimer?.cancel();
+        _isConnected = false;
+        _connectionController.add(false);
+        _statusController.add(ConnectionStatus.reconnecting);
+        _reconnectAttempts = 0;
+        _reconnectTimer = Timer(Duration(milliseconds: delayMs), () {
+          _doConnect();
+        });
+        return;
+      }
       _messageController.add(message);
     } catch (e) {
       _log('Failed to parse message: $e');
@@ -179,11 +195,15 @@ class WebSocketService {
   }
 
   void _scheduleReconnect() {
-    _log('Scheduling reconnect in 5 seconds...');
+    // Exponential backoff: 2s, 4s, 8s, 16s, 30s (max)
+    final delaySeconds = (_reconnectAttempts == 0)
+        ? 2
+        : (2 << (_reconnectAttempts - 1)).clamp(2, 30);
+    _log('Scheduling reconnect in $delaySeconds seconds (attempt $_reconnectAttempts)...');
     _pingTimer?.cancel();
     _pongTimeoutTimer?.cancel();
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 5), () {
+    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () {
       _doConnect();
     });
   }

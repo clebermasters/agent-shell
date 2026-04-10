@@ -17,12 +17,13 @@ pub(crate) async fn handle_list_sessions(
 pub(crate) async fn handle_create_session(
     tx: &mpsc::UnboundedSender<BroadcastMessage>,
     name: Option<String>,
+    start_directory: Option<String>,
 ) -> anyhow::Result<()> {
     let session_name =
         name.unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp_millis()));
-    info!("Creating session: {}", session_name);
+    info!("Creating session: {} at {:?}", session_name, start_directory);
 
-    match tmux::create_session(&session_name).await {
+    match tmux::create_session_at(&session_name, start_directory.as_deref()).await {
         Ok(_) => {
             info!("Successfully created session: {}", session_name);
             let response = ServerMessage::SessionCreated {
@@ -329,7 +330,7 @@ mod tests {
     async fn test_create_session_default_name() {
         let test_name = format!("test-{}", chrono::Utc::now().timestamp_millis());
         let (tx, mut rx) = make_tx();
-        let result = handle_create_session(&tx, Some(test_name.clone())).await;
+        let result = handle_create_session(&tx, Some(test_name.clone()), None).await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {

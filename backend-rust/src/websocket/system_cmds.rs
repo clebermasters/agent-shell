@@ -21,6 +21,9 @@ pub(crate) async fn handle_get_stats(
         );
         sys.refresh_memory();
         sys.refresh_cpu_usage();
+        // Second refresh for accurate per-process CPU (sysinfo needs two snapshots)
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        sys.refresh_processes();
         let load_avg = sysinfo::System::load_average();
 
         let disks = sysinfo::Disks::new_with_refreshed_list();
@@ -30,6 +33,26 @@ pub(crate) async fn handle_get_stats(
             .map(|d| (d.total_space(), d.available_space()))
             .unwrap_or((0, 0));
         let disk_used = disk_total.saturating_sub(disk_free);
+
+        // Collect all processes into a sortable Vec
+        let mut processes: Vec<ProcessInfo> = sys
+            .processes()
+            .values()
+            .map(|p| ProcessInfo {
+                pid: p.pid().as_u32(),
+                name: p.name().to_string(),
+                cpu_usage: p.cpu_usage(),
+                memory_bytes: p.memory(),
+            })
+            .collect();
+
+        // Top 5 by CPU (descending)
+        processes.sort_by(|a, b| b.cpu_usage.partial_cmp(&a.cpu_usage).unwrap_or(std::cmp::Ordering::Equal));
+        let top_processes_by_cpu: Vec<ProcessInfo> = processes.iter().take(5).cloned().collect();
+
+        // Top 5 by memory (descending)
+        processes.sort_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes));
+        let top_processes_by_memory: Vec<ProcessInfo> = processes.iter().take(5).cloned().collect();
 
         SystemStats {
             cpu: CpuInfo {
@@ -69,6 +92,8 @@ pub(crate) async fn handle_get_stats(
             hostname: sysinfo::System::host_name().unwrap_or_default(),
             platform: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
+            top_processes_by_cpu,
+            top_processes_by_memory,
         }
     })
     .await?;

@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
@@ -53,7 +55,6 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentshell.data.model.AcpSession
+import com.agentshell.data.model.FavoriteSession
 import com.agentshell.data.model.TmuxSession
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -88,8 +90,9 @@ fun SessionsScreen(
 
     var selectedTabIndex by rememberSaveable { mutableStateOf(0) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
+    var showAddFavoriteDialog by rememberSaveable { mutableStateOf(false) }
+    var favoriteToEdit by remember { mutableStateOf<FavoriteSession?>(null) }
 
-    // Listen for new ACP session events → navigate immediately
     LaunchedEffect(Unit) {
         viewModel.newAcpSession.collect { event ->
             onNavigateToAcpChat(event.sessionId, event.cwd)
@@ -132,16 +135,27 @@ fun SessionsScreen(
                     IconButton(onClick = { viewModel.requestSessions() }, modifier = Modifier.size(36.dp)) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(20.dp))
                     }
-                    IconButton(onClick = { showCreateDialog = true }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Add, contentDescription = "New Session", modifier = Modifier.size(20.dp))
+                    IconButton(
+                        onClick = {
+                            if (selectedTabIndex == 2) showAddFavoriteDialog = true
+                            else showCreateDialog = true
+                        },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "New", modifier = Modifier.size(20.dp))
                     }
                 }
             }
         },
         floatingActionButton = {
             if (!uiState.isSelectionMode) {
-                FloatingActionButton(onClick = { showCreateDialog = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "New Session")
+                FloatingActionButton(
+                    onClick = {
+                        if (selectedTabIndex == 2) showAddFavoriteDialog = true
+                        else showCreateDialog = true
+                    },
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "New")
                 }
             }
         },
@@ -152,7 +166,6 @@ fun SessionsScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            // Tabs: Tmux / ACP — compact, text-only
             TabRow(selectedTabIndex = selectedTabIndex) {
                 Tab(
                     selected = selectedTabIndex == 0,
@@ -172,6 +185,15 @@ fun SessionsScreen(
                         Text("Direct", fontSize = 13.sp)
                     }
                 }
+                Tab(
+                    selected = selectedTabIndex == 2,
+                    onClick = { selectedTabIndex = 2 },
+                ) {
+                    Row(modifier = Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(Icons.Default.Bookmark, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("Favorites", fontSize = 13.sp)
+                    }
+                }
             }
 
             PullToRefreshBox(
@@ -185,9 +207,7 @@ fun SessionsScreen(
                         isLoading = uiState.isLoading,
                         onTap = { session -> onNavigateToTerminal(session.name) },
                         onChat = { session -> onNavigateToChat(session.name, 0) },
-                        onKill = { session ->
-                            viewModel.killSession(session.name)
-                        },
+                        onKill = { session -> viewModel.killSession(session.name) },
                         onGit = { session -> onNavigateToGit(session.name, "", false) },
                     )
                     1 -> AcpSessionList(
@@ -196,15 +216,21 @@ fun SessionsScreen(
                         isSelectionMode = uiState.isSelectionMode,
                         selectedIds = uiState.selectedSessionIds,
                         onTap = { session ->
-                            if (uiState.isSelectionMode) {
-                                viewModel.toggleSelection(session.sessionId)
-                            } else {
-                                onNavigateToAcpChat(session.sessionId, session.cwd)
-                            }
+                            if (uiState.isSelectionMode) viewModel.toggleSelection(session.sessionId)
+                            else onNavigateToAcpChat(session.sessionId, session.cwd)
                         },
                         onLongPress = { session -> viewModel.enterSelectionMode(session.sessionId) },
                         onDelete = { session -> viewModel.deleteAcpSession(session.sessionId) },
                         onGit = { session -> onNavigateToGit(session.sessionId, session.cwd, true) },
+                    )
+                    2 -> FavoriteSessionsList(
+                        favorites = uiState.favorites,
+                        onLaunch = { favorite ->
+                            viewModel.createSessionFromFavorite(favorite)
+                            selectedTabIndex = 0
+                        },
+                        onEdit = { favorite -> favoriteToEdit = favorite },
+                        onDelete = { favorite -> viewModel.deleteFavorite(favorite) },
                     )
                 }
             }
@@ -224,7 +250,197 @@ fun SessionsScreen(
             onDismiss = { showCreateDialog = false },
         )
     }
+
+    if (showAddFavoriteDialog) {
+        FavoriteDialog(
+            title = "Add Favorite",
+            initialName = "",
+            initialPath = "",
+            onConfirm = { name, path ->
+                viewModel.addFavorite(name, path)
+                showAddFavoriteDialog = false
+            },
+            onDismiss = { showAddFavoriteDialog = false },
+        )
+    }
+
+    favoriteToEdit?.let { fav ->
+        FavoriteDialog(
+            title = "Edit Favorite",
+            initialName = fav.name,
+            initialPath = fav.path,
+            onConfirm = { name, path ->
+                viewModel.updateFavorite(fav, name, path)
+                favoriteToEdit = null
+            },
+            onDismiss = { favoriteToEdit = null },
+        )
+    }
 }
+
+// ── Favorites ─────────────────────────────────────────────────────────────────
+
+@Composable
+private fun FavoriteSessionsList(
+    favorites: List<FavoriteSession>,
+    onLaunch: (FavoriteSession) -> Unit,
+    onEdit: (FavoriteSession) -> Unit,
+    onDelete: (FavoriteSession) -> Unit,
+) {
+    if (favorites.isEmpty()) {
+        EmptySessionsMessage(
+            icon = { Icon(Icons.Default.BookmarkBorder, contentDescription = null, modifier = Modifier.size(64.dp)) },
+            message = "No favorites yet",
+            hint = "Tap + to add a favorite tmux session",
+        )
+        return
+    }
+
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(favorites, key = { it.id }) { favorite ->
+            FavoriteSessionCard(
+                favorite = favorite,
+                onLaunch = { onLaunch(favorite) },
+                onEdit = { onEdit(favorite) },
+                onDelete = { onDelete(favorite) },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FavoriteSessionCard(
+    favorite: FavoriteSession,
+    onLaunch: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 3.dp)
+            .combinedClickable(onClick = onLaunch, onLongClick = { showMenu = true }),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Icon(
+                Icons.Default.Bookmark,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(favorite.name, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Text(
+                    favorite.path,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                )
+            }
+
+            FilledTonalButton(
+                onClick = onLaunch,
+                modifier = Modifier.height(30.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) {
+                Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Launch", fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(4.dp))
+            Box {
+                IconButton(onClick = { showMenu = true }, modifier = Modifier.size(30.dp)) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Options", modifier = Modifier.size(18.dp))
+                }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Edit") },
+                        leadingIcon = { Icon(Icons.Default.Edit, null) },
+                        onClick = { showMenu = false; onEdit() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                        onClick = { showMenu = false; showDeleteDialog = true },
+                    )
+                }
+            }
+        }
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Delete Favorite") },
+            text = { Text("Remove \"${favorite.name}\" from favorites?") },
+            confirmButton = {
+                TextButton(onClick = { showDeleteDialog = false; onDelete() }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun FavoriteDialog(
+    title: String,
+    initialName: String,
+    initialPath: String,
+    onConfirm: (name: String, path: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by rememberSaveable { mutableStateOf(initialName) }
+    var path by rememberSaveable { mutableStateOf(initialPath) }
+    val valid = name.isNotBlank() && path.isNotBlank()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Session Name") },
+                    placeholder = { Text("e.g., my-project") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = path,
+                    onValueChange = { path = it },
+                    label = { Text("Absolute Path") },
+                    placeholder = { Text("e.g., /home/user/projects/myapp") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (valid) onConfirm(name.trim(), path.trim()) },
+                enabled = valid,
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+// ── Existing composables ───────────────────────────────────────────────────────
 
 @Composable
 private fun TmuxSessionList(
@@ -302,7 +518,6 @@ private fun TmuxSessionCard(
                 )
             }
 
-            // Compact action buttons
             FilledTonalButton(
                 onClick = onTap,
                 modifier = Modifier.height(30.dp),
@@ -433,10 +648,7 @@ private fun AcpSessionCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
-            .combinedClickable(
-                onClick = onTap,
-                onLongClick = onLongPress,
-            ),
+            .combinedClickable(onClick = onTap, onLongClick = onLongPress),
         colors = if (isSelected) {
             CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
         } else {

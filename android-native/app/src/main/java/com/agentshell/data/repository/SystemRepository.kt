@@ -1,6 +1,7 @@
 package com.agentshell.data.repository
 
 import com.agentshell.data.model.ClaudeUsage
+import com.agentshell.data.model.ProcessInfo
 import com.agentshell.data.model.SystemStats
 import com.agentshell.data.model.UsageBucket
 import com.agentshell.data.remote.WebSocketService
@@ -86,6 +87,19 @@ class SystemRepository @Inject constructor(
             val diskUsed = (disk?.get("used") as? Number)?.toLong() ?: 0L
             val diskFree = (disk?.get("free") as? Number)?.toLong() ?: 0L
 
+            fun parseProcessList(key: String): List<ProcessInfo> {
+                val raw = statsObj[key] as? List<*> ?: return emptyList()
+                return raw.mapNotNull { item ->
+                    val m = item as? Map<*, *> ?: return@mapNotNull null
+                    ProcessInfo(
+                        pid = (m["pid"] as? Number)?.toLong() ?: 0L,
+                        name = m["name"] as? String ?: "",
+                        cpuUsage = (m["cpuUsage"] as? Number)?.toDouble() ?: 0.0,
+                        memoryBytes = (m["memoryBytes"] as? Number)?.toLong() ?: 0L,
+                    )
+                }
+            }
+
             _stats.value = SystemStats(
                 cpuUsage = (cpu?.get("usage") as? Number)?.toDouble() ?: 0.0,
                 cpuCores = (cpu?.get("cores") as? Number)?.toInt() ?: 0,
@@ -107,6 +121,8 @@ class SystemRepository @Inject constructor(
                 arch = statsObj["arch"] as? String ?: "",
                 uptime = formatUptime((statsObj["uptime"] as? Number)?.toLong() ?: 0L),
                 timestamp = (statsObj["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis(),
+                topCpuProcesses = parseProcessList("topProcessesByCpu"),
+                topMemProcesses = parseProcessList("topProcessesByMemory"),
             )
         } catch (_: Exception) {
             // Silently ignore parse failures

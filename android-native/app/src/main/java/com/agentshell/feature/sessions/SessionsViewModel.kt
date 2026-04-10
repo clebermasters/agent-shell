@@ -2,7 +2,9 @@ package com.agentshell.feature.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.agentshell.data.local.FavoriteSessionDao
 import com.agentshell.data.model.AcpSession
+import com.agentshell.data.model.FavoriteSession
 import com.agentshell.data.model.TmuxSession
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.remote.acpCreateSession
@@ -27,6 +29,7 @@ import javax.inject.Inject
 data class SessionsUiState(
     val tmuxSessions: List<TmuxSession> = emptyList(),
     val acpSessions: List<AcpSession> = emptyList(),
+    val favorites: List<FavoriteSession> = emptyList(),
     val isLoading: Boolean = true,
     val error: String? = null,
     val selectedBackend: String = "tmux",
@@ -40,6 +43,7 @@ data class NewAcpSessionEvent(val sessionId: String, val cwd: String)
 @HiltViewModel
 class SessionsViewModel @Inject constructor(
     private val wsService: WebSocketService,
+    private val favoriteSessionDao: FavoriteSessionDao,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionsUiState())
@@ -51,7 +55,16 @@ class SessionsViewModel @Inject constructor(
     init {
         observeMessages()
         observeConnection()
+        observeFavorites()
         requestSessions()
+    }
+
+    private fun observeFavorites() {
+        viewModelScope.launch {
+            favoriteSessionDao.getAll().collect { favorites ->
+                _uiState.update { it.copy(favorites = favorites) }
+            }
+        }
     }
 
     private fun observeMessages() {
@@ -101,7 +114,6 @@ class SessionsViewModel @Inject constructor(
                     "acp-session-deleted" -> {
                         val sessionId = message["sessionId"] as? String
                         if (sessionId != null) {
-                            // Optimistically remove
                             _uiState.update { state ->
                                 state.copy(
                                     acpSessions = state.acpSessions.filter { it.sessionId != sessionId },
@@ -184,24 +196,14 @@ class SessionsViewModel @Inject constructor(
     fun toggleSelection(sessionId: String) {
         _uiState.update { state ->
             val newIds = state.selectedSessionIds.toMutableSet()
-            if (newIds.contains(sessionId)) {
-                newIds.remove(sessionId)
-            } else {
-                newIds.add(sessionId)
-            }
-            state.copy(
-                selectedSessionIds = newIds,
-                isSelectionMode = newIds.isNotEmpty(),
-            )
+            if (newIds.contains(sessionId)) newIds.remove(sessionId) else newIds.add(sessionId)
+            state.copy(selectedSessionIds = newIds, isSelectionMode = newIds.isNotEmpty())
         }
     }
 
     fun enterSelectionMode(sessionId: String) {
         _uiState.update { state ->
-            state.copy(
-                isSelectionMode = true,
-                selectedSessionIds = setOf(sessionId),
-            )
+            state.copy(isSelectionMode = true, selectedSessionIds = setOf(sessionId))
         }
     }
 
@@ -211,5 +213,34 @@ class SessionsViewModel @Inject constructor(
 
     fun switchBackend(backend: String) {
         _uiState.update { it.copy(selectedBackend = backend) }
+    }
+
+    // ── Favorites CRUD ────────────────────────────────────────────────────────
+
+    fun addFavorite(name: String, path: String) {
+        viewModelScope.launch {
+            favoriteSessionDao.upsert(FavoriteSession(name = name, path = path))
+        }
+    }
+
+    fun updateFavorite(favorite: FavoriteSession, newName: String, newPath: String) {
+        viewModelScope.launch {
+            favoriteSessionDao.upsert(favorite.copy(name = newName, path = newPath))
+        }
+    }
+
+    fun deleteFavorite(favorite: FavoriteSession) {
+        viewModelScope.launch {
+            favoriteSessionDao.delete(favorite)
+        }
+    }
+
+    fun createSessionFromFavorite(favorite: FavoriteSession) {
+        _uiState.update { it.copy(isLoading = true) }
+        wsService.createSession(name = favorite.name, startDirectory = favorite.path)
+        viewModelScope.launch {
+            delay(500)
+            requestSessions()
+        }
     }
 }

@@ -247,17 +247,21 @@ async fn list_sessions_fallback() -> Result<Vec<TmuxSession>> {
 }
 
 pub async fn create_session(name: &str) -> Result<()> {
+    create_session_at(name, None).await
+}
+
+pub async fn create_session_at(name: &str, start_directory: Option<&str>) -> Result<()> {
     ensure_tmux_server().await?;
 
-    // Get the home directory to start sessions there
     let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+    let dir = start_directory.unwrap_or(&home_dir);
 
     info!(
         "Executing tmux new-session for: {} in directory: {}",
-        name, home_dir
+        name, dir
     );
     let status = Command::new("tmux")
-        .args(&["new-session", "-d", "-s", name, "-c", &home_dir])
+        .args(&["new-session", "-d", "-s", name, "-c", dir])
         .env("HOME", &home_dir)
         .status()
         .await?;

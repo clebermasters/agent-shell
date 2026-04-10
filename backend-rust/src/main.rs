@@ -58,6 +58,7 @@ struct Args {
 
 use crate::types::ServerMessage;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -69,6 +70,7 @@ pub struct AppState {
     pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
     pub acp_client: Arc<tokio::sync::RwLock<Option<acp::AcpClient>>>,
     pub notification_store: Arc<notification_store::NotificationStore>,
+    pub shutdown_token: CancellationToken,
 }
 
 #[tokio::main]
@@ -115,6 +117,7 @@ async fn main() -> Result<()> {
         chat_clear_store: Arc::new(chat_clear_store::ChatClearStore::new(&base_dir)),
         notification_store: Arc::new(notification_store::NotificationStore::new(base_dir.clone())?),
         acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        shutdown_token: CancellationToken::new(),
     };
 
     // Initialize CRON manager
@@ -123,7 +126,7 @@ async fn main() -> Result<()> {
     }
 
     // Start tmux monitor
-    let monitor = monitor::TmuxMonitor::new(broadcast_tx);
+    let monitor = monitor::TmuxMonitor::new(broadcast_tx.clone());
     tokio::spawn(async move {
         monitor.start().await;
     });
@@ -264,6 +267,10 @@ async fn main() -> Result<()> {
         // Apply auth middleware to all protected routes
         .layer(middleware::from_fn(auth::auth_middleware));
 
+    // Clone shutdown token and broadcast_tx before moving app_state into Arc
+    let shutdown_token_clone = app_state.shutdown_token.clone();
+    let broadcast_tx_clone = broadcast_tx.clone();
+
     let app = Router::new()
         .merge(protected)
         // Serve static files (Vue app) — no auth required
@@ -326,7 +333,7 @@ async fn main() -> Result<()> {
     socket.bind(http_addr)?;
     let listener = socket.listen(1024)?;
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(shutdown_token_clone, broadcast_tx_clone))
         .await?;
 
     Ok(())
@@ -358,7 +365,10 @@ fn build_cors_layer() -> CorsLayer {
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, "X-Auth-Token".parse().unwrap()])
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(
+    shutdown_token: CancellationToken,
+    broadcast_tx: mpsc::UnboundedSender<ServerMessage>,
+) {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -384,4 +394,17 @@ async fn shutdown_signal() {
             info!("Received terminate signal, shutting down gracefully...");
         },
     }
+
+    // Notify all clients that the server is shutting down
+    info!("Notifying clients of graceful shutdown...");
+    let _ = broadcast_tx.send(ServerMessage::ServerShuttingDown {
+        reconnect_delay_ms: 2000,
+    });
+
+    // Give clients time to receive the notification
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    // Signal all WebSocket handlers to close
+    shutdown_token.cancel();
+    info!("Shutdown token cancelled, closing connections...");
 }

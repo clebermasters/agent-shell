@@ -211,6 +211,10 @@ class TerminalViewModel @Inject constructor(
 
     suspend fun getShowVoiceButton(): Boolean = prefs.showVoiceButton.first()
 
+    fun setShowVoiceButton(value: Boolean) {
+        viewModelScope.launch { prefs.setShowVoiceButton(value) }
+    }
+
     // ── Session rename ────────────────────────────────────────────────────
 
     fun renameSession(newName: String) {

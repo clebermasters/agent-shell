@@ -324,7 +324,10 @@ fun TerminalScreen(
                             Icon(Icons.Default.Fullscreen, contentDescription = "Fullscreen")
                         }
                         // Voice button toggle
-                        IconButton(onClick = { showVoiceButton = !showVoiceButton }) {
+                        IconButton(onClick = {
+                            showVoiceButton = !showVoiceButton
+                            viewModel.setShowVoiceButton(showVoiceButton)
+                        }) {
                             Icon(
                                 if (showVoiceButton) Icons.Default.Mic else Icons.Default.MicOff,
                                 contentDescription = "Toggle voice button",

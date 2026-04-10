@@ -36,8 +36,13 @@ pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(P
         }
 
         if name == "codex" {
-            let log = find_codex_log()?;
-            info!("detected Codex log: {}", log.display());
+            let cwd = get_process_cwd(*pid)?;
+            let log = find_codex_log(&cwd)?;
+            info!(
+                "detected Codex log: {} (cwd: {})",
+                log.display(),
+                cwd.display()
+            );
             return Ok((log, AiTool::Codex));
         }
 
@@ -149,10 +154,12 @@ pub async fn watch_log_file(
         _ => (filtered_history, false),
     };
 
-    let ctx_info = if tool == AiTool::Claude {
-        claude_parser::extract_context_usage(path)
-    } else {
-        None
+    let ctx_info: Option<(f64, String)> = match &tool {
+        AiTool::Claude => claude_parser::extract_context_usage(path)
+            .map(|c| (c.usage_pct, c.model)),
+        AiTool::Codex => codex_parser::extract_context_usage(path)
+            .map(|c| (c.usage_pct, c.model)),
+        _ => None,
     };
 
     event_tx
@@ -161,8 +168,8 @@ pub async fn watch_log_file(
             tool: tool.clone(),
             has_more,
             total_count,
-            context_window_usage: ctx_info.as_ref().map(|c| c.usage_pct),
-            model_name: ctx_info.as_ref().map(|c| c.model.clone()),
+            context_window_usage: ctx_info.as_ref().map(|(usage, _)| *usage),
+            model_name: ctx_info.as_ref().map(|(_, model)| model.clone()),
         })
         .ok();
 
@@ -210,11 +217,18 @@ pub async fn watch_log_file(
                         }
                     }
                     // Recalculate context window usage for the active chat
-                    if tool == AiTool::Claude {
-                        if let Some(info) = claude_parser::extract_context_usage(&file_path) {
+                    if matches!(tool, AiTool::Claude | AiTool::Codex) {
+                        let info: Option<(f64, String)> = if matches!(tool, AiTool::Claude) {
+                            claude_parser::extract_context_usage(&file_path)
+                                .map(|c| (c.usage_pct, c.model))
+                        } else {
+                            codex_parser::extract_context_usage(&file_path)
+                                .map(|c| (c.usage_pct, c.model))
+                        };
+                        if let Some((usage, model)) = info {
                             let _ = event_tx.send(ChatLogEvent::ContextWindowUpdate {
-                                usage: info.usage_pct,
-                                model_name: Some(info.model),
+                                usage,
+                                model_name: Some(model),
                             });
                         }
                     }
@@ -603,32 +617,95 @@ fn find_claude_log(cwd: &Path) -> Result<PathBuf> {
         .with_context(|| format!("no .jsonl files in {}", projects_dir.display()))
 }
 
-/// Find the newest `/tmp/agentshell-codex-*.jsonl` file.
-fn find_codex_log() -> Result<PathBuf> {
-    let tmp = Path::new("/tmp");
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+/// Find the Codex session log for the given CWD.
+///
+/// Primary strategy: query `~/.codex/state_5.sqlite` threads table by CWD to
+/// find the active session's `rollout_path`.
+/// Fallback: scan `~/.codex/sessions/` for the newest rollout JSONL.
+fn find_codex_log(cwd: &Path) -> Result<PathBuf> {
+    let home = dirs::home_dir().context("cannot determine home directory")?;
+    let db_path = home.join(".codex/state_5.sqlite");
 
-    for entry in std::fs::read_dir(tmp)?.flatten() {
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
-        };
-        if !name_str.starts_with("agentshell-codex-") || !name_str.ends_with(".jsonl") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else {
-            continue;
-        };
-        let Ok(modified) = meta.modified() else {
-            continue;
-        };
-        if best.as_ref().is_none_or(|(t, _)| modified > *t) {
-            best = Some((modified, entry.path()));
+    // Primary: query Codex SQLite state database
+    if db_path.exists() {
+        if let Ok(path) = query_codex_state_db(&db_path, cwd) {
+            return Ok(path);
         }
     }
 
+    // Fallback: scan ~/.codex/sessions/ for newest rollout JSONL
+    let sessions_dir = home.join(".codex/sessions");
+    if sessions_dir.is_dir() {
+        if let Some(path) = find_newest_rollout(&sessions_dir) {
+            return Ok(path);
+        }
+    }
+
+    bail!(
+        "no Codex session found for CWD {} (checked {} and {})",
+        cwd.display(),
+        db_path.display(),
+        sessions_dir.display()
+    )
+}
+
+/// Query the Codex state SQLite database for the active session matching CWD.
+fn query_codex_state_db(db_path: &Path, cwd: &Path) -> Result<PathBuf> {
+    let conn = rusqlite::Connection::open(db_path)
+        .with_context(|| format!("failed to open Codex state DB: {}", db_path.display()))?;
+
+    let cwd_str = cwd.to_str().context("CWD is not valid UTF-8")?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT rollout_path FROM threads WHERE cwd = ? AND archived = 0 ORDER BY updated_at DESC LIMIT 1",
+        )
+        .context("failed to prepare Codex state query")?;
+
+    let path_str: String = stmt
+        .query_row(rusqlite::params![cwd_str], |row| row.get(0))
+        .context("no active Codex session found in state DB")?;
+
+    let path = PathBuf::from(&path_str);
+    if path.exists() {
+        info!("found Codex rollout via state DB: {}", path_str);
+        Ok(path)
+    } else {
+        warn!(
+            "Codex state DB references non-existent rollout: {}",
+            path_str
+        );
+        bail!("rollout file does not exist: {path_str}")
+    }
+}
+
+/// Recursively find the newest `rollout-*.jsonl` file under the given directory.
+fn find_newest_rollout(dir: &Path) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+
+    fn scan(dir: &Path, best: &mut Option<(std::time::SystemTime, PathBuf)>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan(&path, best);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if best.as_ref().is_none_or(|(t, _)| modified > *t) {
+                            *best = Some((modified, path));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    scan(dir, &mut best);
     best.map(|(_, p)| p)
-        .context("no agentshell-codex-*.jsonl files found in /tmp")
 }
 
 /// Return the path of the newest `.jsonl` file inside `dir`.
@@ -830,7 +907,7 @@ mod tests {
     fn test_find_codex_log_no_files() {
         // This test verifies find_codex_log handles missing files gracefully
         // It may or may not find files depending on the test environment
-        let result = find_codex_log();
+        let result = find_codex_log(std::path::Path::new("/nonexistent/path"));
         // Just ensure it doesn't panic — result can be Ok or Err
         let _ = result;
     }

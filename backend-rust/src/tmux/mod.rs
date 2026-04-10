@@ -5,6 +5,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
+use crate::chat_log::watcher::detect_tool_name;
 use crate::types::{TmuxSession, TmuxWindow};
 
 /// Get the current working directory of a tmux session.
@@ -236,10 +237,27 @@ async fn list_sessions_fallback() -> Result<Vec<TmuxSession>> {
                         .unwrap_or_else(|| Utc::now()),
                     windows: parts[3].parse().unwrap_or(0),
                     dimensions: parts[4].to_string(),
+                    tool: None,
                 })
             } else {
                 None
             }
+        })
+        .collect();
+
+    // Detect running AI tools concurrently for all sessions
+    let tool_futures: Vec<_> = sessions
+        .iter()
+        .map(|s| detect_tool_name(&s.name))
+        .collect();
+    let tools = futures::future::join_all(tool_futures).await;
+
+    let sessions = sessions
+        .into_iter()
+        .zip(tools)
+        .map(|(mut s, tool)| {
+            s.tool = tool;
+            s
         })
         .collect();
 

@@ -3,7 +3,9 @@ mod chat_cmds;
 mod client_manager;
 mod cron_cmds;
 mod dotfiles_cmds;
+mod favorite_cmds;
 mod file_cmds;
+mod tag_cmds;
 mod git_cmds;
 mod session_cmds;
 mod system_cmds;
@@ -361,6 +363,43 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         | WebSocketMessage::AcpClearHistory { .. }
         | WebSocketMessage::AcpDeleteSession { .. } => {
             acp_cmds::handle(msg, state, app_state).await?;
+        }
+
+        // Favorites
+        WebSocketMessage::GetFavorites => {
+            favorite_cmds::handle_get_favorites(&state.message_tx, app_state).await?;
+        }
+        WebSocketMessage::AddFavorite { name, path, sort_order, startup_command, startup_args, tag_ids } => {
+            favorite_cmds::handle_add_favorite(&state.message_tx, app_state, name, path, sort_order, startup_command, startup_args, tag_ids).await?;
+        }
+        WebSocketMessage::UpdateFavorite { id, name, path, sort_order, startup_command, startup_args, tag_ids } => {
+            favorite_cmds::handle_update_favorite(&state.message_tx, app_state, id, name, path, sort_order, startup_command, startup_args, tag_ids).await?;
+        }
+        WebSocketMessage::DeleteFavorite { id } => {
+            favorite_cmds::handle_delete_favorite(&state.message_tx, app_state, id).await?;
+        }
+        WebSocketMessage::SetFavoriteTags { favorite_id, tag_ids } => {
+            favorite_cmds::handle_set_favorite_tags(&state.message_tx, app_state, favorite_id, tag_ids).await?;
+        }
+
+        // Tags
+        WebSocketMessage::GetTags => {
+            tag_cmds::handle_get_tags(&state.message_tx, app_state).await?;
+        }
+        WebSocketMessage::AddTag { name, color_hex } => {
+            tag_cmds::handle_add_tag(&state.message_tx, app_state, name, color_hex).await?;
+        }
+        WebSocketMessage::DeleteTag { id } => {
+            tag_cmds::handle_delete_tag(&state.message_tx, app_state, id).await?;
+        }
+        WebSocketMessage::GetTagAssignments => {
+            tag_cmds::handle_get_tag_assignments(&state.message_tx, app_state).await?;
+        }
+        WebSocketMessage::AssignTagToSession { session_name, tag_id } => {
+            tag_cmds::handle_assign_tag_to_session(&state.message_tx, app_state, session_name, tag_id).await?;
+        }
+        WebSocketMessage::RemoveTagFromSession { session_name, tag_id } => {
+            tag_cmds::handle_remove_tag_from_session(&state.message_tx, app_state, session_name, tag_id).await?;
         }
     }
 

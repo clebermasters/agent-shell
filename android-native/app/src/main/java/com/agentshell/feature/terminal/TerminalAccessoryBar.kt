@@ -26,6 +26,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.agentshell.data.model.CommandMacro
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -45,6 +46,9 @@ fun TerminalAccessoryBar(
     onShiftToggle: () -> Unit,
     onKeyPressed: (String) -> Unit,
     onModifiersReset: () -> Unit,
+    macros: List<CommandMacro> = emptyList(),
+    onMacroTap: (CommandMacro) -> Unit = {},
+    onManageMacros: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     fun handleKey(key: String) {
@@ -107,6 +111,13 @@ fun TerminalAccessoryBar(
             .horizontalScroll(rememberScrollState()),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Macros manage button
+        BarKey("⚡", tint = Color(0xFFFFB300)) { onManageMacros() }
+        // User-defined macro chips
+        macros.forEach { macro ->
+            BarKey(macro.label, tint = Color(0xFF1565C0)) { onMacroTap(macro) }
+        }
+
         ModifierKey("CTRL", ctrlActive, onCtrlToggle)
         ModifierKey("ALT", altActive, onAltToggle)
         ModifierKey("SHIFT", shiftActive, onShiftToggle)
@@ -157,12 +168,12 @@ private fun ModifierKey(label: String, isActive: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun BarKey(label: String, onClick: () -> Unit) {
+private fun BarKey(label: String, tint: Color = Color(0xFF303030), onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .padding(horizontal = 2.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(Color(0xFF303030))
+            .background(tint)
             .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,

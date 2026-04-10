@@ -74,6 +74,25 @@ pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(P
     bail!("no AI tool (claude/codex/opencode/kiro) found among descendants of pane PID {pane_pid}");
 }
 
+/// Detect which AI tool (if any) is running in window 0 of the given tmux session.
+/// Returns a short string identifier: "claude", "codex", "opencode", or "kiro".
+pub async fn detect_tool_name(session_name: &str) -> Option<String> {
+    let target = format!("{session_name}:0");
+    let pane_pid = get_pane_pid(&target).await.ok()?;
+    let descendants = get_descendant_pids(pane_pid).ok()?;
+
+    for pid in &descendants {
+        match process_name(*pid).as_deref() {
+            Some("claude") => return Some("claude".to_string()),
+            Some("codex") => return Some("codex".to_string()),
+            Some("opencode") => return Some("opencode".to_string()),
+            Some("kiro-cli") | Some("kiro-cli-chat") => return Some("kiro".to_string()),
+            _ => {}
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Log file watcher
 // ---------------------------------------------------------------------------

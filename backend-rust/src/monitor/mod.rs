@@ -155,6 +155,7 @@ mod tests {
                 created: chrono::Utc::now(),
                 windows: 1,
                 dimensions: "80x24".to_string(),
+                tool: None,
             }],
             window_pane_counts: HashMap::new(),
         };

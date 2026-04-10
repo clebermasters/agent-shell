@@ -37,6 +37,8 @@ class PreferencesDataStore @Inject constructor(
         val HOME_TAB_INDEX = intPreferencesKey("home_tab_index")
         val VOICE_BUTTON_POS_X = floatPreferencesKey("voice_button_pos_x")
         val VOICE_BUTTON_POS_Y = floatPreferencesKey("voice_button_pos_y")
+        val LAST_SESSION_NAME = stringPreferencesKey("last_session_name")
+        val AUTO_ATTACH_ENABLED = booleanPreferencesKey("auto_attach_enabled")
     }
 
     // ─── selectedHostId ──────────────────────────────────────────────────────
@@ -223,6 +225,25 @@ class PreferencesDataStore @Inject constructor(
             if (text.isEmpty()) prefs.remove(stringPreferencesKey(key))
             else prefs[stringPreferencesKey(key)] = text
         }
+    }
+
+    // ─── last session / auto-attach ──────────────────────────────────────────
+
+    val lastSessionName: Flow<String?>
+        get() = dataStore.data.map { it[Keys.LAST_SESSION_NAME] }
+
+    suspend fun setLastSessionName(name: String?) {
+        dataStore.edit { prefs ->
+            if (name != null) prefs[Keys.LAST_SESSION_NAME] = name
+            else prefs.remove(Keys.LAST_SESSION_NAME)
+        }
+    }
+
+    val autoAttachEnabled: Flow<Boolean>
+        get() = dataStore.data.map { it[Keys.AUTO_ATTACH_ENABLED] ?: false }
+
+    suspend fun setAutoAttachEnabled(value: Boolean) {
+        dataStore.edit { it[Keys.AUTO_ATTACH_ENABLED] = value }
     }
 
     // ─── audio playback position ──────────────────────────────────────────────

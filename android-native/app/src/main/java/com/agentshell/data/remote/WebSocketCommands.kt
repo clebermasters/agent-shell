@@ -953,3 +953,109 @@ fun WebSocketService.audioControl(action: String) {
         "action" to action,
     ))
 }
+
+// =============================================================================
+// 11. FAVORITES COMMANDS
+// =============================================================================
+
+fun WebSocketService.getFavorites() {
+    send(mapOf("type" to "get-favorites"))
+}
+
+fun WebSocketService.addFavorite(
+    name: String,
+    path: String,
+    sortOrder: Int = 0,
+    startupCommand: String? = null,
+    startupArgs: String? = null,
+    tagIds: List<String> = emptyList(),
+) {
+    send(buildMap {
+        put("type", "add-favorite")
+        put("name", name)
+        put("path", path)
+        put("sortOrder", sortOrder)
+        put("tagIds", tagIds)
+        if (startupCommand != null) put("startupCommand", startupCommand)
+        if (startupArgs != null) put("startupArgs", startupArgs)
+    })
+}
+
+fun WebSocketService.updateFavorite(
+    id: String,
+    name: String,
+    path: String,
+    sortOrder: Int = 0,
+    startupCommand: String? = null,
+    startupArgs: String? = null,
+    tagIds: List<String> = emptyList(),
+) {
+    send(buildMap {
+        put("type", "update-favorite")
+        put("id", id)
+        put("name", name)
+        put("path", path)
+        put("sortOrder", sortOrder)
+        put("tagIds", tagIds)
+        if (startupCommand != null) put("startupCommand", startupCommand)
+        if (startupArgs != null) put("startupArgs", startupArgs)
+    })
+}
+
+fun WebSocketService.deleteFavorite(id: String) {
+    send(mapOf(
+        "type" to "delete-favorite",
+        "id"   to id,
+    ))
+}
+
+fun WebSocketService.setFavoriteTags(favoriteId: String, tagIds: List<String>) {
+    send(mapOf(
+        "type"       to "set-favorite-tags",
+        "favoriteId" to favoriteId,
+        "tagIds"     to tagIds,
+    ))
+}
+
+// =============================================================================
+// 12. TAG COMMANDS
+// =============================================================================
+
+fun WebSocketService.getTags() {
+    send(mapOf("type" to "get-tags"))
+}
+
+fun WebSocketService.addTag(name: String, colorHex: String) {
+    send(mapOf(
+        "type"     to "add-tag",
+        "name"     to name,
+        "colorHex" to colorHex,
+    ))
+}
+
+fun WebSocketService.deleteTag(id: String) {
+    send(mapOf(
+        "type" to "delete-tag",
+        "id"   to id,
+    ))
+}
+
+fun WebSocketService.getTagAssignments() {
+    send(mapOf("type" to "get-tag-assignments"))
+}
+
+fun WebSocketService.assignTagToSession(sessionName: String, tagId: String) {
+    send(mapOf(
+        "type"        to "assign-tag-to-session",
+        "sessionName" to sessionName,
+        "tagId"       to tagId,
+    ))
+}
+
+fun WebSocketService.removeTagFromSession(sessionName: String, tagId: String) {
+    send(mapOf(
+        "type"        to "remove-tag-from-session",
+        "sessionName" to sessionName,
+        "tagId"       to tagId,
+    ))
+}

@@ -33,7 +33,9 @@ mod chat_log;
 mod cron;
 mod cron_handler;
 mod dotfiles;
+mod favorite_store;
 mod monitor;
+mod tag_store;
 mod notification;
 mod notification_handler;
 mod notification_store;
@@ -70,6 +72,8 @@ pub struct AppState {
     pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
     pub acp_client: Arc<tokio::sync::RwLock<Option<acp::AcpClient>>>,
     pub notification_store: Arc<notification_store::NotificationStore>,
+    pub favorite_store: Arc<favorite_store::FavoriteStore>,
+    pub tag_store: Arc<tag_store::TagStore>,
     pub shutdown_token: CancellationToken,
 }
 
@@ -116,6 +120,8 @@ async fn main() -> Result<()> {
         chat_event_store: Arc::new(chat_event_store::ChatEventStore::new(base_dir.clone())?),
         chat_clear_store: Arc::new(chat_clear_store::ChatClearStore::new(&base_dir)),
         notification_store: Arc::new(notification_store::NotificationStore::new(base_dir.clone())?),
+        favorite_store: Arc::new(favorite_store::FavoriteStore::new(base_dir.clone())?),
+        tag_store: Arc::new(tag_store::TagStore::new(base_dir.clone())?),
         acp_client: Arc::new(tokio::sync::RwLock::new(None)),
         shutdown_token: CancellationToken::new(),
     };

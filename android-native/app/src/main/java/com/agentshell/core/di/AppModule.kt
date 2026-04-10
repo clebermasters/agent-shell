@@ -6,10 +6,12 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import com.agentshell.data.local.AppDatabase
+import com.agentshell.data.local.CommandMacroDao
 import com.agentshell.data.local.FavoriteSessionDao
 import com.agentshell.data.local.HostDao
 import com.agentshell.data.local.PanelLayoutDao
 import com.agentshell.data.local.PreferencesDataStore
+import com.agentshell.data.local.SessionTagDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -35,7 +37,14 @@ object AppModule {
             AppDatabase::class.java,
             "agentshell_db"
         )
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5)
+            .addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
+            )
             .build()
     }
 
@@ -55,6 +64,18 @@ object AppModule {
     @Singleton
     fun provideFavoriteSessionDao(database: AppDatabase): FavoriteSessionDao {
         return database.favoriteSessionDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideCommandMacroDao(database: AppDatabase): CommandMacroDao {
+        return database.commandMacroDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideSessionTagDao(database: AppDatabase): SessionTagDao {
+        return database.sessionTagDao()
     }
 
     @Provides

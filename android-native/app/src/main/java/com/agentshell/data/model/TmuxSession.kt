@@ -7,7 +7,8 @@ data class TmuxSession(
     val name: String,
     val attached: Boolean,
     val windows: Int,
-    val created: String? = null
+    val created: String? = null,
+    val tool: String? = null,
 )
 
 @Serializable

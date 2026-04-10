@@ -1,6 +1,7 @@
 package com.agentshell.feature.sessions
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -59,23 +60,35 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.Switch
 import com.agentshell.data.model.AcpSession
 import com.agentshell.data.model.FavoriteSession
+import com.agentshell.data.model.SessionTag
 import com.agentshell.data.model.TmuxSession
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -90,11 +103,27 @@ fun SessionsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     var selectedTabIndex by rememberSaveable { mutableStateOf(0) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var showAddFavoriteDialog by rememberSaveable { mutableStateOf(false) }
     var favoriteToEdit by remember { mutableStateOf<FavoriteSession?>(null) }
+    var showTagsSheet by rememberSaveable { mutableStateOf(false) }
+    var tagAssignSession by remember { mutableStateOf<String?>(null) }
+
+    // Import launcher — user picks a .json file
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
+            if (!json.isNullOrBlank()) {
+                viewModel.importFavoritesJson(json)
+                snackbarHostState.showSnackbar("Favorites imported")
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.newAcpSession.collect { event ->
@@ -137,6 +166,30 @@ fun SessionsScreen(
                     }
                     IconButton(onClick = { viewModel.requestSessions() }, modifier = Modifier.size(36.dp)) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh", modifier = Modifier.size(20.dp))
+                    }
+                    if (selectedTabIndex == 2) {
+                        IconButton(
+                            onClick = { importLauncher.launch("application/json") },
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(Icons.Default.FileDownload, contentDescription = "Import", modifier = Modifier.size(20.dp))
+                        }
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    val json = viewModel.exportFavoritesJson()
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "application/json"
+                                        putExtra(Intent.EXTRA_TEXT, json)
+                                        putExtra(Intent.EXTRA_SUBJECT, "AgentShell Favorites")
+                                    }
+                                    context.startActivity(Intent.createChooser(intent, "Export Favorites"))
+                                }
+                            },
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(Icons.Default.FileUpload, contentDescription = "Export", modifier = Modifier.size(20.dp))
+                        }
                     }
                     IconButton(
                         onClick = {
@@ -199,6 +252,22 @@ fun SessionsScreen(
                 }
             }
 
+            val displayedSessions = remember(uiState.tmuxSessions, uiState.activeTagFilter, uiState.sessionTagMap) {
+                val filter = uiState.activeTagFilter ?: return@remember uiState.tmuxSessions
+                uiState.tmuxSessions.filter { s ->
+                    uiState.sessionTagMap[s.name]?.any { it.id == filter } == true
+                }
+            }
+
+            if (selectedTabIndex == 0 && uiState.tags.isNotEmpty()) {
+                TagFilterRow(
+                    tags = uiState.tags,
+                    activeTagFilter = uiState.activeTagFilter,
+                    onTagSelected = { viewModel.setTagFilter(it) },
+                    onManageTags = { showTagsSheet = true },
+                )
+            }
+
             PullToRefreshBox(
                 isRefreshing = uiState.isLoading,
                 onRefresh = { viewModel.requestSessions() },
@@ -206,12 +275,14 @@ fun SessionsScreen(
             ) {
                 when (selectedTabIndex) {
                     0 -> TmuxSessionList(
-                        sessions = uiState.tmuxSessions,
+                        sessions = displayedSessions,
                         isLoading = uiState.isLoading,
                         onTap = { session -> onNavigateToTerminal(session.name) },
                         onChat = { session -> onNavigateToChat(session.name, 0) },
                         onKill = { session -> viewModel.killSession(session.name) },
                         onGit = { session -> onNavigateToGit(session.name, "", false) },
+                        sessionTagMap = uiState.sessionTagMap,
+                        onManageSessionTags = { sessionName -> tagAssignSession = sessionName },
                     )
                     1 -> AcpSessionList(
                         sessions = uiState.acpSessions,
@@ -228,6 +299,8 @@ fun SessionsScreen(
                     )
                     2 -> FavoriteSessionsList(
                         favorites = uiState.favorites,
+                        tags = uiState.tags,
+                        favoriteTagMap = uiState.favoriteTagMap,
                         onLaunch = { favorite ->
                             viewModel.createSessionFromFavorite(favorite)
                             selectedTabIndex = 0
@@ -261,8 +334,10 @@ fun SessionsScreen(
             initialPath = "",
             initialStartupCommand = null,
             initialStartupArgs = null,
-            onConfirm = { name, path, startupCommand, startupArgs ->
-                viewModel.addFavorite(name, path, startupCommand, startupArgs)
+            availableTags = uiState.tags,
+            initialTagIds = emptySet(),
+            onConfirm = { name, path, startupCommand, startupArgs, tagIds ->
+                viewModel.addFavorite(name, path, startupCommand, startupArgs, tagIds)
                 showAddFavoriteDialog = false
             },
             onDismiss = { showAddFavoriteDialog = false },
@@ -276,11 +351,36 @@ fun SessionsScreen(
             initialPath = fav.path,
             initialStartupCommand = fav.startupCommand,
             initialStartupArgs = fav.startupArgs,
-            onConfirm = { name, path, startupCommand, startupArgs ->
-                viewModel.updateFavorite(fav, name, path, startupCommand, startupArgs)
+            availableTags = uiState.tags,
+            initialTagIds = (uiState.favoriteTagMap[fav.id] ?: emptyList()).toSet(),
+            onConfirm = { name, path, startupCommand, startupArgs, tagIds ->
+                viewModel.updateFavorite(fav, name, path, startupCommand, startupArgs, tagIds)
                 favoriteToEdit = null
             },
             onDismiss = { favoriteToEdit = null },
+        )
+    }
+
+    if (showTagsSheet) {
+        TagsBottomSheet(
+            tags = uiState.tags,
+            onAddTag = { name, colorHex -> viewModel.addTag(name, colorHex) },
+            onDeleteTag = { tag -> viewModel.deleteTag(tag) },
+            onDismiss = { showTagsSheet = false },
+        )
+    }
+
+    tagAssignSession?.let { sessionName ->
+        TagAssignDialog(
+            sessionName = sessionName,
+            allTags = uiState.tags,
+            assignedTagIds = uiState.sessionTagMap[sessionName]?.map { it.id }?.toSet() ?: emptySet(),
+            onToggle = { tagId, assigned ->
+                if (assigned) viewModel.assignTag(sessionName, tagId)
+                else viewModel.removeTagFromSession(sessionName, tagId)
+            },
+            onManageTags = { tagAssignSession = null; showTagsSheet = true },
+            onDismiss = { tagAssignSession = null },
         )
     }
 }
@@ -290,6 +390,8 @@ fun SessionsScreen(
 @Composable
 private fun FavoriteSessionsList(
     favorites: List<FavoriteSession>,
+    tags: List<SessionTag> = emptyList(),
+    favoriteTagMap: Map<String, List<String>> = emptyMap(),
     onLaunch: (FavoriteSession) -> Unit,
     onEdit: (FavoriteSession) -> Unit,
     onDelete: (FavoriteSession) -> Unit,
@@ -303,10 +405,16 @@ private fun FavoriteSessionsList(
         return
     }
 
+    val tagById = remember(tags) { tags.associateBy { it.id } }
+
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(favorites, key = { it.id }) { favorite ->
+            val assignedTags = favoriteTagMap[favorite.id]
+                ?.mapNotNull { tagById[it] }
+                ?: emptyList()
             FavoriteSessionCard(
                 favorite = favorite,
+                assignedTags = assignedTags,
                 onLaunch = { onLaunch(favorite) },
                 onEdit = { onEdit(favorite) },
                 onDelete = { onDelete(favorite) },
@@ -319,6 +427,7 @@ private fun FavoriteSessionsList(
 @Composable
 private fun FavoriteSessionCard(
     favorite: FavoriteSession,
+    assignedTags: List<SessionTag> = emptyList(),
     onLaunch: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -363,6 +472,27 @@ private fun FavoriteSessionCard(
                         color = MaterialTheme.colorScheme.tertiary,
                         maxLines = 1,
                     )
+                }
+                if (assignedTags.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 4.dp),
+                    ) {
+                        assignedTags.forEach { tag ->
+                            val tagColor = runCatching {
+                                android.graphics.Color.parseColor(tag.colorHex)
+                            }.getOrDefault(0xFF2196F3.toInt())
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(
+                                        androidx.compose.ui.graphics.Color(tagColor),
+                                        androidx.compose.foundation.shape.CircleShape,
+                                    )
+                            )
+                        }
+                    }
                 }
             }
 
@@ -420,11 +550,14 @@ private fun FavoriteDialog(
     initialPath: String,
     initialStartupCommand: String? = null,
     initialStartupArgs: String? = null,
-    onConfirm: (name: String, path: String, startupCommand: String?, startupArgs: String?) -> Unit,
+    availableTags: List<SessionTag> = emptyList(),
+    initialTagIds: Set<String> = emptySet(),
+    onConfirm: (name: String, path: String, startupCommand: String?, startupArgs: String?, tagIds: List<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by rememberSaveable { mutableStateOf(initialName) }
     var path by rememberSaveable { mutableStateOf(initialPath) }
+    var selectedTagIds by remember { mutableStateOf(initialTagIds) }
 
     val presets = listOf("None", "claude", "codex", "opencode", "Custom")
     var selectedPreset by rememberSaveable {
@@ -512,11 +645,51 @@ private fun FavoriteDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                if (availableTags.isNotEmpty()) {
+                    Text(
+                        "Tags (optional)",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        availableTags.forEach { tag ->
+                            val selected = tag.id in selectedTagIds
+                            val tagColor = runCatching {
+                                android.graphics.Color.parseColor(tag.colorHex)
+                            }.getOrDefault(0xFF2196F3.toInt())
+                            FilterChip(
+                                selected = selected,
+                                onClick = {
+                                    selectedTagIds = if (selected)
+                                        selectedTagIds - tag.id
+                                    else
+                                        selectedTagIds + tag.id
+                                },
+                                label = { Text(tag.name, fontSize = 12.sp) },
+                                leadingIcon = if (selected) null else {
+                                    {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(
+                                                    androidx.compose.ui.graphics.Color(tagColor),
+                                                    androidx.compose.foundation.shape.CircleShape,
+                                                )
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { if (valid) onConfirm(name.trim(), path.trim(), effectiveCommand, effectiveArgs) },
+                onClick = { if (valid) onConfirm(name.trim(), path.trim(), effectiveCommand, effectiveArgs, selectedTagIds.toList()) },
                 enabled = valid,
             ) { Text("Save") }
         },
@@ -536,6 +709,8 @@ private fun TmuxSessionList(
     onChat: (TmuxSession) -> Unit,
     onKill: (TmuxSession) -> Unit,
     onGit: (TmuxSession) -> Unit,
+    sessionTagMap: Map<String, List<SessionTag>> = emptyMap(),
+    onManageSessionTags: (sessionName: String) -> Unit = {},
 ) {
     if (isLoading && sessions.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -557,10 +732,12 @@ private fun TmuxSessionList(
         items(sessions, key = { it.name }) { session ->
             TmuxSessionCard(
                 session = session,
+                tags = sessionTagMap[session.name] ?: emptyList(),
                 onTap = { onTap(session) },
                 onChat = { onChat(session) },
                 onKill = { onKill(session) },
                 onGit = { onGit(session) },
+                onManageTags = { onManageSessionTags(session.name) },
             )
         }
     }
@@ -570,10 +747,12 @@ private fun TmuxSessionList(
 @Composable
 private fun TmuxSessionCard(
     session: TmuxSession,
+    tags: List<SessionTag> = emptyList(),
     onTap: () -> Unit,
     onChat: () -> Unit,
     onKill: () -> Unit,
     onGit: () -> Unit,
+    onManageTags: () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showKillDialog by remember { mutableStateOf(false) }
@@ -601,6 +780,40 @@ private fun TmuxSessionCard(
                     "${session.windows} win${if (session.attached) " • Active" else ""}",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.outline,
+                )
+                if (tags.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(top = 3.dp),
+                    ) {
+                        tags.forEach { tag ->
+                            val tagColor = try {
+                                Color(android.graphics.Color.parseColor(tag.colorHex))
+                            } catch (e: Exception) { Color(0xFF2196F3) }
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(tagColor, shape = androidx.compose.foundation.shape.CircleShape),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // AI tool indicator dot
+            session.tool?.let { tool ->
+                val dotColor = when (tool) {
+                    "claude" -> Color(0xFFFF8C00)
+                    "codex" -> Color(0xFF2196F3)
+                    "opencode" -> Color(0xFF4CAF50)
+                    "kiro" -> Color(0xFF9C27B0)
+                    else -> Color(0xFF9E9E9E)
+                }
+                Box(
+                    modifier = Modifier
+                        .padding(end = 6.dp)
+                        .size(8.dp)
+                        .background(dotColor, shape = androidx.compose.foundation.shape.CircleShape),
                 )
             }
 
@@ -643,6 +856,11 @@ private fun TmuxSessionCard(
                         text = { Text("Git") },
                         leadingIcon = { Icon(Icons.Default.Code, null) },
                         onClick = { showMenu = false; onGit() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Tags") },
+                        leadingIcon = { Icon(Icons.Default.Bookmark, null) },
+                        onClick = { showMenu = false; onManageTags() },
                     )
                     DropdownMenuItem(
                         text = { Text("Kill Session", color = MaterialTheme.colorScheme.error) },
@@ -887,6 +1105,219 @@ private fun CreateSessionDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+// ── Tag filter row ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun TagFilterRow(
+    tags: List<SessionTag>,
+    activeTagFilter: String?,
+    onTagSelected: (String?) -> Unit,
+    onManageTags: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        FilterChip(
+            selected = activeTagFilter == null,
+            onClick = { onTagSelected(null) },
+            label = { Text("All", fontSize = 12.sp) },
+        )
+        tags.forEach { tag ->
+            val tagColor = try {
+                Color(android.graphics.Color.parseColor(tag.colorHex))
+            } catch (e: Exception) { Color(0xFF2196F3) }
+            FilterChip(
+                selected = activeTagFilter == tag.id,
+                onClick = { onTagSelected(if (activeTagFilter == tag.id) null else tag.id) },
+                label = { Text(tag.name, fontSize = 12.sp) },
+                leadingIcon = {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(tagColor, shape = androidx.compose.foundation.shape.CircleShape),
+                    )
+                },
+            )
+        }
+        TextButton(onClick = onManageTags, modifier = Modifier.height(32.dp)) {
+            Text("Edit", fontSize = 12.sp)
+        }
+    }
+}
+
+// ── Tags management bottom sheet ───────────────────────────────────────────────
+
+private val TAG_COLOR_PALETTE = listOf(
+    "#2196F3", "#4CAF50", "#F44336", "#FF9800",
+    "#9C27B0", "#00BCD4", "#FF5722", "#607D8B",
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun TagsBottomSheet(
+    tags: List<SessionTag>,
+    onAddTag: (name: String, colorHex: String) -> Unit,
+    onDeleteTag: (SessionTag) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var newName by remember { mutableStateOf("") }
+    var selectedColor by remember { mutableStateOf(TAG_COLOR_PALETTE[0]) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text(
+                "Session Tags",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+
+            // Color palette
+            Row(
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TAG_COLOR_PALETTE.forEach { hex ->
+                    val color = try {
+                        Color(android.graphics.Color.parseColor(hex))
+                    } catch (e: Exception) { Color.Gray }
+                    Box(
+                        modifier = Modifier
+                            .size(if (selectedColor == hex) 28.dp else 22.dp)
+                            .background(color, shape = androidx.compose.foundation.shape.CircleShape)
+                            .combinedClickable(onClick = { selectedColor = hex }),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (selectedColor == hex) {
+                            Text("✓", color = Color.White, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
+            // New tag name + add button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("Tag name") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = {
+                        if (newName.isNotBlank()) {
+                            onAddTag(newName.trim(), selectedColor)
+                            newName = ""
+                        }
+                    },
+                ) { Text("Add") }
+            }
+
+            // Existing tags
+            if (tags.isNotEmpty()) {
+                LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
+                    items(tags, key = { it.id }) { tag ->
+                        val tagColor = try {
+                            Color(android.graphics.Color.parseColor(tag.colorHex))
+                        } catch (e: Exception) { Color.Gray }
+                        ListItem(
+                            leadingContent = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(14.dp)
+                                        .background(tagColor, shape = androidx.compose.foundation.shape.CircleShape),
+                                )
+                            },
+                            headlineContent = { Text(tag.name) },
+                            trailingContent = {
+                                IconButton(onClick = { onDeleteTag(tag) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete tag")
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Tag assign dialog ──────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TagAssignDialog(
+    sessionName: String,
+    allTags: List<SessionTag>,
+    assignedTagIds: Set<String>,
+    onToggle: (tagId: String, assign: Boolean) -> Unit,
+    onManageTags: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tags for \"$sessionName\"") },
+        text = {
+            if (allTags.isEmpty()) {
+                Text("No tags yet. Create tags first.", color = MaterialTheme.colorScheme.outline)
+            } else {
+                Column {
+                    allTags.forEach { tag ->
+                        val tagColor = try {
+                            Color(android.graphics.Color.parseColor(tag.colorHex))
+                        } catch (e: Exception) { Color.Gray }
+                        val assigned = tag.id in assignedTagIds
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(onClick = { onToggle(tag.id, !assigned) })
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .background(tagColor, shape = androidx.compose.foundation.shape.CircleShape),
+                            )
+                            Text(tag.name, modifier = Modifier.weight(1f))
+                            Switch(
+                                checked = assigned,
+                                onCheckedChange = { onToggle(tag.id, it) },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        },
+        dismissButton = {
+            TextButton(onClick = onManageTags) { Text("Manage Tags") }
         },
     )
 }

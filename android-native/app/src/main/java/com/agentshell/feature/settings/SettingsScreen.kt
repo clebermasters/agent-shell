@@ -36,6 +36,7 @@ data class SettingsUiState(
     val voiceAutoEnter: Boolean = false,
     val showThinking: Boolean = false,
     val showToolCalls: Boolean = false,
+    val autoAttachEnabled: Boolean = false,
     val isSaving: Boolean = false,
     val savedMessage: String? = null,
     val appVersion: String = "1.0.0",
@@ -66,6 +67,9 @@ class SettingsViewModel @Inject constructor(
         }
         viewModelScope.launch {
             dataStore.showToolCalls.collect { v -> _state.update { it.copy(showToolCalls = v) } }
+        }
+        viewModelScope.launch {
+            dataStore.autoAttachEnabled.collect { v -> _state.update { it.copy(autoAttachEnabled = v) } }
         }
     }
 
@@ -106,6 +110,11 @@ class SettingsViewModel @Inject constructor(
     fun toggleShowToolCalls(enabled: Boolean) {
         viewModelScope.launch { dataStore.setShowToolCalls(enabled) }
         _state.update { it.copy(showToolCalls = enabled) }
+    }
+
+    fun toggleAutoAttach(enabled: Boolean) {
+        viewModelScope.launch { dataStore.setAutoAttachEnabled(enabled) }
+        _state.update { it.copy(autoAttachEnabled = enabled) }
     }
 }
 
@@ -221,6 +230,18 @@ fun SettingsScreen(
                         steps = ((AppConfig.MAX_FONT_SIZE - AppConfig.MIN_FONT_SIZE) / AppConfig.FONT_SIZE_STEP - 1).toInt(),
                         modifier = Modifier.fillMaxWidth(),
                     )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Auto-attach on open", style = MaterialTheme.typography.bodyMedium)
+                            Text("Resume last session when app opens", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = state.autoAttachEnabled, onCheckedChange = { viewModel.toggleAutoAttach(it) })
+                    }
                 }
             }
 

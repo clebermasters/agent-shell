@@ -41,6 +41,14 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Card
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import com.agentshell.data.model.CommandMacro
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -141,6 +149,10 @@ fun TerminalScreen(
     val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
     val isKeyboardVisible = imeBottom > 0
 
+    // Macros
+    val macros by viewModel.macros.collectAsStateWithLifecycle()
+    var showMacroSheet by remember { mutableStateOf(false) }
+
     // Sticky modifier state — shared between accessory bar and soft keyboard input
     var ctrlActive by remember { mutableStateOf(false) }
     var altActive by remember { mutableStateOf(false) }
@@ -229,6 +241,16 @@ fun TerminalScreen(
             dismissButton = {
                 TextButton(onClick = { showRenameDialog = false }) { Text("Cancel") }
             },
+        )
+    }
+
+    // ── Macro bottom sheet ────────────────────────────────────────────────
+    if (showMacroSheet) {
+        MacroBottomSheet(
+            macros = macros,
+            onAdd = { label, command -> viewModel.addMacro(label, command) },
+            onDelete = { macro -> viewModel.deleteMacro(macro) },
+            onDismiss = { showMacroSheet = false },
         )
     }
 
@@ -430,6 +452,9 @@ fun TerminalScreen(
                             altActive = false
                             shiftActive = false
                         },
+                        macros = macros,
+                        onMacroTap = { macro -> viewModel.onTerminalInput(macro.command + "\r") },
+                        onManageMacros = { showMacroSheet = true },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -500,6 +525,86 @@ fun TerminalScreen(
                         fontSize = 13.sp,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MacroBottomSheet(
+    macros: List<CommandMacro>,
+    onAdd: (label: String, command: String) -> Unit,
+    onDelete: (CommandMacro) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var labelText by remember { mutableStateOf("") }
+    var commandText by remember { mutableStateOf("") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text(
+                "Command Macros",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
+
+            // Add form
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = labelText,
+                    onValueChange = { labelText = it },
+                    label = { Text("Label") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = commandText,
+                    onValueChange = { commandText = it },
+                    label = { Text("Command") },
+                    singleLine = true,
+                    modifier = Modifier.weight(2f),
+                )
+                TextButton(
+                    onClick = {
+                        if (labelText.isNotBlank() && commandText.isNotBlank()) {
+                            onAdd(labelText.trim(), commandText.trim())
+                            labelText = ""
+                            commandText = ""
+                        }
+                    },
+                ) {
+                    Text("Add")
+                }
+            }
+
+            // Existing macros
+            if (macros.isNotEmpty()) {
+                LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
+                    items(macros, key = { it.id }) { macro ->
+                        ListItem(
+                            headlineContent = { Text(macro.label) },
+                            supportingContent = { Text(macro.command, style = MaterialTheme.typography.bodySmall) },
+                            trailingContent = {
+                                IconButton(onClick = { onDelete(macro) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete macro")
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }

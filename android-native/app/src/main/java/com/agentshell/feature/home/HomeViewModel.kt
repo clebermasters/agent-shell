@@ -15,9 +15,12 @@ import com.agentshell.data.repository.HostRepository
 import com.agentshell.data.repository.SystemRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.filterNotNull
@@ -55,6 +58,10 @@ class HomeViewModel @Inject constructor(
     private val _cronJobs = MutableStateFlow<List<CronJob>>(emptyList())
     private val _dotFiles = MutableStateFlow<List<DotFile>>(emptyList())
 
+    private val _autoAttachSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val autoAttachSession: SharedFlow<String> = _autoAttachSession.asSharedFlow()
+    private var autoAttachConsumed = false
+
     val claudeUsage = systemRepository.claudeUsage
 
     val uiState: StateFlow<HomeUiState> = combine(
@@ -86,12 +93,27 @@ class HomeViewModel @Inject constructor(
         observeMessages()
         startStatsPolling()
         observeAndConnect()
+        checkAutoAttach()
     }
 
     private fun restoreTabIndex() {
         viewModelScope.launch {
             dataStore.homeTabIndex.collect { saved ->
                 _tabIndex.update { saved }
+            }
+        }
+    }
+
+    private fun checkAutoAttach() {
+        viewModelScope.launch {
+            // Wait for first CONNECTED status
+            wsService.connectionStatus.first { it == ConnectionStatus.CONNECTED }
+            if (autoAttachConsumed) return@launch
+            val enabled = dataStore.autoAttachEnabled.first()
+            val sessionName = dataStore.lastSessionName.first()
+            if (enabled && !sessionName.isNullOrBlank()) {
+                autoAttachConsumed = true
+                _autoAttachSession.emit(sessionName)
             }
         }
     }
@@ -143,6 +165,7 @@ class HomeViewModel @Inject constructor(
                                     attached = (s["attached"] as? Boolean) ?: false,
                                     windows = (s["windows"] as? Number)?.toInt() ?: 1,
                                     created = s["created"] as? String,
+                                    tool = s["tool"] as? String,
                                 )
                             }
                         }

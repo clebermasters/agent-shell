@@ -3,7 +3,9 @@ package com.agentshell.feature.terminal
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentshell.core.config.AppConfig
+import com.agentshell.data.local.CommandMacroDao
 import com.agentshell.data.local.PreferencesDataStore
+import com.agentshell.data.model.CommandMacro
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.remote.getSessionCwd
@@ -17,12 +19,14 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -48,9 +52,13 @@ class TerminalViewModel @Inject constructor(
     private val audioService: AudioService,
     private val whisperService: WhisperService,
     private val prefs: PreferencesDataStore,
+    private val macroDao: CommandMacroDao,
 ) : ViewModel() {
 
     private val density: Float = app.resources.displayMetrics.scaledDensity
+
+    val macros: StateFlow<List<CommandMacro>> = macroDao.getAll()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _uiState = MutableStateFlow(TerminalUiState())
     val uiState: StateFlow<TerminalUiState> = _uiState.asStateFlow()
@@ -142,6 +150,9 @@ class TerminalViewModel @Inject constructor(
         // Attach to backend (triggers history + live output)
         terminalService.attachSession(sessionName, cols, rows, windowIndex)
 
+        // Persist last session for auto-attach on next app open
+        viewModelScope.launch { prefs.setLastSessionName(sessionName) }
+
         // Apply persisted font size to xterm.js (it starts with hardcoded default 14px)
         val fontSize = _uiState.value.fontSize
         if (fontSize != AppConfig.DEFAULT_FONT_SIZE) {
@@ -230,6 +241,17 @@ class TerminalViewModel @Inject constructor(
     suspend fun getRecentTerminalSessions(): List<String> = prefs.getRecentTerminalSessions()
 
     suspend fun pushRecentTerminalSession(name: String) = prefs.pushRecentTerminalSession(name)
+
+    // ── Command macros ────────────────────────────────────────────────────
+
+    fun addMacro(label: String, command: String) {
+        if (label.isBlank() || command.isBlank()) return
+        viewModelScope.launch { macroDao.upsert(CommandMacro(label = label.trim(), command = command.trim())) }
+    }
+
+    fun deleteMacro(macro: CommandMacro) {
+        viewModelScope.launch { macroDao.delete(macro) }
+    }
 
     // ── File browser CWD ──────────────────────────────────────────────────
 

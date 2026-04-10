@@ -12,6 +12,8 @@ pub struct TmuxSession {
     pub created: DateTime<Utc>,
     pub windows: u32,
     pub dimensions: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -638,6 +640,65 @@ pub enum WebSocketMessage {
         file_path: String,
         resolution: String,
     },
+    // Favorites
+    GetFavorites,
+    AddFavorite {
+        name: String,
+        path: String,
+        #[serde(rename = "sortOrder", default)]
+        sort_order: i32,
+        #[serde(rename = "startupCommand")]
+        startup_command: Option<String>,
+        #[serde(rename = "startupArgs")]
+        startup_args: Option<String>,
+        #[serde(rename = "tagIds", default)]
+        tag_ids: Vec<String>,
+    },
+    UpdateFavorite {
+        id: String,
+        name: String,
+        path: String,
+        #[serde(rename = "sortOrder", default)]
+        sort_order: i32,
+        #[serde(rename = "startupCommand")]
+        startup_command: Option<String>,
+        #[serde(rename = "startupArgs")]
+        startup_args: Option<String>,
+        #[serde(rename = "tagIds", default)]
+        tag_ids: Vec<String>,
+    },
+    DeleteFavorite {
+        id: String,
+    },
+    SetFavoriteTags {
+        #[serde(rename = "favoriteId")]
+        favorite_id: String,
+        #[serde(rename = "tagIds")]
+        tag_ids: Vec<String>,
+    },
+    // Tags
+    GetTags,
+    AddTag {
+        name: String,
+        #[serde(rename = "colorHex")]
+        color_hex: String,
+    },
+    DeleteTag {
+        id: String,
+    },
+    GetTagAssignments,
+    AssignTagToSession {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "tagId")]
+        tag_id: String,
+    },
+    RemoveTagFromSession {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "tagId")]
+        tag_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1171,6 +1232,47 @@ pub enum ServerMessage {
     GitStashListResult {
         entries: Vec<GitStashEntry>,
     },
+    // Favorites
+    FavoritesList {
+        favorites: Vec<crate::favorite_store::FavoriteEntry>,
+    },
+    FavoriteAdded {
+        favorite: crate::favorite_store::FavoriteEntry,
+    },
+    FavoriteUpdated {
+        favorite: crate::favorite_store::FavoriteEntry,
+    },
+    FavoriteDeleted {
+        id: String,
+        success: bool,
+    },
+    FavoriteTagsUpdated {
+        #[serde(rename = "favoriteId")]
+        favorite_id: String,
+        #[serde(rename = "tagIds")]
+        tag_ids: Vec<String>,
+    },
+    // Tags
+    TagsList {
+        tags: Vec<crate::tag_store::TagEntry>,
+    },
+    TagAdded {
+        tag: crate::tag_store::TagEntry,
+    },
+    TagDeleted {
+        id: String,
+        success: bool,
+    },
+    TagAssignmentsList {
+        assignments: Vec<crate::tag_store::TagAssignment>,
+    },
+    TagAssignmentUpdated {
+        #[serde(rename = "sessionName")]
+        session_name: String,
+        #[serde(rename = "tagId")]
+        tag_id: String,
+        assigned: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1309,6 +1411,7 @@ mod tests {
             created: chrono::Utc::now(),
             windows: 2,
             dimensions: "80x24".to_string(),
+            tool: None,
         };
         let json = serde_json::to_string(&session).unwrap();
         assert!(json.contains("\"name\":\"test\""));

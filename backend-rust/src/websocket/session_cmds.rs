@@ -1,8 +1,9 @@
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use super::types::{send_message, BroadcastMessage, WsState};
-use crate::{tmux, types::*};
+use crate::{tmux, types::*, AppState};
 
 pub(crate) async fn handle_list_sessions(
     tx: &mpsc::UnboundedSender<BroadcastMessage>,
@@ -62,6 +63,7 @@ pub(crate) async fn handle_create_session(
 
 pub(crate) async fn handle_kill_session(
     tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    app_state: Arc<AppState>,
     session_name: String,
 ) -> anyhow::Result<()> {
     info!("Kill session request for: {}", session_name);
@@ -69,6 +71,7 @@ pub(crate) async fn handle_kill_session(
     match tmux::kill_session(&session_name).await {
         Ok(_) => {
             info!("Successfully killed session: {}", session_name);
+            let _ = app_state.tag_store.clear_tags_for_session(&session_name);
             let response = ServerMessage::SessionKilled {
                 success: true,
                 error: None,

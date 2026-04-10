@@ -227,7 +227,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         }
 
         WebSocketMessage::KillSession { session_name } => {
-            session_cmds::handle_kill_session(&state.message_tx, session_name).await?;
+            session_cmds::handle_kill_session(&state.message_tx, Arc::clone(&app_state), session_name).await?;
         }
 
         WebSocketMessage::RenameSession {

@@ -135,6 +135,15 @@ impl TagStore {
         Ok(())
     }
 
+    pub fn clear_tags_for_session(&self, session_name: &str) -> Result<()> {
+        let conn = self.open()?;
+        conn.execute(
+            "DELETE FROM session_tag_assignments WHERE session_name=?1",
+            params![session_name],
+        )?;
+        Ok(())
+    }
+
     /// Returns all tag IDs assigned to the given session.
     pub fn tag_ids_for_session(&self, session_name: &str) -> Result<Vec<String>> {
         let conn = self.open()?;

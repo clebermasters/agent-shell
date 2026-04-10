@@ -1,6 +1,11 @@
-# agentshell
+# agentshell (Flutter) — DEPRECATED
 
-A new Flutter project.
+> ⚠️ **This Flutter client is deprecated and no longer maintained.**
+>
+> The primary Android client is now the native Kotlin/Jetpack Compose app located in [`../android-native/`](../android-native/).
+> Please use the native app instead — it has full feature parity and receives all new features and bug fixes.
+>
+> This directory is kept for historical reference only.
 
 ## Getting Started
 

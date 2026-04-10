@@ -112,15 +112,35 @@ fun SessionsScreen(
     var favoriteToEdit by remember { mutableStateOf<FavoriteSession?>(null) }
     var showTagsSheet by rememberSaveable { mutableStateOf(false) }
     var tagAssignSession by remember { mutableStateOf<String?>(null) }
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+
+    // Export launcher — user picks where to save the file
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val json = pendingExportJson ?: return@rememberLauncherForActivityResult
+        pendingExportJson = null
+        scope.launch {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
+                snackbarHostState.showSnackbar("Favorites exported")
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("Export failed: ${e.message}")
+            }
+        }
+    }
 
     // Import launcher — user picks a .json file
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         scope.launch {
-            val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
-            if (!json.isNullOrBlank()) {
-                viewModel.importFavoritesJson(json)
-                snackbarHostState.showSnackbar("Favorites imported")
+            try {
+                val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
+                if (!json.isNullOrBlank()) {
+                    viewModel.importFavoritesJson(json)
+                    snackbarHostState.showSnackbar("Favorites imported")
+                }
+            } catch (e: Exception) {
+                snackbarHostState.showSnackbar("Import failed: ${e.message}")
             }
         }
     }
@@ -177,13 +197,8 @@ fun SessionsScreen(
                         IconButton(
                             onClick = {
                                 scope.launch {
-                                    val json = viewModel.exportFavoritesJson()
-                                    val intent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "application/json"
-                                        putExtra(Intent.EXTRA_TEXT, json)
-                                        putExtra(Intent.EXTRA_SUBJECT, "AgentShell Favorites")
-                                    }
-                                    context.startActivity(Intent.createChooser(intent, "Export Favorites"))
+                                    pendingExportJson = viewModel.exportFavoritesJson()
+                                    exportLauncher.launch("agentshell-favorites.json")
                                 }
                             },
                             modifier = Modifier.size(36.dp),

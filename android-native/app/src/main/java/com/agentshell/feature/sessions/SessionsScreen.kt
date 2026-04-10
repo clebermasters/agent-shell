@@ -2,6 +2,8 @@ package com.agentshell.feature.sessions
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -256,8 +259,10 @@ fun SessionsScreen(
             title = "Add Favorite",
             initialName = "",
             initialPath = "",
-            onConfirm = { name, path ->
-                viewModel.addFavorite(name, path)
+            initialStartupCommand = null,
+            initialStartupArgs = null,
+            onConfirm = { name, path, startupCommand, startupArgs ->
+                viewModel.addFavorite(name, path, startupCommand, startupArgs)
                 showAddFavoriteDialog = false
             },
             onDismiss = { showAddFavoriteDialog = false },
@@ -269,8 +274,10 @@ fun SessionsScreen(
             title = "Edit Favorite",
             initialName = fav.name,
             initialPath = fav.path,
-            onConfirm = { name, path ->
-                viewModel.updateFavorite(fav, name, path)
+            initialStartupCommand = fav.startupCommand,
+            initialStartupArgs = fav.startupArgs,
+            onConfirm = { name, path, startupCommand, startupArgs ->
+                viewModel.updateFavorite(fav, name, path, startupCommand, startupArgs)
                 favoriteToEdit = null
             },
             onDismiss = { favoriteToEdit = null },
@@ -344,6 +351,19 @@ private fun FavoriteSessionCard(
                     color = MaterialTheme.colorScheme.outline,
                     maxLines = 1,
                 )
+                if (!favorite.startupCommand.isNullOrBlank()) {
+                    val cmdLabel = buildString {
+                        append("$ ")
+                        append(favorite.startupCommand)
+                        if (!favorite.startupArgs.isNullOrBlank()) append(" ${favorite.startupArgs}")
+                    }
+                    Text(
+                        cmdLabel,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        maxLines = 1,
+                    )
+                }
             }
 
             FilledTonalButton(
@@ -398,11 +418,40 @@ private fun FavoriteDialog(
     title: String,
     initialName: String,
     initialPath: String,
-    onConfirm: (name: String, path: String) -> Unit,
+    initialStartupCommand: String? = null,
+    initialStartupArgs: String? = null,
+    onConfirm: (name: String, path: String, startupCommand: String?, startupArgs: String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by rememberSaveable { mutableStateOf(initialName) }
     var path by rememberSaveable { mutableStateOf(initialPath) }
+
+    val presets = listOf("None", "claude", "codex", "opencode", "Custom")
+    var selectedPreset by rememberSaveable {
+        mutableStateOf(
+            when {
+                initialStartupCommand.isNullOrBlank() -> "None"
+                initialStartupCommand in listOf("claude", "codex", "opencode") -> initialStartupCommand
+                else -> "Custom"
+            }
+        )
+    }
+    var customCommand by rememberSaveable {
+        mutableStateOf(
+            if (!initialStartupCommand.isNullOrBlank() &&
+                initialStartupCommand !in listOf("claude", "codex", "opencode")
+            ) initialStartupCommand else ""
+        )
+    }
+    var startupArgs by rememberSaveable { mutableStateOf(initialStartupArgs ?: "") }
+
+    val effectiveCommand: String? = when (selectedPreset) {
+        "None" -> null
+        "Custom" -> customCommand.trim().takeIf { it.isNotBlank() }
+        else -> selectedPreset
+    }
+    val effectiveArgs: String? = startupArgs.trim().takeIf { it.isNotBlank() }
+
     val valid = name.isNotBlank() && path.isNotBlank()
 
     AlertDialog(
@@ -426,11 +475,48 @@ private fun FavoriteDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Text(
+                    "Startup Command (optional)",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    presets.forEach { preset ->
+                        FilterChip(
+                            selected = selectedPreset == preset,
+                            onClick = { selectedPreset = preset },
+                            label = { Text(preset, fontSize = 12.sp) },
+                        )
+                    }
+                }
+                if (selectedPreset == "Custom") {
+                    OutlinedTextField(
+                        value = customCommand,
+                        onValueChange = { customCommand = it },
+                        label = { Text("Command") },
+                        placeholder = { Text("e.g., nvim") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (selectedPreset != "None") {
+                    OutlinedTextField(
+                        value = startupArgs,
+                        onValueChange = { startupArgs = it },
+                        label = { Text("Arguments (optional)") },
+                        placeholder = { Text("e.g., --resume") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { if (valid) onConfirm(name.trim(), path.trim()) },
+                onClick = { if (valid) onConfirm(name.trim(), path.trim(), effectiveCommand, effectiveArgs) },
                 enabled = valid,
             ) { Text("Save") }
         },

@@ -11,4 +11,6 @@ data class FavoriteSession(
     val path: String,
     val sortOrder: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
+    val startupCommand: String? = null,
+    val startupArgs: String? = null,
 )

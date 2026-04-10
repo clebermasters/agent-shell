@@ -11,7 +11,7 @@ import com.agentshell.data.model.PanelLayoutEntity
 
 @Database(
     entities = [Host::class, PanelLayoutEntity::class, PanelEntity::class, FavoriteSession::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -65,6 +65,13 @@ abstract class AppDatabase : RoomDatabase() {
                         createdAt INTEGER NOT NULL DEFAULT 0
                     )
                 """.trimIndent())
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE favorite_sessions ADD COLUMN startupCommand TEXT")
+                db.execSQL("ALTER TABLE favorite_sessions ADD COLUMN startupArgs TEXT")
             }
         }
     }

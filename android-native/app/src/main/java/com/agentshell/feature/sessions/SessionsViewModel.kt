@@ -217,15 +217,19 @@ class SessionsViewModel @Inject constructor(
 
     // ── Favorites CRUD ────────────────────────────────────────────────────────
 
-    fun addFavorite(name: String, path: String) {
+    fun addFavorite(name: String, path: String, startupCommand: String?, startupArgs: String?) {
         viewModelScope.launch {
-            favoriteSessionDao.upsert(FavoriteSession(name = name, path = path))
+            favoriteSessionDao.upsert(
+                FavoriteSession(name = name, path = path, startupCommand = startupCommand, startupArgs = startupArgs)
+            )
         }
     }
 
-    fun updateFavorite(favorite: FavoriteSession, newName: String, newPath: String) {
+    fun updateFavorite(favorite: FavoriteSession, newName: String, newPath: String, newStartupCommand: String?, newStartupArgs: String?) {
         viewModelScope.launch {
-            favoriteSessionDao.upsert(favorite.copy(name = newName, path = newPath))
+            favoriteSessionDao.upsert(
+                favorite.copy(name = newName, path = newPath, startupCommand = newStartupCommand, startupArgs = newStartupArgs)
+            )
         }
     }
 
@@ -237,7 +241,12 @@ class SessionsViewModel @Inject constructor(
 
     fun createSessionFromFavorite(favorite: FavoriteSession) {
         _uiState.update { it.copy(isLoading = true) }
-        wsService.createSession(name = favorite.name, startDirectory = favorite.path)
+        wsService.createSession(
+            name = favorite.name,
+            startDirectory = favorite.path,
+            startupCommand = favorite.startupCommand,
+            startupArgs = favorite.startupArgs,
+        )
         viewModelScope.launch {
             delay(500)
             requestSessions()

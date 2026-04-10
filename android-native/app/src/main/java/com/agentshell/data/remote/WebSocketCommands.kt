@@ -33,11 +33,18 @@ fun WebSocketService.requestSessions() {
  * Create a new TMUX session, optionally with a [name] and [startDirectory].
  * [startDirectory] is an absolute path where the session will be started.
  */
-fun WebSocketService.createSession(name: String? = null, startDirectory: String? = null) {
+fun WebSocketService.createSession(
+    name: String? = null,
+    startDirectory: String? = null,
+    startupCommand: String? = null,
+    startupArgs: String? = null,
+) {
     send(buildMap {
         put("type", "create-session")
         if (name != null) put("name", name)
         if (startDirectory != null) put("startDirectory", startDirectory)
+        if (startupCommand != null) put("startupCommand", startupCommand)
+        if (startupArgs != null) put("startupArgs", startupArgs)
     })
 }
 

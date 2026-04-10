@@ -201,6 +201,10 @@ pub enum WebSocketMessage {
         name: Option<String>,
         #[serde(rename = "startDirectory", default)]
         start_directory: Option<String>,
+        #[serde(rename = "startupCommand", default)]
+        startup_command: Option<String>,
+        #[serde(rename = "startupArgs", default)]
+        startup_args: Option<String>,
     },
     KillSession {
         #[serde(rename = "sessionName")]

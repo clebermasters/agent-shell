@@ -468,6 +468,25 @@ pub async fn select_window(session_name: &str, window_index: &str) -> Result<()>
 // Alternative session management functions that avoid direct attachment
 
 
+pub async fn send_command_to_session(session_name: &str, command: &str) -> Result<()> {
+    let status = Command::new("tmux")
+        .args(&["send-keys", "-t", session_name, "-l", command])
+        .status()
+        .await?;
+    if !status.success() {
+        anyhow::bail!("Failed to send startup command text");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let status = Command::new("tmux")
+        .args(&["send-keys", "-t", session_name, "Enter"])
+        .status()
+        .await?;
+    if !status.success() {
+        anyhow::bail!("Failed to send Enter after startup command");
+    }
+    Ok(())
+}
+
 pub async fn send_special_key(session_name: &str, window_index: u32, key: &str) -> Result<()> {
     let target = format!("{}:{}", session_name, window_index);
     let status = Command::new("tmux")

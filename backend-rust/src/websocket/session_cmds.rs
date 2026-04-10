@@ -18,6 +18,8 @@ pub(crate) async fn handle_create_session(
     tx: &mpsc::UnboundedSender<BroadcastMessage>,
     name: Option<String>,
     start_directory: Option<String>,
+    startup_command: Option<String>,
+    startup_args: Option<String>,
 ) -> anyhow::Result<()> {
     let session_name =
         name.unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp_millis()));
@@ -26,6 +28,18 @@ pub(crate) async fn handle_create_session(
     match tmux::create_session_at(&session_name, start_directory.as_deref()).await {
         Ok(_) => {
             info!("Successfully created session: {}", session_name);
+
+            if let Some(cmd) = startup_command.filter(|c| !c.trim().is_empty()) {
+                let full_cmd = match startup_args.filter(|a| !a.trim().is_empty()) {
+                    Some(args) => format!("{} {}", cmd, args),
+                    None => cmd,
+                };
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                if let Err(e) = tmux::send_command_to_session(&session_name, &full_cmd).await {
+                    error!("Failed to send startup command to session {}: {}", session_name, e);
+                }
+            }
+
             let response = ServerMessage::SessionCreated {
                 success: true,
                 session_name: Some(session_name),
@@ -330,7 +344,7 @@ mod tests {
     async fn test_create_session_default_name() {
         let test_name = format!("test-{}", chrono::Utc::now().timestamp_millis());
         let (tx, mut rx) = make_tx();
-        let result = handle_create_session(&tx, Some(test_name.clone()), None).await;
+        let result = handle_create_session(&tx, Some(test_name.clone()), None, None, None).await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {

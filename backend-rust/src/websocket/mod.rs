@@ -220,8 +220,8 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         }
 
         // Session management — delegated to session_cmds
-        WebSocketMessage::CreateSession { name, start_directory } => {
-            session_cmds::handle_create_session(&state.message_tx, name, start_directory).await?;
+        WebSocketMessage::CreateSession { name, start_directory, startup_command, startup_args } => {
+            session_cmds::handle_create_session(&state.message_tx, name, start_directory, startup_command, startup_args).await?;
         }
 
         WebSocketMessage::KillSession { session_name } => {

@@ -49,6 +49,7 @@ class ChatState {
   final bool hasMoreMessages;
   final bool showThinking;
   final bool showToolCalls;
+  final String acpSessionCwd;
 
   const ChatState({
     this.messages = const [],
@@ -68,6 +69,7 @@ class ChatState {
     this.hasMoreMessages = false,
     this.showThinking = true,
     this.showToolCalls = true,
+    this.acpSessionCwd = '',
   });
 
   ChatState copyWith({
@@ -88,6 +90,7 @@ class ChatState {
     bool? hasMoreMessages,
     bool? showThinking,
     bool? showToolCalls,
+    String? acpSessionCwd,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
@@ -109,6 +112,7 @@ class ChatState {
       hasMoreMessages: hasMoreMessages ?? this.hasMoreMessages,
       showThinking: showThinking ?? this.showThinking,
       showToolCalls: showToolCalls ?? this.showToolCalls,
+      acpSessionCwd: acpSessionCwd ?? this.acpSessionCwd,
     );
   }
 }
@@ -769,9 +773,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final tool = message['tool'] as String? ?? 'Unknown';
     final command = message['command'] as String? ?? '';
     final rawOptions = message['options'] as List?;
-    final options = rawOptions
-            ?.map((o) => Map<String, dynamic>.from(o as Map))
-            .toList() ??
+    final options =
+        rawOptions?.map((o) => Map<String, dynamic>.from(o as Map)).toList() ??
         [
           {'id': 'approve', 'label': 'Approve'},
           {'id': 'deny', 'label': 'Deny'},
@@ -815,7 +818,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final lastUserVisible = state.messages
         .where((m) => m.type == ChatMessageType.assistant)
         .lastOrNull;
-    final preview = lastUserVisible?.content?.trim().split('\n').first ?? 'Task completed';
+    final preview =
+        lastUserVisible?.content?.trim().split('\n').first ?? 'Task completed';
     _showLocalNotification(
       title: 'AI task done',
       body: preview.length > 100 ? '${preview.substring(0, 100)}…' : preview,
@@ -840,7 +844,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         state.sessionName == 'acp_$messageSessionId';
   }
 
-  void startAcpChat(String sessionName) {
+  void startAcpChat(String sessionName, String cwd) {
     // Backend returns session_name as "acp_{sessionId}" in chat-history/chat-event,
     // so store it with the prefix so all session matching works naturally.
     final sessionKey = 'acp_$sessionName';
@@ -852,6 +856,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       windowIndex: 0,
       isAcp: true,
       pendingPermission: null,
+      acpSessionCwd: cwd,
     );
     _ws!.watchAcpChatLog(sessionName, limit: 30);
   }

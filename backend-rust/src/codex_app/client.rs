@@ -5,6 +5,7 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::{self as sj, json};
+use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -402,6 +403,14 @@ impl CodexAppClient {
             .lock()
             .await
             .insert(session.session_id.clone(), session);
+    }
+
+    pub async fn get_session_cwd(&self, session_id: &str) -> Option<String> {
+        let (_, raw_id) = decode_external_session_id(session_id);
+        let keys = [session_id.to_string(), external_session_id(&raw_id)];
+        let sessions = self.known_sessions.lock().await;
+        keys.iter()
+            .find_map(|key| sessions.get(key).map(|session| session.cwd.clone()))
     }
 
     async fn is_thread_loaded(&self, raw_thread_id: &str) -> Result<bool, String> {
@@ -1080,6 +1089,51 @@ fn item_to_history_messages(
                 blocks: vec![ContentBlock::Text { text }],
             }]
         }
+        ThreadItem::ImageView { id, path } => vec![ChatMessage {
+            role: "assistant".to_string(),
+            timestamp,
+            blocks: vec![ContentBlock::File {
+                id,
+                filename: Path::new(&path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(&path)
+                    .to_string(),
+                mime_type: guess_mime_type(&path),
+                size_bytes: None,
+            }],
+        }],
+        ThreadItem::ImageGeneration {
+            id,
+            result,
+            saved_path,
+            ..
+        } => {
+            if let Some(path) = saved_path.filter(|path| !path.trim().is_empty()) {
+                vec![ChatMessage {
+                    role: "assistant".to_string(),
+                    timestamp,
+                    blocks: vec![ContentBlock::File {
+                        id,
+                        filename: Path::new(&path)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or(&path)
+                            .to_string(),
+                        mime_type: guess_mime_type(&path),
+                        size_bytes: None,
+                    }],
+                }]
+            } else if result.is_empty() {
+                Vec::new()
+            } else {
+                vec![ChatMessage {
+                    role: "assistant".to_string(),
+                    timestamp,
+                    blocks: vec![ContentBlock::Text { text: result }],
+                }]
+            }
+        }
         ThreadItem::Reasoning {
             summary, content, ..
         } => {
@@ -1367,6 +1421,31 @@ fn format_dynamic_output(content_items: Option<Vec<DynamicToolCallOutputContentI
         .join("\n")
 }
 
+fn guess_mime_type(path: &str) -> String {
+    match Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        Some("m4a") | Some("aac") => "audio/aac",
+        Some("flac") => "audio/flac",
+        Some("pdf") => "application/pdf",
+        Some("md") => "text/markdown",
+        Some("txt") => "text/plain",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 fn format_permission_request(permissions: &sj::Value) -> String {
     serde_json::to_string_pretty(permissions).unwrap_or_else(|_| "Permissions request".to_string())
 }
@@ -1487,6 +1566,19 @@ enum ThreadItem {
     WebSearch {
         id: String,
         query: String,
+    },
+    ImageView {
+        id: String,
+        path: String,
+    },
+    ImageGeneration {
+        id: String,
+        result: String,
+        #[serde(rename = "revisedPrompt")]
+        revised_prompt: Option<String>,
+        #[serde(rename = "savedPath")]
+        saved_path: Option<String>,
+        status: String,
     },
     #[serde(other)]
     Other,
@@ -1733,5 +1825,82 @@ mod tests {
     #[test]
     fn normalize_cwd_preserves_root_directory() {
         assert_eq!(normalize_cwd("/"), "/");
+    }
+
+    #[test]
+    fn codex_history_includes_image_view_as_file_block() {
+        let item: ThreadItem = serde_json::from_value(serde_json::json!({
+            "type": "imageView",
+            "id": "img_1",
+            "path": "/tmp/example.png"
+        }))
+        .expect("failed to deserialize imageView");
+
+        let messages = item_to_history_messages(item, None);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "assistant");
+        match &messages[0].blocks[..] {
+            [crate::chat_log::ContentBlock::File {
+                id,
+                filename,
+                mime_type,
+                ..
+            }] => {
+                assert_eq!(id, "img_1");
+                assert_eq!(filename, "example.png");
+                assert_eq!(mime_type, "image/png");
+            }
+            _ => panic!("Expected file block"),
+        }
+    }
+
+    #[test]
+    fn codex_history_falls_back_to_text_when_image_generation_has_no_path() {
+        let item: ThreadItem = serde_json::from_value(serde_json::json!({
+            "type": "imageGeneration",
+            "id": "gen_1",
+            "result": "Generated a diagram",
+            "status": "completed",
+        }))
+        .expect("failed to deserialize imageGeneration");
+
+        let messages = item_to_history_messages(item, None);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "assistant");
+        match &messages[0].blocks[..] {
+            [crate::chat_log::ContentBlock::Text { text }] => {
+                assert_eq!(text, "Generated a diagram");
+            }
+            _ => panic!("Expected text block"),
+        }
+    }
+
+    #[test]
+    fn codex_history_includes_image_generation_saved_path_as_file_block() {
+        let item: ThreadItem = serde_json::from_value(serde_json::json!({
+            "type": "imageGeneration",
+            "id": "gen_2",
+            "result": "Generated chart",
+            "status": "completed",
+            "savedPath": "/tmp/output.svg"
+        }))
+        .expect("failed to deserialize imageGeneration");
+
+        let messages = item_to_history_messages(item, None);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "assistant");
+        match &messages[0].blocks[..] {
+            [crate::chat_log::ContentBlock::File {
+                id,
+                filename,
+                mime_type,
+                ..
+            }] => {
+                assert_eq!(id, "gen_2");
+                assert_eq!(filename, "output.svg");
+                assert_eq!(mime_type, "application/octet-stream");
+            }
+            _ => panic!("Expected file block"),
+        }
     }
 }

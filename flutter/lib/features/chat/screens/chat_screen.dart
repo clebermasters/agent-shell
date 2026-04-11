@@ -85,7 +85,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         final ws = ref.read(sharedWebSocketServiceProvider);
         ws.selectBackend('acp');
         ws.acpResumeSession(widget.sessionName, widget.cwd);
-        ref.read(chatProvider.notifier).startAcpChat(widget.sessionName);
+        ref
+            .read(chatProvider.notifier)
+            .startAcpChat(widget.sessionName, widget.cwd);
 
         ws.messages.listen((message) {
           if (message['type'] == 'acp-session-deleted' &&
@@ -104,8 +106,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       final draft = prefs.getString(_draftKey);
       if (draft != null && draft.isNotEmpty) {
         _controller.text = draft;
-        _controller.selection =
-            TextSelection.collapsed(offset: draft.length);
+        _controller.selection = TextSelection.collapsed(offset: draft.length);
       }
     });
 
@@ -406,6 +407,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (_selectedFile == null) return;
 
     final ws = ref.read(sharedWebSocketServiceProvider);
+    final chatState = ref.read(chatProvider);
+    final effectiveCwd = chatState.acpSessionCwd.isNotEmpty
+        ? chatState.acpSessionCwd
+        : widget.cwd;
 
     setState(() {
       _isUploading = true;
@@ -428,7 +433,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           mimeType: _selectedFile!.extension ?? 'application/octet-stream',
           base64Data: base64Data,
           prompt: prompt.isNotEmpty ? prompt : null,
-          cwd: widget.cwd.isNotEmpty ? widget.cwd : null,
+          cwd: effectiveCwd.isNotEmpty ? effectiveCwd : null,
         );
       } else {
         ws.sendFileToChat(
@@ -496,29 +501,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     // After load-more chunk is prepended, restore scroll position so the
     // user stays anchored to what they were already reading.
-    ref.listen(
-      chatProvider.select((s) => s.isLoadingMore),
-      (wasLoading, isLoading) {
-        if (wasLoading == true && isLoading == false) {
-          final anchor = _prependAnchorExtent;
-          _prependAnchorExtent = null;
-          if (anchor != null && _scrollController.hasClients) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted || !_scrollController.hasClients) return;
-              final newExtent = _scrollController.position.maxScrollExtent;
-              final added = newExtent - anchor;
-              if (added > 0) {
-                _isProgrammaticScroll = true;
-                _scrollController.jumpTo(
-                  _scrollController.position.pixels + added,
-                );
-                _isProgrammaticScroll = false;
-              }
-            });
-          }
+    ref.listen(chatProvider.select((s) => s.isLoadingMore), (
+      wasLoading,
+      isLoading,
+    ) {
+      if (wasLoading == true && isLoading == false) {
+        final anchor = _prependAnchorExtent;
+        _prependAnchorExtent = null;
+        if (anchor != null && _scrollController.hasClients) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_scrollController.hasClients) return;
+            final newExtent = _scrollController.position.maxScrollExtent;
+            final added = newExtent - anchor;
+            if (added > 0) {
+              _isProgrammaticScroll = true;
+              _scrollController.jumpTo(
+                _scrollController.position.pixels + added,
+              );
+              _isProgrammaticScroll = false;
+            }
+          });
         }
-      },
-    );
+      }
+    });
 
     return Scaffold(
       backgroundColor: backgroundColor,
@@ -598,155 +603,158 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
       body: GestureDetector(
         onHorizontalDragUpdate: (details) {
-                final recent = _getRecentChatSessions();
-                if (recent.length < 2) return;
-                setState(() {
-                  _showDots = true;
-                  final idx = recent.indexOf(_recentChatKey);
-                  if (idx == -1) return;
-                  final atStart = idx == 0;
-                  final atEnd = idx == recent.length - 1;
-                  if ((atStart && details.delta.dx > 0) || (atEnd && details.delta.dx < 0)) {
-                    _swipeDx += details.delta.dx * 0.25;
-                    _swipeHintName = atStart ? '⟵ (start)' : '(end) ⟶';
-                  } else {
-                    _swipeDx += details.delta.dx;
-                    if (_swipeDx < -60) {
-                      _swipeHintName = '→ ${_labelForKey(recent[idx + 1])}';
-                    } else if (_swipeDx > 60) {
-                      _swipeHintName = '← ${_labelForKey(recent[idx - 1])}';
-                    } else {
-                      _swipeHintName = null;
-                    }
-                  }
-                });
-              },
+          final recent = _getRecentChatSessions();
+          if (recent.length < 2) return;
+          setState(() {
+            _showDots = true;
+            final idx = recent.indexOf(_recentChatKey);
+            if (idx == -1) return;
+            final atStart = idx == 0;
+            final atEnd = idx == recent.length - 1;
+            if ((atStart && details.delta.dx > 0) ||
+                (atEnd && details.delta.dx < 0)) {
+              _swipeDx += details.delta.dx * 0.25;
+              _swipeHintName = atStart ? '⟵ (start)' : '(end) ⟶';
+            } else {
+              _swipeDx += details.delta.dx;
+              if (_swipeDx < -60) {
+                _swipeHintName = '→ ${_labelForKey(recent[idx + 1])}';
+              } else if (_swipeDx > 60) {
+                _swipeHintName = '← ${_labelForKey(recent[idx - 1])}';
+              } else {
+                _swipeHintName = null;
+              }
+            }
+          });
+        },
         onHorizontalDragEnd: (details) {
-                final dx = _swipeDx;
-                final recent = _getRecentChatSessions();
-                final currentIndex = recent.indexOf(_recentChatKey);
-                final atStart = currentIndex == 0 && dx > 0;
-                final atEnd = currentIndex == recent.length - 1 && dx < 0;
-                setState(() {
-                  _swipeDx = 0;
-                  _swipeHintName = null;
-                });
-                if (atStart || atEnd) {
-                  Future.delayed(const Duration(milliseconds: 600), () {
-                    if (mounted) setState(() => _showDots = false);
-                  });
-                  return;
-                }
-                if (dx < -120) {
-                  _switchToAdjacentChatSession(1);
-                } else if (dx > 120) {
-                  _switchToAdjacentChatSession(-1);
-                }
-                Future.delayed(const Duration(milliseconds: 600), () {
-                  if (mounted) setState(() => _showDots = false);
-                });
-              },
+          final dx = _swipeDx;
+          final recent = _getRecentChatSessions();
+          final currentIndex = recent.indexOf(_recentChatKey);
+          final atStart = currentIndex == 0 && dx > 0;
+          final atEnd = currentIndex == recent.length - 1 && dx < 0;
+          setState(() {
+            _swipeDx = 0;
+            _swipeHintName = null;
+          });
+          if (atStart || atEnd) {
+            Future.delayed(const Duration(milliseconds: 600), () {
+              if (mounted) setState(() => _showDots = false);
+            });
+            return;
+          }
+          if (dx < -120) {
+            _switchToAdjacentChatSession(1);
+          } else if (dx > 120) {
+            _switchToAdjacentChatSession(-1);
+          }
+          Future.delayed(const Duration(milliseconds: 600), () {
+            if (mounted) setState(() => _showDots = false);
+          });
+        },
         onHorizontalDragCancel: () {
-                setState(() {
-                  _swipeDx = 0;
-                  _swipeHintName = null;
-                  _showDots = false;
-                });
-              },
+          setState(() {
+            _swipeDx = 0;
+            _swipeHintName = null;
+            _showDots = false;
+          });
+        },
         child: Stack(
           children: [
             Column(
-        children: [
-          const ConnectionStatusBanner(),
-          if (chatState.error != null)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              margin: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.red.shade200),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.error_outline,
-                    color: Colors.red.shade700,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      chatState.error!,
-                      style: TextStyle(
-                        color: Colors.red.shade700,
-                        fontSize: 13,
-                      ),
+              children: [
+                const ConnectionStatusBanner(),
+                if (chatState.error != null)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    margin: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.red.shade200),
                     ),
-                  ),
-                ],
-              ),
-            ),
-          Expanded(
-            child:
-                ref.watch(filteredChatMessagesProvider).isEmpty &&
-                    !chatState.isLoading
-                ? _buildEmptyState()
-                : Stack(
-                    children: [
-                      ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 16,
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          color: Colors.red.shade700,
+                          size: 20,
                         ),
-                        itemCount: ref
-                            .watch(filteredChatMessagesProvider)
-                            .length,
-                        itemBuilder: (context, index) {
-                          final message = ref.watch(
-                            filteredChatMessagesProvider,
-                          )[index];
-                          final hostsState = ref.watch(hostsProvider);
-                          return ProfessionalMessageBubble(
-                            key: ValueKey(message.id),
-                            message: message,
-                            showTimestamp: true,
-                            isDarkMode: isDarkMode,
-                            baseUrl: hostsState.selectedHost?.httpUrl,
-                          );
-                        },
-                      ),
-                      if (_showScrollButton)
-                        Positioned(
-                          right: 16,
-                          bottom: 100,
-                          child: AnimatedOpacity(
-                            opacity: _showScrollButton ? 1.0 : 0.0,
-                            duration: const Duration(milliseconds: 200),
-                            child: FloatingActionButton.small(
-                              onPressed: _scrollToBottomAndEnable,
-                              backgroundColor: const Color(0xFF6366F1),
-                              child: const Icon(
-                                Icons.keyboard_arrow_down,
-                                color: Colors.white,
-                              ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            chatState.error!,
+                            style: TextStyle(
+                              color: Colors.red.shade700,
+                              fontSize: 13,
                             ),
                           ),
                         ),
-                    ],
+                      ],
+                    ),
                   ),
-          ),
-          if (chatState.pendingPermission != null)
-            AcpPermissionCard(
-              permission: chatState.pendingPermission!,
-              onRespond: (requestId, optionId) {
-                ref.read(chatProvider.notifier).respondPermission(requestId, optionId);
-              },
-            ),
-          _buildInputArea(),
-        ],
+                Expanded(
+                  child:
+                      ref.watch(filteredChatMessagesProvider).isEmpty &&
+                          !chatState.isLoading
+                      ? _buildEmptyState()
+                      : Stack(
+                          children: [
+                            ListView.builder(
+                              controller: _scrollController,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 16,
+                              ),
+                              itemCount: ref
+                                  .watch(filteredChatMessagesProvider)
+                                  .length,
+                              itemBuilder: (context, index) {
+                                final message = ref.watch(
+                                  filteredChatMessagesProvider,
+                                )[index];
+                                final hostsState = ref.watch(hostsProvider);
+                                return ProfessionalMessageBubble(
+                                  key: ValueKey(message.id),
+                                  message: message,
+                                  showTimestamp: true,
+                                  isDarkMode: isDarkMode,
+                                  baseUrl: hostsState.selectedHost?.httpUrl,
+                                );
+                              },
+                            ),
+                            if (_showScrollButton)
+                              Positioned(
+                                right: 16,
+                                bottom: 100,
+                                child: AnimatedOpacity(
+                                  opacity: _showScrollButton ? 1.0 : 0.0,
+                                  duration: const Duration(milliseconds: 200),
+                                  child: FloatingActionButton.small(
+                                    onPressed: _scrollToBottomAndEnable,
+                                    backgroundColor: const Color(0xFF6366F1),
+                                    child: const Icon(
+                                      Icons.keyboard_arrow_down,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                ),
+                if (chatState.pendingPermission != null)
+                  AcpPermissionCard(
+                    permission: chatState.pendingPermission!,
+                    onRespond: (requestId, optionId) {
+                      ref
+                          .read(chatProvider.notifier)
+                          .respondPermission(requestId, optionId);
+                    },
+                  ),
+                _buildInputArea(),
+              ],
             ),
             // Dot position indicator
             if (_showDots)
@@ -768,7 +776,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 right: 0,
                 child: Center(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.7),
                       borderRadius: BorderRadius.circular(20),
@@ -1051,7 +1062,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final list = raw != null ? List<String>.from(jsonDecode(raw)) : <String>[];
     list.remove(_recentChatKey);
     list.insert(0, _recentChatKey);
-    prefs.setString(AppConfig.keyRecentChatSessions, jsonEncode(list.take(3).toList()));
+    prefs.setString(
+      AppConfig.keyRecentChatSessions,
+      jsonEncode(list.take(3).toList()),
+    );
   }
 
   List<String> _getRecentChatSessions() {
@@ -1077,7 +1091,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String _labelForKey(String key) {
     if (key.startsWith('acp:')) {
       final sessionId = key.substring(4);
-      final acp = ref.read(sessionsProvider).acpSessions
+      final acp = ref
+          .read(sessionsProvider)
+          .acpSessions
           .where((s) => s.sessionId == sessionId)
           .firstOrNull;
       if (acp != null && acp.title.isNotEmpty) return acp.title;
@@ -1098,33 +1114,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final key = recent[nextIdx];
     if (key.startsWith('acp:')) {
       final sessionId = key.substring(4);
-      final acp = ref.read(sessionsProvider).acpSessions
+      final acp = ref
+          .read(sessionsProvider)
+          .acpSessions
           .where((s) => s.sessionId == sessionId)
           .firstOrNull;
       if (acp == null) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          sessionName: acp.sessionId,
-          windowIndex: 0,
-          isAcp: true,
-          cwd: acp.cwd,
-          isSwipeNavigation: true,
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            sessionName: acp.sessionId,
+            windowIndex: 0,
+            isAcp: true,
+            cwd: acp.cwd,
+            isSwipeNavigation: true,
+          ),
         ),
-      ));
+      );
     } else {
       final inner = key.substring(5);
       final sep = inner.indexOf('\x00');
       if (sep == -1) return;
       final name = inner.substring(0, sep);
       final winIdx = int.tryParse(inner.substring(sep + 1)) ?? 0;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          sessionName: name,
-          windowIndex: winIdx,
-          isAcp: false,
-          isSwipeNavigation: true,
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            sessionName: name,
+            windowIndex: winIdx,
+            isAcp: false,
+            isSwipeNavigation: true,
+          ),
         ),
-      ));
+      );
     }
   }
 

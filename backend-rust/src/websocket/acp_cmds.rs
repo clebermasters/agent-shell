@@ -54,6 +54,39 @@ fn external_session_id(provider: DirectSessionProvider, raw_id: &str) -> String 
     }
 }
 
+async fn resolve_codex_session_cwd(
+    app_state: &Arc<AppState>,
+    session_id: &str,
+    raw_id: &str,
+) -> Option<String> {
+    let codex_guard = app_state.codex_app_client.read().await;
+    let client = match codex_guard.as_ref() {
+        Some(client) => client,
+        None => return None,
+    };
+
+    if let Some(cwd) = client.get_session_cwd(session_id).await {
+        if !cwd.trim().is_empty() {
+            return Some(cwd);
+        }
+    }
+
+    let fallback_external = external_session_id(DirectSessionProvider::Codex, raw_id);
+    match client.list_sessions().await {
+        Ok(response) => response.sessions.into_iter().find_map(|session| {
+            if session.session_id == session_id
+                || session.session_id == raw_id
+                || session.session_id == fallback_external
+            {
+                Some(session.cwd)
+            } else {
+                None
+            }
+        }),
+        Err(_) => None,
+    }
+}
+
 fn session_key_for_external_id(external_id: &str) -> String {
     format!("acp_{external_id}")
 }
@@ -671,7 +704,7 @@ pub(crate) async fn handle(
                         } else {
                             let codex_guard = codex_client.read().await;
                             match codex_guard.as_ref() {
-                                Some(client) => client.resume_session(&session_id, &cwd).await,
+                                Some(client) => client.resume_session(&raw_id, &cwd).await,
                                 None => Err("Codex client not initialized".to_string()),
                             }
                         }
@@ -747,7 +780,7 @@ pub(crate) async fn handle(
                     } else {
                         let codex_guard = app_state.codex_app_client.read().await;
                         match codex_guard.as_ref() {
-                            Some(client) => client.fork_session(&session_id, &cwd).await,
+                            Some(client) => client.fork_session(&raw_id, &cwd).await,
                             None => Err("Codex client not initialized".to_string()),
                         }
                     }
@@ -858,6 +891,13 @@ pub(crate) async fn handle(
                 file.filename, file.mime_type, cwd
             );
             let (provider, raw_id) = parse_direct_session_id(&session_id);
+            let resolved_cwd = match cwd {
+                Some(provided) if !provided.trim().is_empty() => Some(provided.trim().to_string()),
+                _ if provider == DirectSessionProvider::Codex => {
+                    resolve_codex_session_cwd(&app_state, &session_id, &raw_id).await
+                }
+                _ => None,
+            };
 
             // Save file to storage (for display in chat)
             let file_id =
@@ -873,13 +913,19 @@ pub(crate) async fn handle(
                 };
 
             // Also save to session's working directory (for AI to access)
+            let normalized_cwd = resolved_cwd
+                .as_deref()
+                .map(|c| c.trim())
+                .filter(|c| !c.is_empty())
+                .map(Path::new);
+
             let mut file_path_str: Option<String> = None;
-            if let Some(ref session_cwd) = cwd {
+            if let Some(session_cwd) = normalized_cwd {
                 match state.chat_file_storage.save_file_to_directory(
                     &file.data,
                     &file.filename,
                     &file.mime_type,
-                    Path::new(session_cwd),
+                    session_cwd,
                 ) {
                     Ok(path) => {
                         info!("File saved to session directory: {:?}", path);
@@ -889,6 +935,8 @@ pub(crate) async fn handle(
                         error!("Failed to save file to session directory: {}", e);
                     }
                 }
+            } else {
+                info!("No valid cwd for ACP file attachment; skipping in-session file save");
             }
 
             // Create content block based on mime type
@@ -959,30 +1007,35 @@ pub(crate) async fn handle(
             state.client_manager.broadcast(msg).await;
 
             // Send prompt to ACP session so AI can see the file
-            let file_ref = file_path_str
-                .clone()
-                .unwrap_or_else(|| format!("[File: {}]", file.filename));
-            let combined = if prompt_text.is_empty() {
-                file_ref
-            } else {
-                format!("{}\n\nHere is the file: {}", prompt_text, file_ref)
+            let combined = match (prompt_text.is_empty(), file_path_str.as_ref()) {
+                (false, Some(path)) => format!("{}\n\nHere is the file: {}", prompt_text, path),
+                (true, Some(path)) => format!("Here is the file: {}", path),
+                (false, None) => prompt_text.clone(),
+                (true, None) => String::new(),
             };
-            match provider {
-                DirectSessionProvider::Opencode => {
-                    ensure_acp_client(&app_state).await.ok();
-                    let acp_guard = app_state.acp_client.read().await;
-                    if let Some(client) = acp_guard.as_ref() {
-                        if let Err(e) = client.send_prompt(&raw_id, &combined).await {
-                            error!("Failed to send file prompt to ACP: {}", e);
+            if combined.is_empty() {
+                warn!(
+                    "No prompt or valid file path for ACP file upload on session {}",
+                    session_id
+                );
+            } else {
+                match provider {
+                    DirectSessionProvider::Opencode => {
+                        ensure_acp_client(&app_state).await.ok();
+                        let acp_guard = app_state.acp_client.read().await;
+                        if let Some(client) = acp_guard.as_ref() {
+                            if let Err(e) = client.send_prompt(&raw_id, &combined).await {
+                                error!("Failed to send file prompt to ACP: {}", e);
+                            }
                         }
                     }
-                }
-                DirectSessionProvider::Codex => {
-                    ensure_codex_client(&app_state).await.ok();
-                    let codex_guard = app_state.codex_app_client.read().await;
-                    if let Some(client) = codex_guard.as_ref() {
-                        if let Err(e) = client.send_prompt(&session_id, &combined).await {
-                            error!("Failed to send file prompt to Codex: {}", e);
+                    DirectSessionProvider::Codex => {
+                        ensure_codex_client(&app_state).await.ok();
+                        let codex_guard = app_state.codex_app_client.read().await;
+                        if let Some(client) = codex_guard.as_ref() {
+                            if let Err(e) = client.send_prompt(&session_id, &combined).await {
+                                error!("Failed to send file prompt to Codex: {}", e);
+                            }
                         }
                     }
                 }

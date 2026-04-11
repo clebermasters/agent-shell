@@ -24,7 +24,14 @@ pub async fn handle_add_favorite(
     startup_args: Option<String>,
     tag_ids: Vec<String>,
 ) -> Result<()> {
-    match app_state.favorite_store.add(name, path, sort_order, startup_command, startup_args, tag_ids) {
+    match app_state.favorite_store.add(
+        name,
+        path,
+        sort_order,
+        startup_command,
+        startup_args,
+        tag_ids,
+    ) {
         Ok(favorite) => send_message(tx, ServerMessage::FavoriteAdded { favorite }).await?,
         Err(e) => tracing::error!("Failed to add favorite: {}", e),
     }
@@ -42,7 +49,15 @@ pub async fn handle_update_favorite(
     startup_args: Option<String>,
     tag_ids: Vec<String>,
 ) -> Result<()> {
-    match app_state.favorite_store.update(&id, name, path, sort_order, startup_command, startup_args, tag_ids) {
+    match app_state.favorite_store.update(
+        &id,
+        name,
+        path,
+        sort_order,
+        startup_command,
+        startup_args,
+        tag_ids,
+    ) {
         Ok(Some(favorite)) => send_message(tx, ServerMessage::FavoriteUpdated { favorite }).await?,
         Ok(None) => tracing::warn!("Favorite not found for update: {}", id),
         Err(e) => tracing::error!("Failed to update favorite: {}", e),
@@ -67,7 +82,14 @@ pub async fn handle_set_favorite_tags(
 ) -> Result<()> {
     match app_state.favorite_store.set_tags_for(&favorite_id, tag_ids) {
         Ok(tag_ids) => {
-            send_message(tx, ServerMessage::FavoriteTagsUpdated { favorite_id, tag_ids }).await?
+            send_message(
+                tx,
+                ServerMessage::FavoriteTagsUpdated {
+                    favorite_id,
+                    tag_ids,
+                },
+            )
+            .await?
         }
         Err(e) => tracing::error!("Failed to set favorite tags: {}", e),
     }

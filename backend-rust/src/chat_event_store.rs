@@ -306,7 +306,8 @@ impl ChatEventStore {
             })
         })?;
 
-        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 }
 
@@ -326,7 +327,9 @@ mod tests {
         ChatMessage {
             role: role.to_string(),
             timestamp: Some(chrono::Utc::now()),
-            blocks: vec![ContentBlock::Text { text: text.to_string() }],
+            blocks: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
         }
     }
 
@@ -363,7 +366,9 @@ mod tests {
     #[test]
     fn test_append_or_merge_new_message() {
         let (store, _dir) = make_store();
-        store.append_or_merge_text("sess1", 0, "acp", "assistant", "Hello").unwrap();
+        store
+            .append_or_merge_text("sess1", 0, "acp", "assistant", "Hello")
+            .unwrap();
         let messages = store.list_messages("sess1", 0).unwrap();
         assert_eq!(messages.len(), 1);
     }
@@ -371,8 +376,12 @@ mod tests {
     #[test]
     fn test_append_or_merge_merges_same_role() {
         let (store, _dir) = make_store();
-        store.append_or_merge_text("sess1", 0, "acp", "assistant", "Hello").unwrap();
-        store.append_or_merge_text("sess1", 0, "acp", "assistant", " World").unwrap();
+        store
+            .append_or_merge_text("sess1", 0, "acp", "assistant", "Hello")
+            .unwrap();
+        store
+            .append_or_merge_text("sess1", 0, "acp", "assistant", " World")
+            .unwrap();
         let messages = store.list_messages("sess1", 0).unwrap();
         assert_eq!(messages.len(), 1);
         match &messages[0].blocks[0] {
@@ -384,8 +393,12 @@ mod tests {
     #[test]
     fn test_append_or_merge_different_roles() {
         let (store, _dir) = make_store();
-        store.append_or_merge_text("sess1", 0, "acp", "assistant", "Hi").unwrap();
-        store.append_or_merge_text("sess1", 0, "user", "user", "Hello").unwrap();
+        store
+            .append_or_merge_text("sess1", 0, "acp", "assistant", "Hi")
+            .unwrap();
+        store
+            .append_or_merge_text("sess1", 0, "user", "user", "Hello")
+            .unwrap();
         let messages = store.list_messages("sess1", 0).unwrap();
         assert_eq!(messages.len(), 2);
     }
@@ -453,7 +466,9 @@ mod tests {
         store.append_message("sess1", 0, "webhook", &msg).unwrap();
 
         // Filter anything before now
-        let events = store.get_acp_overlay("sess1", Some(chrono::Utc::now().timestamp_millis())).unwrap();
+        let events = store
+            .get_acp_overlay("sess1", Some(chrono::Utc::now().timestamp_millis()))
+            .unwrap();
         assert_eq!(events.len(), 0);
     }
 
@@ -475,7 +490,9 @@ mod tests {
             role: "assistant".to_string(),
             timestamp: Some(chrono::Utc::now()),
             blocks: vec![
-                ContentBlock::Text { text: "Look at this".to_string() },
+                ContentBlock::Text {
+                    text: "Look at this".to_string(),
+                },
                 ContentBlock::Image {
                     id: "img-1".to_string(),
                     mime_type: "image/png".to_string(),
@@ -483,9 +500,13 @@ mod tests {
                 },
             ],
         };
-        store.append_message("sess1", 0, "acp", &multi_block_msg).unwrap();
+        store
+            .append_message("sess1", 0, "acp", &multi_block_msg)
+            .unwrap();
         // Now append_or_merge_text with same role — should NOT merge (blocks.len() != 1)
-        store.append_or_merge_text("sess1", 0, "acp", "assistant", "New text").unwrap();
+        store
+            .append_or_merge_text("sess1", 0, "acp", "assistant", "New text")
+            .unwrap();
         let messages = store.list_messages("sess1", 0).unwrap();
         assert_eq!(messages.len(), 2); // separate rows
     }
@@ -493,11 +514,15 @@ mod tests {
     #[test]
     fn test_append_or_merge_empty_text() {
         let (store, _dir) = make_store();
-        store.append_or_merge_text("sess1", 0, "acp", "assistant", "").unwrap();
+        store
+            .append_or_merge_text("sess1", 0, "acp", "assistant", "")
+            .unwrap();
         let messages = store.list_messages("sess1", 0).unwrap();
         assert_eq!(messages.len(), 1);
         // Merge empty text onto existing
-        store.append_or_merge_text("sess1", 0, "acp", "assistant", "").unwrap();
+        store
+            .append_or_merge_text("sess1", 0, "acp", "assistant", "")
+            .unwrap();
         let messages = store.list_messages("sess1", 0).unwrap();
         assert_eq!(messages.len(), 1); // still merged
     }
@@ -510,7 +535,9 @@ mod tests {
             let msg = ChatMessage {
                 role: "user".to_string(),
                 timestamp: Some(now + chrono::Duration::seconds(i)),
-                blocks: vec![ContentBlock::Text { text: format!("msg {}", i) }],
+                blocks: vec![ContentBlock::Text {
+                    text: format!("msg {}", i),
+                }],
             };
             store.append_message("sess1", 0, "user", &msg).unwrap();
         }
@@ -527,14 +554,18 @@ mod tests {
         let msg = text_msg("user", "from webhook");
         store.append_message("sess1", 0, "webhook", &msg).unwrap();
         let msg2 = text_msg("user", "from webhook-file");
-        store.append_message("sess1", 0, "webhook-file", &msg2).unwrap();
+        store
+            .append_message("sess1", 0, "webhook-file", &msg2)
+            .unwrap();
         let msg3 = text_msg("user", "from user source");
         store.append_message("sess1", 0, "user", &msg3).unwrap();
 
         let events = store.get_acp_overlay("sess1", None).unwrap();
         // Only webhook and webhook-file sources should be returned
         assert_eq!(events.len(), 2);
-        assert!(events.iter().all(|e| e.source == "webhook" || e.source == "webhook-file"));
+        assert!(events
+            .iter()
+            .all(|e| e.source == "webhook" || e.source == "webhook-file"));
     }
 
     #[test]

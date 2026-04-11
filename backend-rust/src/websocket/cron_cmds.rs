@@ -105,9 +105,9 @@ pub(crate) async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
-    use crate::websocket::types::BroadcastMessage;
     use crate::types::{CronJob, WebSocketMessage};
+    use crate::websocket::types::BroadcastMessage;
+    use tokio::sync::mpsc;
 
     fn make_tx() -> (
         mpsc::UnboundedSender<BroadcastMessage>,
@@ -132,9 +132,13 @@ mod tests {
     #[tokio::test]
     async fn test_test_cron_command_dry_run() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::TestCronCommand {
-            command: "echo hello".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::TestCronCommand {
+                command: "echo hello".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -147,9 +151,13 @@ mod tests {
     #[tokio::test]
     async fn test_test_cron_command_empty() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::TestCronCommand {
-            command: "  ".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::TestCronCommand {
+                command: "  ".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -195,9 +203,13 @@ mod tests {
     #[tokio::test]
     async fn test_delete_cron_job_nonexistent() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::DeleteCronJob {
-            id: "nonexistent-id-xyz".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::DeleteCronJob {
+                id: "nonexistent-id-xyz".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         // Should get some response (success or error depending on crontab state)
         let _ = rx.try_recv();
@@ -206,10 +218,14 @@ mod tests {
     #[tokio::test]
     async fn test_toggle_cron_job_nonexistent() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::ToggleCronJob {
-            id: "nonexistent-id-xyz".to_string(),
-            enabled: true,
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::ToggleCronJob {
+                id: "nonexistent-id-xyz".to_string(),
+                enabled: true,
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {

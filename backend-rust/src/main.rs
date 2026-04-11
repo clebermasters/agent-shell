@@ -14,7 +14,7 @@ use tower_http::{
     cors::CorsLayer,
     services::{ServeDir, ServeFile},
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Deserialize)]
@@ -24,26 +24,27 @@ struct TmuxInput {
     window: Option<u32>,
 }
 
+mod acp;
 mod audio;
 mod auth;
 mod chat_clear_store;
 mod chat_event_store;
 mod chat_file_storage;
 mod chat_log;
+mod codex_app;
 mod cron;
 mod cron_handler;
 mod dotfiles;
 mod favorite_store;
 mod monitor;
-mod tag_store;
 mod notification;
 mod notification_handler;
 mod notification_store;
+mod tag_store;
 mod terminal_buffer;
 mod tmux;
 mod types;
 mod websocket;
-mod acp;
 
 // Global flag for audio logging
 pub static ENABLE_AUDIO_LOGS: std::sync::atomic::AtomicBool =
@@ -71,6 +72,7 @@ pub struct AppState {
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
     pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
     pub acp_client: Arc<tokio::sync::RwLock<Option<acp::AcpClient>>>,
+    pub codex_app_client: Arc<tokio::sync::RwLock<Option<codex_app::CodexAppClient>>>,
     pub notification_store: Arc<notification_store::NotificationStore>,
     pub favorite_store: Arc<favorite_store::FavoriteStore>,
     pub tag_store: Arc<tag_store::TagStore>,
@@ -119,10 +121,13 @@ async fn main() -> Result<()> {
         chat_file_storage: Arc::new(chat_file_storage::ChatFileStorage::new(base_dir.clone())),
         chat_event_store: Arc::new(chat_event_store::ChatEventStore::new(base_dir.clone())?),
         chat_clear_store: Arc::new(chat_clear_store::ChatClearStore::new(&base_dir)),
-        notification_store: Arc::new(notification_store::NotificationStore::new(base_dir.clone())?),
+        notification_store: Arc::new(notification_store::NotificationStore::new(
+            base_dir.clone(),
+        )?),
         favorite_store: Arc::new(favorite_store::FavoriteStore::new(base_dir.clone())?),
         tag_store: Arc::new(tag_store::TagStore::new(base_dir.clone())?),
         acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        codex_app_client: Arc::new(tokio::sync::RwLock::new(None)),
         shutdown_token: CancellationToken::new(),
     };
 
@@ -277,17 +282,18 @@ async fn main() -> Result<()> {
     let shutdown_token_clone = app_state.shutdown_token.clone();
     let broadcast_tx_clone = broadcast_tx.clone();
 
+    // Allow local smoke tests to run against a second backend instance without
+    // colliding with an already-installed server on the default ports.
+    let http_port = read_port_from_env("AGENTSHELL_HTTP_PORT", 4010);
+    let https_port = read_port_from_env("AGENTSHELL_HTTPS_PORT", 4443);
+
     let app = Router::new()
         .merge(protected)
         // Serve static files (Vue app) — no auth required
         .fallback_service(serve_dir)
         // Add CORS — restrict to localhost and optional configured domain
-        .layer(build_cors_layer())
+        .layer(build_cors_layer(http_port, https_port))
         .with_state(Arc::new(app_state));
-
-    // Dev branch uses different ports
-    let http_port = 4010;
-    let https_port = 4443;
 
     // Start HTTP server
     let http_addr = SocketAddr::from(([0, 0, 0, 0], http_port));
@@ -347,14 +353,14 @@ async fn main() -> Result<()> {
 
 /// Build a CORS layer that only allows localhost origins plus an optional
 /// domain configured via the `ALLOWED_ORIGIN` environment variable.
-fn build_cors_layer() -> CorsLayer {
-    use axum::http::{HeaderValue, Method, header};
+fn build_cors_layer(http_port: u16, https_port: u16) -> CorsLayer {
+    use axum::http::{header, HeaderValue, Method};
 
     let mut origins: Vec<HeaderValue> = vec![
         "http://localhost".parse().unwrap(),
-        "http://localhost:4010".parse().unwrap(),
-        "https://localhost:4443".parse().unwrap(),
-        "http://127.0.0.1:4010".parse().unwrap(),
+        format!("http://localhost:{http_port}").parse().unwrap(),
+        format!("https://localhost:{https_port}").parse().unwrap(),
+        format!("http://127.0.0.1:{http_port}").parse().unwrap(),
     ];
 
     if let Ok(domain) = std::env::var("ALLOWED_ORIGIN") {
@@ -368,7 +374,27 @@ fn build_cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(origins)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, "X-Auth-Token".parse().unwrap()])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            "X-Auth-Token".parse().unwrap(),
+        ])
+}
+
+fn read_port_from_env(name: &str, default: u16) -> u16 {
+    match std::env::var(name) {
+        Ok(raw) if !raw.trim().is_empty() => match raw.parse::<u16>() {
+            Ok(port) => port,
+            Err(err) => {
+                warn!(
+                    "Invalid {} value {:?}: {}. Falling back to {}",
+                    name, raw, err, default
+                );
+                default
+            }
+        },
+        _ => default,
+    }
 }
 
 async fn shutdown_signal(

@@ -151,6 +151,12 @@ fun SessionsScreen(
         }
     }
 
+    LaunchedEffect(uiState.error) {
+        val error = uiState.error ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(error)
+        viewModel.clearError()
+    }
+
     Scaffold(
         topBar = {
             if (uiState.isSelectionMode) {
@@ -334,8 +340,8 @@ fun SessionsScreen(
                 viewModel.createSession(name)
                 showCreateDialog = false
             },
-            onCreateAcp = { cwd ->
-                viewModel.createAcpSession(cwd)
+            onCreateAcp = { cwd, backend ->
+                viewModel.createAcpSession(cwd, backend)
                 showCreateDialog = false
             },
             onDismiss = { showCreateDialog = false },
@@ -927,7 +933,7 @@ private fun AcpSessionList(
         EmptySessionsMessage(
             icon = { Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(64.dp)) },
             message = "No direct sessions",
-            hint = "Create a new ACP session to get started",
+            hint = "Create a new direct session to get started",
         )
         return
     }
@@ -962,6 +968,11 @@ private fun AcpSessionCard(
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val displayTitle = session.title.ifBlank { session.cwd.substringAfterLast('/') }
+    val providerLabel = when (session.provider?.lowercase()) {
+        "codex" -> "Codex"
+        "opencode", "acp" -> "OpenCode"
+        else -> "Direct"
+    }
 
     Card(
         modifier = Modifier
@@ -983,7 +994,12 @@ private fun AcpSessionCard(
                 }
             },
             headlineContent = { Text(displayTitle, fontWeight = FontWeight.Medium) },
-            supportingContent = { Text(session.cwd, style = MaterialTheme.typography.bodySmall) },
+            supportingContent = {
+                Column {
+                    Text(providerLabel, style = MaterialTheme.typography.labelSmall)
+                    Text(session.cwd, style = MaterialTheme.typography.bodySmall)
+                }
+            },
             trailingContent = {
                 if (!isSelectionMode) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1058,7 +1074,7 @@ private fun EmptySessionsMessage(
 @Composable
 private fun CreateSessionDialog(
     onCreateTmux: (name: String) -> Unit,
-    onCreateAcp: (cwd: String) -> Unit,
+    onCreateAcp: (cwd: String, backend: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var inputText by rememberSaveable { mutableStateOf("") }
@@ -1086,22 +1102,29 @@ private fun CreateSessionDialog(
                     SegmentedButton(
                         selected = selectedBackend == "tmux",
                         onClick = { selectedBackend = "tmux" },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
                         icon = { Icon(Icons.Default.Terminal, null) },
                     ) { Text("Terminal") }
                     SegmentedButton(
-                        selected = selectedBackend == "acp",
-                        onClick = { selectedBackend = "acp" },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        selected = selectedBackend == "opencode",
+                        onClick = { selectedBackend = "opencode" },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
                         icon = { Icon(Icons.Default.SmartToy, null) },
-                    ) { Text("Direct") }
+                    ) { Text("OpenCode") }
+                    SegmentedButton(
+                        selected = selectedBackend == "codex",
+                        onClick = { selectedBackend = "codex" },
+                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+                        icon = { Icon(Icons.Default.Code, null) },
+                    ) { Text("Codex") }
                 }
 
                 Text(
-                    text = if (selectedBackend == "tmux")
-                        "Terminal mode: Full terminal with tmux"
-                    else
-                        "Direct mode: Chat-focused (ACP)",
+                    text = when (selectedBackend) {
+                        "tmux" -> "Terminal mode: Full terminal with tmux"
+                        "codex" -> "Direct mode: Codex app-server"
+                        else -> "Direct mode: OpenCode ACP"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
@@ -1112,7 +1135,7 @@ private fun CreateSessionDialog(
                 onClick = {
                     if (inputText.isNotBlank()) {
                         if (selectedBackend == "tmux") onCreateTmux(inputText.trim())
-                        else onCreateAcp(inputText.trim())
+                        else onCreateAcp(inputText.trim(), selectedBackend)
                     }
                 },
                 enabled = inputText.isNotBlank(),

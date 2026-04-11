@@ -24,7 +24,10 @@ pub(crate) async fn handle_create_session(
 ) -> anyhow::Result<()> {
     let session_name =
         name.unwrap_or_else(|| format!("session-{}", chrono::Utc::now().timestamp_millis()));
-    info!("Creating session: {} at {:?}", session_name, start_directory);
+    info!(
+        "Creating session: {} at {:?}",
+        session_name, start_directory
+    );
 
     match tmux::create_session_at(&session_name, start_directory.as_deref()).await {
         Ok(_) => {
@@ -37,7 +40,10 @@ pub(crate) async fn handle_create_session(
                 };
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                 if let Err(e) = tmux::send_command_to_session(&session_name, &full_cmd).await {
-                    error!("Failed to send startup command to session {}: {}", session_name, e);
+                    error!(
+                        "Failed to send startup command to session {}: {}",
+                        session_name, e
+                    );
                 }
             }
 
@@ -136,10 +142,7 @@ pub(crate) async fn handle_list_windows(
             send_message(tx, response).await?;
         }
         Err(e) => {
-            error!(
-                "Failed to list windows for session {}: {}",
-                session_name, e
-            );
+            error!("Failed to list windows for session {}: {}", session_name, e);
             let response = ServerMessage::Error {
                 message: format!("Failed to list windows: {}", e),
             };
@@ -280,10 +283,10 @@ mod tests {
 
     use tokio_util::sync::CancellationToken;
 
-    use crate::AppState;
     use super::*;
-    use tokio::sync::mpsc;
     use crate::websocket::types::BroadcastMessage;
+    use crate::AppState;
+    use tokio::sync::mpsc;
 
     fn make_tx() -> (
         mpsc::UnboundedSender<BroadcastMessage>,
@@ -299,12 +302,23 @@ mod tests {
             enable_audio_logs: false,
             broadcast_tx,
             client_manager,
-            chat_file_storage: Arc::new(crate::chat_file_storage::ChatFileStorage::new(dir.to_path_buf())),
-            chat_event_store: Arc::new(crate::chat_event_store::ChatEventStore::new(dir.to_path_buf()).unwrap()),
-            chat_clear_store: Arc::new(crate::chat_clear_store::ChatClearStore::new(&dir.to_path_buf())),
+            chat_file_storage: Arc::new(crate::chat_file_storage::ChatFileStorage::new(
+                dir.to_path_buf(),
+            )),
+            chat_event_store: Arc::new(
+                crate::chat_event_store::ChatEventStore::new(dir.to_path_buf()).unwrap(),
+            ),
+            chat_clear_store: Arc::new(crate::chat_clear_store::ChatClearStore::new(
+                &dir.to_path_buf(),
+            )),
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
-            notification_store: Arc::new(crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap()),
-            favorite_store: Arc::new(crate::favorite_store::FavoriteStore::new(dir.to_path_buf()).unwrap()),
+            codex_app_client: Arc::new(tokio::sync::RwLock::new(None)),
+            notification_store: Arc::new(
+                crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap(),
+            ),
+            favorite_store: Arc::new(
+                crate::favorite_store::FavoriteStore::new(dir.to_path_buf()).unwrap(),
+            ),
             tag_store: Arc::new(crate::tag_store::TagStore::new(dir.to_path_buf()).unwrap()),
             shutdown_token: CancellationToken::new(),
         })
@@ -337,7 +351,9 @@ mod tests {
     #[tokio::test]
     async fn test_rename_session_empty_name_returns_error_response() {
         let (tx, mut rx) = make_tx();
-        handle_rename_session(&tx, "AgentShell".to_string(), "".to_string()).await.unwrap();
+        handle_rename_session(&tx, "AgentShell".to_string(), "".to_string())
+            .await
+            .unwrap();
         let msg = rx.try_recv().unwrap();
         let json = match msg {
             BroadcastMessage::Text(s) => s.as_ref().clone(),
@@ -349,7 +365,14 @@ mod tests {
     #[tokio::test]
     async fn test_rename_window_empty_name_returns_error_response() {
         let (tx, mut rx) = make_tx();
-        handle_rename_window(&tx, "AgentShell".to_string(), "0".to_string(), "".to_string()).await.unwrap();
+        handle_rename_window(
+            &tx,
+            "AgentShell".to_string(),
+            "0".to_string(),
+            "".to_string(),
+        )
+        .await
+        .unwrap();
         let msg = rx.try_recv().unwrap();
         let json = match msg {
             BroadcastMessage::Text(s) => s.as_ref().clone(),
@@ -363,7 +386,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let (tx, mut rx) = make_tx();
         let app_state = make_app_state(dir.path());
-        let result = handle_kill_session(&tx, app_state, "nonexistent-session-xyz".to_string()).await;
+        let result =
+            handle_kill_session(&tx, app_state, "nonexistent-session-xyz".to_string()).await;
         assert!(result.is_ok());
         assert!(rx.try_recv().is_ok());
     }

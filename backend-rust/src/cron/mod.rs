@@ -197,10 +197,7 @@ impl CronManager {
                                 .trim()
                                 .to_string();
                         } else if lines[i].starts_with("# Enabled:") {
-                            enabled = lines[i]
-                                .strip_prefix("# Enabled:")
-                                .unwrap_or("true")
-                                .trim()
+                            enabled = lines[i].strip_prefix("# Enabled:").unwrap_or("true").trim()
                                 == "true";
                         } else if !lines[i].trim().is_empty() {
                             let line = if lines[i].starts_with("# ") && !enabled {
@@ -699,26 +696,29 @@ mod tests {
         // Manually insert a job into the manager's jobs map
         {
             let mut jobs = mgr.jobs.write().await;
-            jobs.insert("existing-id".to_string(), crate::types::CronJob {
-                id: "existing-id".to_string(),
-                name: "duplicate-name".to_string(),
-                schedule: "* * * * *".to_string(),
-                command: "echo hi".to_string(),
-                enabled: true,
-                last_run: None,
-                next_run: None,
-                output: None,
-                created_at: None,
-                updated_at: None,
-                environment: None,
-                log_output: None,
-                email_to: None,
-                tmux_session: None,
-                workdir: None,
-                prompt: None,
-                llm_provider: None,
-                llm_model: None,
-            });
+            jobs.insert(
+                "existing-id".to_string(),
+                crate::types::CronJob {
+                    id: "existing-id".to_string(),
+                    name: "duplicate-name".to_string(),
+                    schedule: "* * * * *".to_string(),
+                    command: "echo hi".to_string(),
+                    enabled: true,
+                    last_run: None,
+                    next_run: None,
+                    output: None,
+                    created_at: None,
+                    updated_at: None,
+                    environment: None,
+                    log_output: None,
+                    email_to: None,
+                    tmux_session: None,
+                    workdir: None,
+                    prompt: None,
+                    llm_provider: None,
+                    llm_model: None,
+                },
+            );
         }
         // Try to create another job with the same name
         let job = crate::types::CronJob {
@@ -752,46 +752,52 @@ mod tests {
         // Insert two jobs with different names
         {
             let mut jobs = mgr.jobs.write().await;
-            jobs.insert("id-1".to_string(), crate::types::CronJob {
-                id: "id-1".to_string(),
-                name: "job-one".to_string(),
-                schedule: "* * * * *".to_string(),
-                command: "echo one".to_string(),
-                enabled: true,
-                last_run: None,
-                next_run: None,
-                output: None,
-                created_at: None,
-                updated_at: None,
-                environment: None,
-                log_output: None,
-                email_to: None,
-                tmux_session: None,
-                workdir: None,
-                prompt: None,
-                llm_provider: None,
-                llm_model: None,
-            });
-            jobs.insert("id-2".to_string(), crate::types::CronJob {
-                id: "id-2".to_string(),
-                name: "job-two".to_string(),
-                schedule: "* * * * *".to_string(),
-                command: "echo two".to_string(),
-                enabled: true,
-                last_run: None,
-                next_run: None,
-                output: None,
-                created_at: None,
-                updated_at: None,
-                environment: None,
-                log_output: None,
-                email_to: None,
-                tmux_session: None,
-                workdir: None,
-                prompt: None,
-                llm_provider: None,
-                llm_model: None,
-            });
+            jobs.insert(
+                "id-1".to_string(),
+                crate::types::CronJob {
+                    id: "id-1".to_string(),
+                    name: "job-one".to_string(),
+                    schedule: "* * * * *".to_string(),
+                    command: "echo one".to_string(),
+                    enabled: true,
+                    last_run: None,
+                    next_run: None,
+                    output: None,
+                    created_at: None,
+                    updated_at: None,
+                    environment: None,
+                    log_output: None,
+                    email_to: None,
+                    tmux_session: None,
+                    workdir: None,
+                    prompt: None,
+                    llm_provider: None,
+                    llm_model: None,
+                },
+            );
+            jobs.insert(
+                "id-2".to_string(),
+                crate::types::CronJob {
+                    id: "id-2".to_string(),
+                    name: "job-two".to_string(),
+                    schedule: "* * * * *".to_string(),
+                    command: "echo two".to_string(),
+                    enabled: true,
+                    last_run: None,
+                    next_run: None,
+                    output: None,
+                    created_at: None,
+                    updated_at: None,
+                    environment: None,
+                    log_output: None,
+                    email_to: None,
+                    tmux_session: None,
+                    workdir: None,
+                    prompt: None,
+                    llm_provider: None,
+                    llm_model: None,
+                },
+            );
         }
         // Try to update id-2 with name "job-one" (duplicate)
         let updated_job = crate::types::CronJob {

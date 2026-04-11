@@ -49,8 +49,9 @@ impl TmuxMonitor {
     }
 
     async fn check_for_changes(&self) {
-        // Get current tmux state
-        let current_sessions = match tmux::list_sessions().await {
+        let previous_state = self.state.read().await.clone();
+
+        let current_sessions = match tmux::list_sessions_basic().await {
             Ok(sessions) => sessions,
             Err(e) => {
                 error!("Failed to list tmux sessions: {}", e);
@@ -75,9 +76,9 @@ impl TmuxMonitor {
         }
 
         // Check if state has changed
-        let mut state = self.state.write().await;
-        let sessions_changed = state.sessions != current_sessions;
-        let window_pane_changed = state.window_pane_counts != current_window_pane_counts;
+        let sessions_changed =
+            !sessions_equal_ignoring_tool(&previous_state.sessions, &current_sessions);
+        let window_pane_changed = previous_state.window_pane_counts != current_window_pane_counts;
 
         if sessions_changed || window_pane_changed {
             debug!(
@@ -85,7 +86,13 @@ impl TmuxMonitor {
                 sessions_changed, window_pane_changed
             );
 
-            // Update state
+            let current_sessions = if sessions_changed {
+                enrich_tools_from_previous(current_sessions, &previous_state.sessions).await
+            } else {
+                previous_state.sessions.clone()
+            };
+
+            let mut state = self.state.write().await;
             state.sessions = current_sessions.clone();
             state.window_pane_counts = current_window_pane_counts.clone();
 
@@ -103,6 +110,66 @@ impl TmuxMonitor {
             // are viewing different sessions
         }
     }
+}
+
+fn sessions_equal_ignoring_tool(left: &[TmuxSession], right: &[TmuxSession]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    left.iter().zip(right.iter()).all(|(l, r)| {
+        l.name == r.name
+            && l.attached == r.attached
+            && l.created == r.created
+            && l.windows == r.windows
+            && l.dimensions == r.dimensions
+    })
+}
+
+async fn enrich_tools_from_previous(
+    mut current_sessions: Vec<TmuxSession>,
+    previous_sessions: &[TmuxSession],
+) -> Vec<TmuxSession> {
+    let tool_futures: Vec<_> = current_sessions
+        .iter()
+        .map(|session| {
+            previous_sessions
+                .iter()
+                .find(|previous| {
+                    previous.name == session.name && previous.created == session.created
+                })
+                .and_then(|previous| previous.tool.clone())
+        })
+        .enumerate()
+        .map(|(index, existing_tool)| async move { (index, existing_tool) })
+        .collect();
+
+    for (index, existing_tool) in futures::future::join_all(tool_futures).await {
+        if let Some(tool) = existing_tool {
+            current_sessions[index].tool = Some(tool);
+        }
+    }
+
+    let detect_futures: Vec<_> = current_sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, session)| session.tool.is_none())
+        .map(|(index, session)| {
+            let name = session.name.clone();
+            async move {
+                (
+                    index,
+                    crate::chat_log::watcher::detect_tool_name(&name).await,
+                )
+            }
+        })
+        .collect();
+
+    for (index, tool) in futures::future::join_all(detect_futures).await {
+        current_sessions[index].tool = tool;
+    }
+
+    current_sessions
 }
 
 #[cfg(test)]

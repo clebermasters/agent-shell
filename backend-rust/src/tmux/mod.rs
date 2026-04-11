@@ -192,11 +192,14 @@ pub async fn ensure_tmux_server() -> Result<()> {
 }
 
 pub async fn list_sessions() -> Result<Vec<TmuxSession>> {
-    // Always use fallback for now - control mode needs more testing
-    list_sessions_fallback().await
+    list_sessions_fallback(true).await
 }
 
-async fn list_sessions_fallback() -> Result<Vec<TmuxSession>> {
+pub async fn list_sessions_basic() -> Result<Vec<TmuxSession>> {
+    list_sessions_fallback(false).await
+}
+
+async fn list_sessions_fallback(include_tools: bool) -> Result<Vec<TmuxSession>> {
     // First ensure tmux server is running
     let check = Command::new("tmux")
         .args(&["list-sessions"])
@@ -245,11 +248,11 @@ async fn list_sessions_fallback() -> Result<Vec<TmuxSession>> {
         })
         .collect();
 
-    // Detect running AI tools concurrently for all sessions
-    let tool_futures: Vec<_> = sessions
-        .iter()
-        .map(|s| detect_tool_name(&s.name))
-        .collect();
+    if !include_tools {
+        return Ok(sessions);
+    }
+
+    let tool_futures: Vec<_> = sessions.iter().map(|s| detect_tool_name(&s.name)).collect();
     let tools = futures::future::join_all(tool_futures).await;
 
     let sessions = sessions
@@ -485,7 +488,6 @@ pub async fn select_window(session_name: &str, window_index: &str) -> Result<()>
 
 // Alternative session management functions that avoid direct attachment
 
-
 pub async fn send_command_to_session(session_name: &str, command: &str) -> Result<()> {
     let status = Command::new("tmux")
         .args(&["send-keys", "-t", session_name, "-l", command])
@@ -518,7 +520,6 @@ pub async fn send_special_key(session_name: &str, window_index: u32, key: &str) 
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

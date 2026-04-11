@@ -252,7 +252,10 @@ mod tests {
 
     #[test]
     fn test_extension_from_filename() {
-        assert_eq!(extension_from_filename("photo.jpg"), Some("jpg".to_string()));
+        assert_eq!(
+            extension_from_filename("photo.jpg"),
+            Some("jpg".to_string())
+        );
         assert_eq!(extension_from_filename("doc.PDF"), Some("pdf".to_string()));
         assert_eq!(extension_from_filename("noext"), None);
         assert_eq!(extension_from_filename(".hidden"), None);
@@ -260,25 +263,67 @@ mod tests {
 
     #[test]
     fn test_extension_from_mime_type() {
-        assert_eq!(extension_from_mime_type("image/png"), Some("png".to_string()));
-        assert_eq!(extension_from_mime_type("image/jpeg"), Some("jpg".to_string()));
-        assert_eq!(extension_from_mime_type("application/json"), Some("json".to_string()));
-        assert_eq!(extension_from_mime_type("text/plain"), Some("txt".to_string()));
-        assert_eq!(extension_from_mime_type("audio/mpeg"), Some("mp3".to_string()));
-        assert_eq!(extension_from_mime_type("application/pdf"), Some("pdf".to_string()));
-        assert_eq!(extension_from_mime_type("text/markdown"), Some("md".to_string()));
-        assert_eq!(extension_from_mime_type("application/zip"), Some("zip".to_string()));
-        assert_eq!(extension_from_mime_type("application/gzip"), Some("gz".to_string()));
-        assert_eq!(extension_from_mime_type("audio/wav"), Some("wav".to_string()));
-        assert_eq!(extension_from_mime_type("audio/ogg"), Some("ogg".to_string()));
-        assert_eq!(extension_from_mime_type("image/gif"), Some("gif".to_string()));
-        assert_eq!(extension_from_mime_type("image/webp"), Some("webp".to_string()));
+        assert_eq!(
+            extension_from_mime_type("image/png"),
+            Some("png".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("image/jpeg"),
+            Some("jpg".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("application/json"),
+            Some("json".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("text/plain"),
+            Some("txt".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("audio/mpeg"),
+            Some("mp3".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("application/pdf"),
+            Some("pdf".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("text/markdown"),
+            Some("md".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("application/zip"),
+            Some("zip".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("application/gzip"),
+            Some("gz".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("audio/wav"),
+            Some("wav".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("audio/ogg"),
+            Some("ogg".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("image/gif"),
+            Some("gif".to_string())
+        );
+        assert_eq!(
+            extension_from_mime_type("image/webp"),
+            Some("webp".to_string())
+        );
     }
 
     #[test]
     fn test_extension_from_mime_type_with_params() {
         // MIME types can have ;charset=... suffix
-        assert_eq!(extension_from_mime_type("text/plain; charset=utf-8"), Some("txt".to_string()));
+        assert_eq!(
+            extension_from_mime_type("text/plain; charset=utf-8"),
+            Some("txt".to_string())
+        );
     }
 
     #[test]
@@ -329,7 +374,9 @@ mod tests {
             ("application/msword", "f.doc"),
         ];
         for (expected_mime, filename) in cases {
-            let id = storage.save_file(&encode(b"x"), filename, *expected_mime).unwrap();
+            let id = storage
+                .save_file(&encode(b"x"), filename, *expected_mime)
+                .unwrap();
             let mime = storage.get_mime_type(&id).unwrap();
             assert_eq!(&mime, expected_mime, "Failed for {}", filename);
         }
@@ -340,7 +387,9 @@ mod tests {
         let (storage, dir) = make_storage();
         let target = dir.path().join("uploads");
         let data = encode(b"file content");
-        let path = storage.save_file_to_directory(&data, "test.txt", "text/plain", &target).unwrap();
+        let path = storage
+            .save_file_to_directory(&data, "test.txt", "text/plain", &target)
+            .unwrap();
         assert!(path.exists());
         assert_eq!(std::fs::read(&path).unwrap(), b"file content");
     }

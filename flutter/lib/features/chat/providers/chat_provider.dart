@@ -222,7 +222,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void _handleAcpHistoryLoaded(Map<String, dynamic> message) {
     try {
       final sessionId = message['sessionId'] as String?;
-      if (sessionId == null || state.sessionName != 'acp_$sessionId') return;
+      if (sessionId == null || !_matchesAcpSession(sessionId)) return;
 
       final messagesData = message['messages'] as List<dynamic>? ?? [];
       final hasMore = message['hasMore'] as bool? ?? false;
@@ -645,7 +645,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void _handleAcpMessageChunk(Map<String, dynamic> message) {
     final sessionId = message['sessionId'] as String?;
-    if (sessionId != state.sessionName) return;
+    if (sessionId == null || !_matchesAcpSession(sessionId)) return;
 
     final content = message['content'] as String? ?? '';
     final isThinking = message['isThinking'] as bool? ?? false;
@@ -702,7 +702,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void _handleAcpToolCall(Map<String, dynamic> message) {
     // print('DEBUG: _handleAcpToolCall received: $message');
     final sessionId = message['sessionId'] as String?;
-    if (sessionId != state.sessionName) {
+    if (sessionId == null || !_matchesAcpSession(sessionId)) {
       // print(
       //   'DEBUG: Session mismatch - message: $sessionId, state: ${state.sessionName}',
       // );
@@ -739,7 +739,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void _handleAcpToolResult(Map<String, dynamic> message) {
     final sessionId = message['sessionId'] as String?;
-    if (sessionId != state.sessionName) return;
+    if (sessionId == null || !_matchesAcpSession(sessionId)) return;
 
     final toolCallId = message['toolCallId'] as String? ?? '';
     final status = message['status'] as String? ?? '';
@@ -796,8 +796,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void _handleAcpPromptDone(Map<String, dynamic> message) {
     final sessionId = message['sessionId'] as String?;
-    // state.sessionName has 'acp_' prefix (set in startAcpChat); match accordingly
-    if (sessionId == null || state.sessionName != 'acp_$sessionId') return;
+    if (sessionId == null || !_matchesAcpSession(sessionId)) return;
 
     final stopReason = message['stopReason'] as String? ?? '';
     state = state.copyWith(
@@ -829,6 +828,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (a.isEmpty) return b;
     if (b.isEmpty) return a;
     return '$a\n$b';
+  }
+
+  String _rawAcpSessionId(String sessionName) =>
+      sessionName.startsWith('acp_') ? sessionName.substring(4) : sessionName;
+
+  bool _matchesAcpSession(String messageSessionId) {
+    final rawStateSessionId = _rawAcpSessionId(state.sessionName);
+    return messageSessionId == state.sessionName ||
+        messageSessionId == rawStateSessionId ||
+        state.sessionName == 'acp_$messageSessionId';
   }
 
   void startAcpChat(String sessionName) {

@@ -1,13 +1,13 @@
+use serde::{Deserialize, Serialize};
+use serde_json as sj;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use serde_json as sj;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStderr, Command};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
-use crate::acp::messages::{JsonRpcMessage, JsonRpcRequest, parse_jsonrpc_message};
+use crate::acp::messages::{parse_jsonrpc_message, JsonRpcMessage, JsonRpcRequest};
 use crate::acp::session::*;
 
 pub struct AcpClient {
@@ -119,6 +119,7 @@ impl AcpClient {
 
         let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
         let stdin = child.stdin.take().ok_or("Failed to capture stdin")?;
+        let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
 
         {
             let mut child_guard = self.child.lock().await;
@@ -128,6 +129,8 @@ impl AcpClient {
             let mut stdin_guard = self.stdin.lock().await;
             *stdin_guard = Some(stdin);
         }
+
+        spawn_stderr_drain_task(stderr, "ACP");
 
         let pending = self.pending.clone();
         let event_tx = self.event_tx.clone();
@@ -160,34 +163,58 @@ impl AcpClient {
                         JsonRpcMessage::Notification(notif) => {
                             if notif.method == "session/update" {
                                 if let Some(params) = notif.params {
-                                    match serde_json::from_value::<SessionUpdateParams>(params.clone()) {
+                                    match serde_json::from_value::<SessionUpdateParams>(
+                                        params.clone(),
+                                    ) {
                                         Ok(update_params) => {
                                             let now = std::time::Instant::now();
                                             let gap = last_event_time.map(|t| t.elapsed());
                                             let update_type = match &update_params.update {
-                                                SessionUpdate::AgentMessageChunk { .. } => "agent_message_chunk",
-                                                SessionUpdate::AgentThoughtChunk { .. } => "agent_thought_chunk",
-                                                SessionUpdate::UserMessageChunk { .. } => "user_message_chunk",
+                                                SessionUpdate::AgentMessageChunk { .. } => {
+                                                    "agent_message_chunk"
+                                                }
+                                                SessionUpdate::AgentThoughtChunk { .. } => {
+                                                    "agent_thought_chunk"
+                                                }
+                                                SessionUpdate::UserMessageChunk { .. } => {
+                                                    "user_message_chunk"
+                                                }
                                                 SessionUpdate::ToolCall { .. } => "tool_call",
-                                                SessionUpdate::ToolCallUpdate { .. } => "tool_call_update",
+                                                SessionUpdate::ToolCallUpdate { .. } => {
+                                                    "tool_call_update"
+                                                }
                                                 SessionUpdate::Plan { .. } => "plan",
                                                 SessionUpdate::UsageUpdate { .. } => "usage_update",
-                                                SessionUpdate::AvailableCommandsUpdate { .. } => "available_commands_update",
+                                                SessionUpdate::AvailableCommandsUpdate {
+                                                    ..
+                                                } => "available_commands_update",
                                                 SessionUpdate::Unknown => "unknown",
                                             };
                                             if let Some(gap) = gap {
                                                 tracing::info!("[TIMING] ACP event '{}' for {} (gap since last: {:?})", update_type, update_params.session_id, gap);
                                             } else {
-                                                tracing::info!("[TIMING] ACP first event '{}' for {}", update_type, update_params.session_id);
+                                                tracing::info!(
+                                                    "[TIMING] ACP first event '{}' for {}",
+                                                    update_type,
+                                                    update_params.session_id
+                                                );
                                             }
                                             last_event_time = Some(now);
                                             let t_send = std::time::Instant::now();
-                                            match event_tx.send(AcpEvent::SessionUpdate {
-                                                session_id: update_params.session_id,
-                                                update: update_params.update,
-                                            }).await {
-                                                Ok(_) => tracing::debug!("Event sent in {:?}", t_send.elapsed()),
-                                                Err(e) => tracing::error!("Failed to send event: {}", e),
+                                            match event_tx
+                                                .send(AcpEvent::SessionUpdate {
+                                                    session_id: update_params.session_id,
+                                                    update: update_params.update,
+                                                })
+                                                .await
+                                            {
+                                                Ok(_) => tracing::debug!(
+                                                    "Event sent in {:?}",
+                                                    t_send.elapsed()
+                                                ),
+                                                Err(e) => {
+                                                    tracing::error!("Failed to send event: {}", e)
+                                                }
                                             }
                                         }
                                         Err(e) => {
@@ -197,13 +224,17 @@ impl AcpClient {
                                 }
                             } else if notif.method == "agent/requestPermission" {
                                 if let Some(params) = notif.params {
-                                    if let Ok(perm_params) = serde_json::from_value::<PermissionRequestParams>(params) {
-                                        let _ = event_tx.send(AcpEvent::PermissionRequest {
-                                            request_id: perm_params.request_id,
-                                            session_id: perm_params.session_id,
-                                            tool_call: perm_params.tool_call,
-                                            options: perm_params.options,
-                                        }).await;
+                                    if let Ok(perm_params) =
+                                        serde_json::from_value::<PermissionRequestParams>(params)
+                                    {
+                                        let _ = event_tx
+                                            .send(AcpEvent::PermissionRequest {
+                                                request_id: perm_params.request_id,
+                                                session_id: perm_params.session_id,
+                                                tool_call: perm_params.tool_call,
+                                                options: perm_params.options,
+                                            })
+                                            .await;
                                     }
                                 }
                             }
@@ -249,7 +280,7 @@ impl AcpClient {
 
         tracing::info!("Sending initialize request");
         let result = self.send_request_raw(id, request).await;
-        
+
         match result {
             Ok(result) => {
                 *self.initialized.write().await = true;
@@ -265,34 +296,47 @@ impl AcpClient {
         }
     }
 
-    async fn send_request_raw(&self, id: usize, request: JsonRpcRequest) -> Result<sj::Value, String> {
+    async fn send_request_raw(
+        &self,
+        id: usize,
+        request: JsonRpcRequest,
+    ) -> Result<sj::Value, String> {
         let method = request.method.clone();
         let pending = Arc::clone(&self.pending);
         let stdin = Arc::clone(&self.stdin);
-        
+
         let (tx, rx) = tokio::sync::oneshot::channel();
-        
+
         {
             let mut pending_guard = pending.lock().await;
-            pending_guard.insert(id, Box::new(move |result| {
-                let _ = tx.send(result);
-            }));
+            pending_guard.insert(
+                id,
+                Box::new(move |result| {
+                    let _ = tx.send(result);
+                }),
+            );
         }
 
         let request_json = serde_json::to_string(&request)
             .map_err(|e| format!("Failed to serialize request: {}", e))?;
-        
+
         let t_lock = std::time::Instant::now();
         let mut stdin_guard = stdin.lock().await;
         let lock_wait = t_lock.elapsed();
         if lock_wait.as_millis() > 10 {
-            tracing::info!("[TIMING] ACP stdin lock wait for '{}': {:?}", method, lock_wait);
+            tracing::info!(
+                "[TIMING] ACP stdin lock wait for '{}': {:?}",
+                method,
+                lock_wait
+            );
         }
         if let Some(ref mut stdin) = *stdin_guard {
-            stdin.write_all(format!("{}\n", request_json).as_bytes())
+            stdin
+                .write_all(format!("{}\n", request_json).as_bytes())
                 .await
                 .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-            stdin.flush()
+            stdin
+                .flush()
                 .await
                 .map_err(|e| format!("Failed to flush stdin: {}", e))?;
         }
@@ -337,16 +381,22 @@ impl AcpClient {
         };
 
         let result = self.send_request_raw(id, request).await?;
-        
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse session result: {}", e))
+
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse session result: {}", e))
     }
 
-    pub async fn resume_session(&self, session_id: &str, cwd: &str) -> Result<CreateSessionResult, String> {
+    pub async fn resume_session(
+        &self,
+        session_id: &str,
+        cwd: &str,
+    ) -> Result<CreateSessionResult, String> {
         {
             let active = self.active_session_id.lock().await;
             if active.as_deref() == Some(session_id) {
-                tracing::info!("[TIMING] AcpResumeSession skipped — '{}' already active", session_id);
+                tracing::info!(
+                    "[TIMING] AcpResumeSession skipped — '{}' already active",
+                    session_id
+                );
                 // Return a minimal result so the caller can still send AcpSessionCreated
                 return Err(format!("__already_active:{}", session_id));
             }
@@ -371,15 +421,19 @@ impl AcpClient {
         };
 
         let result = self.send_request_raw(id, request).await?;
-        
+
         let parsed = serde_json::from_value::<CreateSessionResult>(result)
             .map_err(|e| format!("Failed to parse resume result: {}", e))?;
-        
+
         *self.active_session_id.lock().await = Some(session_id.to_string());
         Ok(parsed)
     }
 
-    pub async fn fork_session(&self, session_id: &str, cwd: &str) -> Result<CreateSessionResult, String> {
+    pub async fn fork_session(
+        &self,
+        session_id: &str,
+        cwd: &str,
+    ) -> Result<CreateSessionResult, String> {
         let id = {
             let mut guard = self.request_id.lock().await;
             let id = *guard;
@@ -399,9 +453,8 @@ impl AcpClient {
         };
 
         let result = self.send_request_raw(id, request).await?;
-        
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse fork result: {}", e))
+
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse fork result: {}", e))
     }
 
     pub async fn list_sessions(&self) -> Result<ListSessionsResult, String> {
@@ -441,7 +494,10 @@ impl AcpClient {
             }
         }
 
-        Ok(ListSessionsResult { sessions: all_sessions, next_cursor: None })
+        Ok(ListSessionsResult {
+            sessions: all_sessions,
+            next_cursor: None,
+        })
     }
 
     pub async fn set_model(&self, session_id: &str, model_id: &str) -> Result<sj::Value, String> {
@@ -486,7 +542,11 @@ impl AcpClient {
         self.send_request_raw(id, request).await
     }
 
-    pub async fn send_prompt(&self, session_id: &str, message: &str) -> Result<PromptResult, String> {
+    pub async fn send_prompt(
+        &self,
+        session_id: &str,
+        message: &str,
+    ) -> Result<PromptResult, String> {
         let id = {
             let mut guard = self.request_id.lock().await;
             let id = *guard;
@@ -507,9 +567,8 @@ impl AcpClient {
         };
 
         let result = self.send_request_raw(id, request).await?;
-        
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse prompt result: {}", e))
+
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse prompt result: {}", e))
     }
 
     pub async fn cancel_prompt(&self, session_id: &str) -> Result<sj::Value, String> {
@@ -532,7 +591,11 @@ impl AcpClient {
         self.send_request_raw(id, request).await
     }
 
-    pub async fn respond_to_permission(&self, request_id: &str, option_id: &str) -> Result<sj::Value, String> {
+    pub async fn respond_to_permission(
+        &self,
+        request_id: &str,
+        option_id: &str,
+    ) -> Result<sj::Value, String> {
         let id = {
             let mut guard = self.request_id.lock().await;
             let id = *guard;
@@ -600,6 +663,18 @@ impl AcpClient {
         };
         (client, event_tx)
     }
+}
+
+fn spawn_stderr_drain_task(stderr: ChildStderr, process_name: &'static str) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                tracing::debug!("{process_name} stderr: {trimmed}");
+            }
+        }
+    });
 }
 
 #[derive(Debug, Deserialize)]
@@ -683,10 +758,15 @@ fn mcp_def_to_acp(name: &str, def: &sj::Value) -> Option<sj::Value> {
             // Resolve to full path so OpenCode (running as service) can find it
             let command = resolve_command(command_str);
             let args: Vec<&str> = cmd_arr[1..].iter().filter_map(|v| v.as_str()).collect();
-            let env: Vec<sj::Value> = def.get("environment")
+            let env: Vec<sj::Value> = def
+                .get("environment")
                 .or_else(|| def.get("env"))
                 .and_then(|v| v.as_object())
-                .map(|m| m.iter().map(|(k, v)| sj::json!({"name": k, "value": v})).collect())
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| sj::json!({"name": k, "value": v}))
+                        .collect()
+                })
                 .unwrap_or_default();
             // McpServerStdio has no "type" field in the ACP schema
             Some(sj::json!({
@@ -698,9 +778,14 @@ fn mcp_def_to_acp(name: &str, def: &sj::Value) -> Option<sj::Value> {
         }
         "http" | "remote" | "sse" => {
             let url = def.get("url").and_then(|v| v.as_str())?;
-            let headers: Vec<sj::Value> = def.get("headers")
+            let headers: Vec<sj::Value> = def
+                .get("headers")
                 .and_then(|v| v.as_object())
-                .map(|m| m.iter().map(|(k, v)| sj::json!({"name": k, "value": v})).collect())
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| sj::json!({"name": k, "value": v}))
+                        .collect()
+                })
                 .unwrap_or_default();
             // "remote" maps to "sse" in ACP schema
             let acp_type = if typ == "http" { "http" } else { "sse" };
@@ -724,7 +809,9 @@ fn strip_trailing_commas(s: &str) -> String {
         if bytes[i] == b',' {
             // Look ahead past whitespace for } or ]
             let mut j = i + 1;
-            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'\n' || bytes[j] == b'\r') {
+            while j < bytes.len()
+                && (bytes[j] == b' ' || bytes[j] == b'\t' || bytes[j] == b'\n' || bytes[j] == b'\r')
+            {
                 j += 1;
             }
             if j < bytes.len() && (bytes[j] == b'}' || bytes[j] == b']') {
@@ -882,7 +969,13 @@ mod tests {
         }"#;
         let update: SessionUpdate = sj::from_str(json).unwrap();
         match update {
-            SessionUpdate::ToolCall { tool_call_id, title, kind, status, .. } => {
+            SessionUpdate::ToolCall {
+                tool_call_id,
+                title,
+                kind,
+                status,
+                ..
+            } => {
                 assert_eq!(tool_call_id, "tc-1");
                 assert_eq!(title, "Read file");
                 assert_eq!(kind, "read");
@@ -907,7 +1000,12 @@ mod tests {
         }"#;
         let update: SessionUpdate = sj::from_str(json).unwrap();
         match update {
-            SessionUpdate::ToolCallUpdate { tool_call_id, status, raw_output, .. } => {
+            SessionUpdate::ToolCallUpdate {
+                tool_call_id,
+                status,
+                raw_output,
+                ..
+            } => {
                 assert_eq!(tool_call_id, "tc-1");
                 assert_eq!(status, "completed");
                 assert!(raw_output.is_some());
@@ -918,7 +1016,8 @@ mod tests {
 
     #[test]
     fn test_session_update_plan() {
-        let json = r#"{"sessionUpdate":"plan","entries":[{"step":"analyze"},{"step":"implement"}]}"#;
+        let json =
+            r#"{"sessionUpdate":"plan","entries":[{"step":"analyze"},{"step":"implement"}]}"#;
         let update: SessionUpdate = sj::from_str(json).unwrap();
         match update {
             SessionUpdate::Plan { entries } => assert_eq!(entries.len(), 2),

@@ -53,11 +53,15 @@ pub async fn handle_assign_tag_to_session(
     if let Err(e) = app_state.tag_store.assign_tag(&session_name, &tag_id) {
         tracing::error!("Failed to assign tag: {}", e);
     } else {
-        send_message(tx, ServerMessage::TagAssignmentUpdated {
-            session_name,
-            tag_id,
-            assigned: true,
-        }).await?;
+        send_message(
+            tx,
+            ServerMessage::TagAssignmentUpdated {
+                session_name,
+                tag_id,
+                assigned: true,
+            },
+        )
+        .await?;
     }
     Ok(())
 }
@@ -68,14 +72,21 @@ pub async fn handle_remove_tag_from_session(
     session_name: String,
     tag_id: String,
 ) -> Result<()> {
-    if let Err(e) = app_state.tag_store.remove_tag_from_session(&session_name, &tag_id) {
+    if let Err(e) = app_state
+        .tag_store
+        .remove_tag_from_session(&session_name, &tag_id)
+    {
         tracing::error!("Failed to remove tag: {}", e);
     } else {
-        send_message(tx, ServerMessage::TagAssignmentUpdated {
-            session_name,
-            tag_id,
-            assigned: false,
-        }).await?;
+        send_message(
+            tx,
+            ServerMessage::TagAssignmentUpdated {
+                session_name,
+                tag_id,
+                assigned: false,
+            },
+        )
+        .await?;
     }
     Ok(())
 }

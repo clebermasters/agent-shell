@@ -21,21 +21,19 @@ pub(crate) async fn handle(
     tx: &mpsc::UnboundedSender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
     match msg {
-        WebSocketMessage::ListFiles { path } => {
-            match list_files(&path) {
-                Ok(entries) => {
-                    let response = ServerMessage::FilesList { path, entries };
-                    send_message(tx, response).await?;
-                }
-                Err(e) => {
-                    error!("Failed to list files at {}: {}", path, e);
-                    let response = ServerMessage::Error {
-                        message: format!("Failed to list files: {}", e),
-                    };
-                    send_message(tx, response).await?;
-                }
+        WebSocketMessage::ListFiles { path } => match list_files(&path) {
+            Ok(entries) => {
+                let response = ServerMessage::FilesList { path, entries };
+                send_message(tx, response).await?;
             }
-        }
+            Err(e) => {
+                error!("Failed to list files at {}: {}", path, e);
+                let response = ServerMessage::Error {
+                    message: format!("Failed to list files: {}", e),
+                };
+                send_message(tx, response).await?;
+            }
+        },
 
         WebSocketMessage::GetSessionCwd { session_name } => {
             match crate::tmux::get_session_path(&session_name) {
@@ -151,7 +149,10 @@ pub(crate) async fn handle(
             }
         }
 
-        WebSocketMessage::CopyFiles { source_paths, destination_path } => {
+        WebSocketMessage::CopyFiles {
+            source_paths,
+            destination_path,
+        } => {
             if let Err(e) = validate_path(&destination_path) {
                 let response = ServerMessage::FilesCopied {
                     success: false,
@@ -184,7 +185,10 @@ pub(crate) async fn handle(
                 }
                 let file_name = match src_path.file_name() {
                     Some(n) => n,
-                    None => { errors.push(format!("{}: invalid path", src)); continue; }
+                    None => {
+                        errors.push(format!("{}: invalid path", src));
+                        continue;
+                    }
                 };
                 let target = dest.join(file_name);
                 if let Err(e) = copy_recursive(src_path, &target) {
@@ -193,12 +197,19 @@ pub(crate) async fn handle(
             }
 
             let success = errors.is_empty();
-            let error = if errors.is_empty() { None } else { Some(errors.join("; ")) };
+            let error = if errors.is_empty() {
+                None
+            } else {
+                Some(errors.join("; "))
+            };
             let response = ServerMessage::FilesCopied { success, error };
             send_message(tx, response).await?;
         }
 
-        WebSocketMessage::MoveFiles { source_paths, destination_path } => {
+        WebSocketMessage::MoveFiles {
+            source_paths,
+            destination_path,
+        } => {
             if let Err(e) = validate_path(&destination_path) {
                 let response = ServerMessage::FilesMoved {
                     success: false,
@@ -231,25 +242,32 @@ pub(crate) async fn handle(
                 }
                 let file_name = match src_path.file_name() {
                     Some(n) => n,
-                    None => { errors.push(format!("{}: invalid path", src)); continue; }
+                    None => {
+                        errors.push(format!("{}: invalid path", src));
+                        continue;
+                    }
                 };
                 let target = dest.join(file_name);
                 if let Err(e) = std::fs::rename(src_path, &target) {
                     // rename fails across filesystems — fall back to copy + delete
-                    if let Err(e2) = copy_recursive(src_path, &target)
-                        .and_then(|_| if src_path.is_dir() {
+                    if let Err(e2) = copy_recursive(src_path, &target).and_then(|_| {
+                        if src_path.is_dir() {
                             std::fs::remove_dir_all(src_path)
                         } else {
                             std::fs::remove_file(src_path)
-                        })
-                    {
+                        }
+                    }) {
                         errors.push(format!("{}: rename: {}, copy-fallback: {}", src, e, e2));
                     }
                 }
             }
 
             let success = errors.is_empty();
-            let error = if errors.is_empty() { None } else { Some(errors.join("; ")) };
+            let error = if errors.is_empty() {
+                None
+            } else {
+                Some(errors.join("; "))
+            };
             let response = ServerMessage::FilesMoved { success, error };
             send_message(tx, response).await?;
         }
@@ -281,8 +299,7 @@ pub(crate) async fn handle(
             match std::fs::read(file_path) {
                 Ok(bytes) => {
                     use base64::Engine;
-                    let content_base64 =
-                        base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    let content_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                     let mime_type = detect_mime_type(file_path);
                     let response = ServerMessage::BinaryFileContent {
                         path,
@@ -305,7 +322,10 @@ pub(crate) async fn handle(
             }
         }
 
-        WebSocketMessage::WriteFile { path, content_base64 } => {
+        WebSocketMessage::WriteFile {
+            path,
+            content_base64,
+        } => {
             if let Err(e) = validate_path(&path) {
                 let response = ServerMessage::FileWritten {
                     path,
@@ -332,7 +352,11 @@ pub(crate) async fn handle(
 
             match std::fs::write(&path, &bytes) {
                 Ok(()) => {
-                    let response = ServerMessage::FileWritten { path, success: true, error: None };
+                    let response = ServerMessage::FileWritten {
+                        path,
+                        success: true,
+                        error: None,
+                    };
                     send_message(tx, response).await?;
                 }
                 Err(e) => {
@@ -393,9 +417,8 @@ fn detect_mime_type(path: &Path) -> &'static str {
         "yaml" | "yml" => "text/yaml",
         "toml" => "text/toml",
         "txt" | "log" | "csv" => "text/plain",
-        "rs" | "py" | "js" | "ts" | "go" | "java" | "kt" | "c" | "cpp" | "h"
-        | "sh" | "bash" | "dart" | "rb" | "php" | "swift" | "css" | "scss"
-        | "sql" | "jsx" | "tsx" => "text/plain",
+        "rs" | "py" | "js" | "ts" | "go" | "java" | "kt" | "c" | "cpp" | "h" | "sh" | "bash"
+        | "dart" | "rb" | "php" | "swift" | "css" | "scss" | "sql" | "jsx" | "tsx" => "text/plain",
         _ => "application/octet-stream",
     }
 }
@@ -406,7 +429,10 @@ fn list_files(path: &str) -> anyhow::Result<Vec<FileEntry>> {
         .map(|entry| {
             let metadata = entry.metadata();
             let is_directory = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            let size = metadata.as_ref().map(|m| if m.is_file() { m.len() } else { 0 }).unwrap_or(0);
+            let size = metadata
+                .as_ref()
+                .map(|m| if m.is_file() { m.len() } else { 0 })
+                .unwrap_or(0);
             let modified = metadata
                 .as_ref()
                 .ok()
@@ -427,12 +453,10 @@ fn list_files(path: &str) -> anyhow::Result<Vec<FileEntry>> {
         .collect();
 
     // Sort: directories first, then files; both alphabetically
-    entries.sort_by(|a, b| {
-        match (a.is_directory, b.is_directory) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
+    entries.sort_by(|a, b| match (a.is_directory, b.is_directory) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
     Ok(entries)
@@ -441,10 +465,10 @@ fn list_files(path: &str) -> anyhow::Result<Vec<FileEntry>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
-    use crate::websocket::types::BroadcastMessage;
     use crate::types::WebSocketMessage;
+    use crate::websocket::types::BroadcastMessage;
     use tempfile::TempDir;
+    use tokio::sync::mpsc;
 
     fn make_tx() -> (
         mpsc::UnboundedSender<BroadcastMessage>,
@@ -473,9 +497,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.txt"), "content").unwrap();
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::ListFiles {
-            path: dir.path().to_string_lossy().to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::ListFiles {
+                path: dir.path().to_string_lossy().to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -488,9 +516,13 @@ mod tests {
     #[tokio::test]
     async fn test_list_files_nonexistent_dir() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::ListFiles {
-            path: "/nonexistent/directory/xyz".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::ListFiles {
+                path: "/nonexistent/directory/xyz".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         assert!(rx.try_recv().is_ok()); // Error response
     }
@@ -498,9 +530,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_session_cwd_nonexistent() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::GetSessionCwd {
-            session_name: "nonexistent-session-xyz".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::GetSessionCwd {
+                session_name: "nonexistent-session-xyz".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         assert!(rx.try_recv().is_ok());
     }
@@ -508,9 +544,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_session_cwd_existing() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::GetSessionCwd {
-            session_name: "AgentShell".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::GetSessionCwd {
+                session_name: "AgentShell".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         assert!(rx.try_recv().is_ok());
     }
@@ -518,10 +558,14 @@ mod tests {
     #[tokio::test]
     async fn test_delete_nonexistent_file() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::DeleteFiles {
-            paths: vec!["/tmp/nonexistent_file_xyz_abc.txt".to_string()],
-            recursive: false,
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::DeleteFiles {
+                paths: vec!["/tmp/nonexistent_file_xyz_abc.txt".to_string()],
+                recursive: false,
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -534,10 +578,14 @@ mod tests {
     #[tokio::test]
     async fn test_delete_file_path_traversal_blocked() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::DeleteFiles {
-            paths: vec!["/tmp/../etc/passwd".to_string()],
-            recursive: false,
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::DeleteFiles {
+                paths: vec!["/tmp/../etc/passwd".to_string()],
+                recursive: false,
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -550,10 +598,14 @@ mod tests {
     #[tokio::test]
     async fn test_delete_file_relative_path_blocked() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::DeleteFiles {
-            paths: vec!["relative/path.txt".to_string()],
-            recursive: false,
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::DeleteFiles {
+                paths: vec!["relative/path.txt".to_string()],
+                recursive: false,
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -569,10 +621,14 @@ mod tests {
         let file_path = dir.path().join("delete_me.txt");
         std::fs::write(&file_path, "data").unwrap();
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::DeleteFiles {
-            paths: vec![file_path.to_string_lossy().to_string()],
-            recursive: false,
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::DeleteFiles {
+                paths: vec![file_path.to_string_lossy().to_string()],
+                recursive: false,
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -586,10 +642,14 @@ mod tests {
     #[tokio::test]
     async fn test_rename_relative_path_blocked() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::RenameFile {
-            path: "relative/path.txt".to_string(),
-            new_name: "new.txt".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::RenameFile {
+                path: "relative/path.txt".to_string(),
+                new_name: "new.txt".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -602,10 +662,14 @@ mod tests {
     #[tokio::test]
     async fn test_rename_invalid_new_name() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::RenameFile {
-            path: "/tmp/somefile.txt".to_string(),
-            new_name: "../../etc/passwd".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::RenameFile {
+                path: "/tmp/somefile.txt".to_string(),
+                new_name: "../../etc/passwd".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -621,10 +685,14 @@ mod tests {
         let file_path = dir.path().join("old.txt");
         std::fs::write(&file_path, "data").unwrap();
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::RenameFile {
-            path: file_path.to_string_lossy().to_string(),
-            new_name: "new.txt".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::RenameFile {
+                path: file_path.to_string_lossy().to_string(),
+                new_name: "new.txt".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {

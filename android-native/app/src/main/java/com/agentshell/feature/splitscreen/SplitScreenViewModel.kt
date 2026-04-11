@@ -307,6 +307,7 @@ class SplitScreenViewModel @Inject constructor(
             cwd = m["cwd"] as? String ?: "",
             title = m["title"] as? String ?: "",
             updatedAt = m["updatedAt"] as? String ?: "",
+            provider = m["provider"] as? String,
         )
     }
 

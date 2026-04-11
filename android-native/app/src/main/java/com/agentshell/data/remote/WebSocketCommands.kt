@@ -474,12 +474,13 @@ fun WebSocketService.selectBackend(backend: String) {
     ))
 }
 
-/** Create a new ACP session rooted at [cwd]. */
-fun WebSocketService.acpCreateSession(cwd: String) {
-    send(mapOf(
-        "type" to "acp-create-session",
-        "cwd"  to cwd,
-    ))
+/** Create a new direct session rooted at [cwd]. */
+fun WebSocketService.acpCreateSession(cwd: String, backend: String? = null) {
+    send(buildMap {
+        put("type", "acp-create-session")
+        put("cwd", cwd)
+        if (backend != null) put("backend", backend)
+    })
 }
 
 /** Resume an existing ACP session [sessionId], setting the working directory to [cwd]. */

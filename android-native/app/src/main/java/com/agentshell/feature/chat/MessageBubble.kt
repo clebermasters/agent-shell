@@ -164,13 +164,22 @@ fun MessageBubble(
                         )
                     }
                 } else if (!message.content.isNullOrBlank()) {
-                    MarkdownText(
-                        text = message.content,
-                        color = if (isUser)
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    val contentColor = if (isUser)
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    if (message.isStreaming) {
+                        Text(
+                            text = message.content,
+                            color = contentColor,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        MarkdownText(
+                            text = message.content,
+                            color = contentColor,
+                        )
+                    }
                 }
 
                 // Streaming dots appended to streaming messages

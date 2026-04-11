@@ -183,6 +183,7 @@ class HomeViewModel @Inject constructor(
                                     cwd = s["cwd"] as? String ?: "",
                                     title = s["title"] as? String ?: "",
                                     updatedAt = s["updatedAt"] as? String ?: "",
+                                    provider = s["provider"] as? String,
                                 )
                             }
                         }

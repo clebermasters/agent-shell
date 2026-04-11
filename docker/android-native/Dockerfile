@@ -32,7 +32,9 @@ RUN --mount=type=cache,target=/root/.gradle \
 # ── Layer 2: Full source copy (invalidated on any source change) ─────────────
 COPY android-native/ ./
 
-# Set up debug keystore — generate a fresh one if not present
+# Set up debug keystore. Prefer the repo-local key so repeated local builds
+# stay upgrade-compatible on device; only generate one if the repo does not
+# provide it.
 RUN mkdir -p /root/.android && \
     if [ ! -f /app/app/debug.keystore ]; then \
       keytool -genkeypair -v \

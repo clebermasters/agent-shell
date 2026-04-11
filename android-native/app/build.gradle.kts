@@ -25,8 +25,8 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            // Sign release with debug key (Docker generates app/debug.keystore)
-            // Replace with a proper release keystore for Play Store distribution
+            // Sign release with the repo-local debug key so local device upgrades stay compatible.
+            // Replace with a proper release keystore for Play Store distribution.
             signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

@@ -53,7 +53,11 @@ pub(crate) async fn handle_get_stats(
             .collect();
 
         // Top 5 by CPU (descending)
-        processes.sort_by(|a, b| b.cpu_usage.partial_cmp(&a.cpu_usage).unwrap_or(std::cmp::Ordering::Equal));
+        processes.sort_by(|a, b| {
+            b.cpu_usage
+                .partial_cmp(&a.cpu_usage)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let top_processes_by_cpu: Vec<ProcessInfo> = processes.iter().take(5).cloned().collect();
 
         // Top 5 by memory (descending)
@@ -375,8 +379,8 @@ async fn fetch_codex_usage() -> anyhow::Result<CodexUsageSnapshot> {
 }
 
 async fn fetch_codex_usage_from_app_server() -> anyhow::Result<CodexUsageSnapshot> {
-    let codex_bin = resolve_codex_binary()
-        .ok_or_else(|| anyhow::anyhow!("codex CLI unavailable"))?;
+    let codex_bin =
+        resolve_codex_binary().ok_or_else(|| anyhow::anyhow!("codex CLI unavailable"))?;
 
     let mut child = Command::new(codex_bin)
         .args(["app-server"])
@@ -437,7 +441,10 @@ async fn fetch_codex_usage_from_app_server() -> anyhow::Result<CodexUsageSnapsho
 fn fetch_codex_usage_from_rollout() -> anyhow::Result<CodexUsageSnapshot> {
     let path = find_latest_codex_rollout_path()?;
     let usage = parse_codex_usage_from_rollout(&path)?;
-    info!("Using Codex usage from rollout fallback: {}", path.display());
+    info!(
+        "Using Codex usage from rollout fallback: {}",
+        path.display()
+    );
     Ok(usage)
 }
 
@@ -569,10 +576,7 @@ fn query_latest_codex_rollout_from_state_db(
 fn find_newest_rollout(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
 
-    fn scan(
-        dir: &std::path::Path,
-        best: &mut Option<(std::time::SystemTime, std::path::PathBuf)>,
-    ) {
+    fn scan(dir: &std::path::Path, best: &mut Option<(std::time::SystemTime, std::path::PathBuf)>) {
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(_) => return,
@@ -604,9 +608,7 @@ fn find_newest_rollout(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     best.map(|(_, path)| path)
 }
 
-fn parse_codex_usage_from_rollout(
-    path: &std::path::Path,
-) -> anyhow::Result<CodexUsageSnapshot> {
+fn parse_codex_usage_from_rollout(path: &std::path::Path) -> anyhow::Result<CodexUsageSnapshot> {
     let data = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("failed to read rollout {}: {}", path.display(), e))?;
 
@@ -640,8 +642,12 @@ fn parse_codex_usage_from_rollout(
         };
 
         latest = Some(CodexUsageSnapshot {
-            primary: rate_limits.get("primary").and_then(map_rollout_usage_window),
-            secondary: rate_limits.get("secondary").and_then(map_rollout_usage_window),
+            primary: rate_limits
+                .get("primary")
+                .and_then(map_rollout_usage_window),
+            secondary: rate_limits
+                .get("secondary")
+                .and_then(map_rollout_usage_window),
             plan_type: rate_limits
                 .get("plan_type")
                 .and_then(|v| v.as_str())
@@ -687,7 +693,11 @@ fn map_rollout_usage_window(value: &serde_json::Value) -> Option<ProviderUsageWi
 }
 
 fn format_codex_reset_time(raw: i64) -> Option<String> {
-    let millis = if raw > 10_000_000_000 { raw } else { raw * 1000 };
+    let millis = if raw > 10_000_000_000 {
+        raw
+    } else {
+        raw * 1000
+    };
     DateTime::<Utc>::from_timestamp_millis(millis).map(|dt| dt.to_rfc3339())
 }
 
@@ -752,8 +762,8 @@ pub(crate) async fn handle_audio_control(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
     use crate::websocket::types::BroadcastMessage;
+    use tokio::sync::mpsc;
 
     fn make_tx() -> (
         mpsc::UnboundedSender<BroadcastMessage>,
@@ -790,17 +800,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_audio_control_start() {
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-        use crate::websocket::{
-            client_manager::ClientManager,
-            types::WsState,
-        };
+        use crate::websocket::{client_manager::ClientManager, types::WsState};
         use crate::{
-            chat_clear_store::ChatClearStore,
-            chat_event_store::ChatEventStore,
+            chat_clear_store::ChatClearStore, chat_event_store::ChatEventStore,
             chat_file_storage::ChatFileStorage,
         };
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
 
         let dir = tempfile::TempDir::new().unwrap();
         let (tx, _rx) = make_tx();
@@ -822,6 +828,7 @@ mod tests {
             client_manager,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
             kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
+            selected_backend: "acp".to_string(),
         };
         // AudioAction::Start will attempt to start streaming — may fail without audio provider
         let result = handle_audio_control(&mut ws_state, AudioAction::Start).await;
@@ -831,17 +838,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_audio_control_stop_no_tx() {
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-        use crate::websocket::{
-            client_manager::ClientManager,
-            types::WsState,
-        };
+        use crate::websocket::{client_manager::ClientManager, types::WsState};
         use crate::{
-            chat_clear_store::ChatClearStore,
-            chat_event_store::ChatEventStore,
+            chat_clear_store::ChatClearStore, chat_event_store::ChatEventStore,
             chat_file_storage::ChatFileStorage,
         };
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
 
         let dir = tempfile::TempDir::new().unwrap();
         let (tx, _rx) = make_tx();
@@ -863,6 +866,7 @@ mod tests {
             client_manager,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
             kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
+            selected_backend: "acp".to_string(),
         };
         // Stop with audio_tx=None should be a no-op
         let result = handle_audio_control(&mut ws_state, AudioAction::Stop).await;
@@ -940,10 +944,17 @@ mod tests {
         );
         assert_eq!(usage.secondary.as_ref().map(|w| w.used_percent), Some(1));
         assert_eq!(
-            usage.secondary.as_ref().and_then(|w| w.window_duration_mins),
+            usage
+                .secondary
+                .as_ref()
+                .and_then(|w| w.window_duration_mins),
             Some(10_080)
         );
-        assert!(usage.primary.as_ref().and_then(|w| w.resets_at.clone()).is_some());
+        assert!(usage
+            .primary
+            .as_ref()
+            .and_then(|w| w.resets_at.clone())
+            .is_some());
     }
 
     #[test]

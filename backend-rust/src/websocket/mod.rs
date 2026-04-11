@@ -5,10 +5,10 @@ mod cron_cmds;
 mod dotfiles_cmds;
 mod favorite_cmds;
 mod file_cmds;
-mod tag_cmds;
 mod git_cmds;
 mod session_cmds;
 mod system_cmds;
+mod tag_cmds;
 mod terminal_cmds;
 mod types;
 
@@ -31,7 +31,6 @@ use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::{types::*, AppState};
-
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -58,6 +57,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     let mut ws_state = WsState {
         client_id: client_id.clone(),
+        selected_backend: "acp".to_string(),
         current_pty: Arc::new(Mutex::new(None)),
         current_session: Arc::new(Mutex::new(None)),
         current_window: Arc::new(Mutex::new(None)),
@@ -86,7 +86,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 BroadcastMessage::Text(json) => {
                     // Check if we can send without blocking
                     if let Err(e) = sender.send(Message::Text(json.to_string())).await {
-                        error!("[CONN] Backend→Flutter send FAILED ({}): {}", sender_client_id, e);
+                        error!(
+                            "[CONN] Backend→Flutter send FAILED ({}): {}",
+                            sender_client_id, e
+                        );
                         let _ = close_tx.send(());
                         break;
                     }
@@ -97,7 +100,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
                 BroadcastMessage::Binary(data) => {
                     if let Err(e) = sender.send(Message::Binary(data.to_vec())).await {
-                        error!("[CONN] Backend→Flutter binary send FAILED ({}): {}", sender_client_id, e);
+                        error!(
+                            "[CONN] Backend→Flutter binary send FAILED ({}): {}",
+                            sender_client_id, e
+                        );
                         let _ = close_tx.send(());
                         break;
                     }
@@ -167,7 +173,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     info!("WebSocket connection closed: {}", client_id);
 }
 
-async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: Arc<AppState>) -> anyhow::Result<()> {
+async fn handle_message(
+    msg: WebSocketMessage,
+    state: &mut WsState,
+    app_state: Arc<AppState>,
+) -> anyhow::Result<()> {
     match msg {
         WebSocketMessage::ListSessions => {
             session_cmds::handle_list_sessions(&state.message_tx).await?;
@@ -222,12 +232,29 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         }
 
         // Session management — delegated to session_cmds
-        WebSocketMessage::CreateSession { name, start_directory, startup_command, startup_args } => {
-            session_cmds::handle_create_session(&state.message_tx, name, start_directory, startup_command, startup_args).await?;
+        WebSocketMessage::CreateSession {
+            name,
+            start_directory,
+            startup_command,
+            startup_args,
+        } => {
+            session_cmds::handle_create_session(
+                &state.message_tx,
+                name,
+                start_directory,
+                startup_command,
+                startup_args,
+            )
+            .await?;
         }
 
         WebSocketMessage::KillSession { session_name } => {
-            session_cmds::handle_kill_session(&state.message_tx, Arc::clone(&app_state), session_name).await?;
+            session_cmds::handle_kill_session(
+                &state.message_tx,
+                Arc::clone(&app_state),
+                session_name,
+            )
+            .await?;
         }
 
         WebSocketMessage::RenameSession {
@@ -250,8 +277,7 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             session_name,
             window_index,
         } => {
-            session_cmds::handle_kill_window(&state.message_tx, session_name, window_index)
-                .await?;
+            session_cmds::handle_kill_window(&state.message_tx, session_name, window_index).await?;
         }
 
         WebSocketMessage::RenameWindow {
@@ -259,8 +285,13 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
             window_index,
             new_name,
         } => {
-            session_cmds::handle_rename_window(&state.message_tx, session_name, window_index, new_name)
-                .await?;
+            session_cmds::handle_rename_window(
+                &state.message_tx,
+                session_name,
+                window_index,
+                new_name,
+            )
+            .await?;
         }
 
         // System stats
@@ -373,17 +404,62 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::GetFavorites => {
             favorite_cmds::handle_get_favorites(&state.message_tx, app_state).await?;
         }
-        WebSocketMessage::AddFavorite { name, path, sort_order, startup_command, startup_args, tag_ids } => {
-            favorite_cmds::handle_add_favorite(&state.message_tx, app_state, name, path, sort_order, startup_command, startup_args, tag_ids).await?;
+        WebSocketMessage::AddFavorite {
+            name,
+            path,
+            sort_order,
+            startup_command,
+            startup_args,
+            tag_ids,
+        } => {
+            favorite_cmds::handle_add_favorite(
+                &state.message_tx,
+                app_state,
+                name,
+                path,
+                sort_order,
+                startup_command,
+                startup_args,
+                tag_ids,
+            )
+            .await?;
         }
-        WebSocketMessage::UpdateFavorite { id, name, path, sort_order, startup_command, startup_args, tag_ids } => {
-            favorite_cmds::handle_update_favorite(&state.message_tx, app_state, id, name, path, sort_order, startup_command, startup_args, tag_ids).await?;
+        WebSocketMessage::UpdateFavorite {
+            id,
+            name,
+            path,
+            sort_order,
+            startup_command,
+            startup_args,
+            tag_ids,
+        } => {
+            favorite_cmds::handle_update_favorite(
+                &state.message_tx,
+                app_state,
+                id,
+                name,
+                path,
+                sort_order,
+                startup_command,
+                startup_args,
+                tag_ids,
+            )
+            .await?;
         }
         WebSocketMessage::DeleteFavorite { id } => {
             favorite_cmds::handle_delete_favorite(&state.message_tx, app_state, id).await?;
         }
-        WebSocketMessage::SetFavoriteTags { favorite_id, tag_ids } => {
-            favorite_cmds::handle_set_favorite_tags(&state.message_tx, app_state, favorite_id, tag_ids).await?;
+        WebSocketMessage::SetFavoriteTags {
+            favorite_id,
+            tag_ids,
+        } => {
+            favorite_cmds::handle_set_favorite_tags(
+                &state.message_tx,
+                app_state,
+                favorite_id,
+                tag_ids,
+            )
+            .await?;
         }
 
         // Tags
@@ -399,11 +475,29 @@ async fn handle_message(msg: WebSocketMessage, state: &mut WsState, app_state: A
         WebSocketMessage::GetTagAssignments => {
             tag_cmds::handle_get_tag_assignments(&state.message_tx, app_state).await?;
         }
-        WebSocketMessage::AssignTagToSession { session_name, tag_id } => {
-            tag_cmds::handle_assign_tag_to_session(&state.message_tx, app_state, session_name, tag_id).await?;
+        WebSocketMessage::AssignTagToSession {
+            session_name,
+            tag_id,
+        } => {
+            tag_cmds::handle_assign_tag_to_session(
+                &state.message_tx,
+                app_state,
+                session_name,
+                tag_id,
+            )
+            .await?;
         }
-        WebSocketMessage::RemoveTagFromSession { session_name, tag_id } => {
-            tag_cmds::handle_remove_tag_from_session(&state.message_tx, app_state, session_name, tag_id).await?;
+        WebSocketMessage::RemoveTagFromSession {
+            session_name,
+            tag_id,
+        } => {
+            tag_cmds::handle_remove_tag_from_session(
+                &state.message_tx,
+                app_state,
+                session_name,
+                tag_id,
+            )
+            .await?;
         }
     }
 

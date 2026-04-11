@@ -2,13 +2,82 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use super::types::{send_message, merge_history_messages, WsState};
+use super::types::{merge_history_messages, send_message, WsState};
 use crate::{types::*, AppState};
+
+const BACKEND_CODEX: &str = "codex";
+
+fn parse_direct_session_id(session_id: &str) -> (String, String) {
+    match session_id.split_once(':') {
+        Some((provider, raw_id)) if !provider.is_empty() && !raw_id.is_empty() => {
+            (provider.to_string(), raw_id.to_string())
+        }
+        _ => ("opencode".to_string(), session_id.to_string()),
+    }
+}
+
+fn session_key_for_external_id(external_id: &str) -> String {
+    format!("acp_{external_id}")
+}
+
+async fn load_codex_history(
+    app_state: Arc<AppState>,
+    external_session_id: String,
+    session_key: String,
+    cleared_at: Option<i64>,
+) -> Result<Vec<crate::chat_log::ChatMessage>, String> {
+    super::acp_cmds::ensure_codex_client(&app_state)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let history = {
+        let codex_guard = app_state.codex_app_client.read().await;
+        match codex_guard.as_ref() {
+            Some(client) => client.read_thread_messages(&external_session_id).await?,
+            None => return Err("Codex client not initialized".to_string()),
+        }
+    };
+
+    let filtered_history = if let Some(ts) = cleared_at {
+        history
+            .into_iter()
+            .filter(|msg| {
+                msg.timestamp
+                    .map(|timestamp| timestamp.timestamp_millis() > ts)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        history
+    };
+
+    let overlay = app_state
+        .chat_event_store
+        .get_acp_overlay(&session_key, cleared_at)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|event| (event.timestamp_millis, event.message))
+        .collect::<Vec<_>>();
+
+    let mut combined = filtered_history
+        .into_iter()
+        .map(|message| {
+            let timestamp_millis = message
+                .timestamp
+                .map(|timestamp| timestamp.timestamp_millis())
+                .unwrap_or(0);
+            (timestamp_millis, message)
+        })
+        .chain(overlay)
+        .collect::<Vec<_>>();
+    combined.sort_by_key(|(timestamp, _)| *timestamp);
+    Ok(combined.into_iter().map(|(_, message)| message).collect())
+}
 
 pub(crate) async fn handle(
     msg: WebSocketMessage,
     state: &mut WsState,
-    _app_state: Arc<AppState>,
+    app_state: Arc<AppState>,
 ) -> anyhow::Result<()> {
     match msg {
         WebSocketMessage::WatchChatLog {
@@ -70,26 +139,36 @@ pub(crate) async fn handle(
                             let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
 
                             // Build kiro parser state from the tool variant
-                            let mut kiro_state = if let crate::chat_log::AiTool::Kiro { cwd, pid, session_id } = &tool {
-                                crate::chat_log::kiro_parser::KiroState::new(*pid, session_id.clone(), cwd.clone())
+                            let mut kiro_state = if let crate::chat_log::AiTool::Kiro {
+                                cwd,
+                                pid,
+                                session_id,
+                            } = &tool
+                            {
+                                crate::chat_log::kiro_parser::KiroState::new(
+                                    *pid,
+                                    session_id.clone(),
+                                    cwd.clone(),
+                                )
                             } else {
                                 // Unreachable due to matches! check above, but compiler needs it
                                 return;
                             };
 
                             // Load persisted kiro messages from previous sessions
-                            let persisted_messages = match chat_event_store
-                                .list_messages(&session_name, window_index)
-                            {
-                                Ok(stored) => stored,
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Failed to load persisted kiro events for {}:{}: {}",
-                                        session_name, window_index, e
-                                    );
-                                    Vec::new()
-                                }
-                            };
+                            let persisted_messages =
+                                match chat_event_store.list_messages(&session_name, window_index) {
+                                    Ok(stored) => stored,
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to load persisted kiro events for {}:{}: {}",
+                                            session_name,
+                                            window_index,
+                                            e
+                                        );
+                                        Vec::new()
+                                    }
+                                };
                             let total_count = persisted_messages.len();
                             tracing::info!("Kiro: loaded {} persisted messages", total_count);
                             let _ = event_tx.send(crate::chat_log::ChatLogEvent::History {
@@ -120,7 +199,10 @@ pub(crate) async fn handle(
                                                 "kiro-pty",
                                                 &message,
                                             ) {
-                                                tracing::warn!("Kiro: failed to persist message: {}", e);
+                                                tracing::warn!(
+                                                    "Kiro: failed to persist message: {}",
+                                                    e
+                                                );
                                             }
                                             ServerMessage::ChatEvent {
                                                 session_name: session_name_owned.clone(),
@@ -129,26 +211,32 @@ pub(crate) async fn handle(
                                                 source: None,
                                             }
                                         }
-                                        crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count, context_window_usage, model_name } => {
-                                            ServerMessage::ChatHistory {
-                                                session_name: session_name_owned.clone(),
-                                                window_index,
-                                                messages,
-                                                tool: Some(tool),
-                                                has_more,
-                                                total_count,
-                                                context_window_usage,
-                                                model_name,
-                                            }
-                                        }
-                                        crate::chat_log::ChatLogEvent::ContextWindowUpdate { usage, model_name } => {
-                                            ServerMessage::ContextWindowUpdate {
-                                                session_name: session_name_owned.clone(),
-                                                window_index,
-                                                context_window_usage: usage,
-                                                model_name,
-                                            }
-                                        }
+                                        crate::chat_log::ChatLogEvent::History {
+                                            messages,
+                                            tool,
+                                            has_more,
+                                            total_count,
+                                            context_window_usage,
+                                            model_name,
+                                        } => ServerMessage::ChatHistory {
+                                            session_name: session_name_owned.clone(),
+                                            window_index,
+                                            messages,
+                                            tool: Some(tool),
+                                            has_more,
+                                            total_count,
+                                            context_window_usage,
+                                            model_name,
+                                        },
+                                        crate::chat_log::ChatLogEvent::ContextWindowUpdate {
+                                            usage,
+                                            model_name,
+                                        } => ServerMessage::ContextWindowUpdate {
+                                            session_name: session_name_owned.clone(),
+                                            window_index,
+                                            context_window_usage: usage,
+                                            model_name,
+                                        },
                                         crate::chat_log::ChatLogEvent::Error { error } => {
                                             tracing::warn!("Kiro chat log error: {}", error);
                                             ServerMessage::ChatLogError { error }
@@ -169,34 +257,71 @@ pub(crate) async fn handle(
 
                                 tracing::info!("Kiro PTY forwarder started");
                                 loop {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(
+                                        POLL_INTERVAL_MS,
+                                    ))
+                                    .await;
 
                                     // Receive all buffered chunks
                                     while let Ok(chunk) = kiro_output_rx.try_recv() {
                                         let preview = chunk.chars().take(150).collect::<String>();
-                                        tracing::info!("Kiro PTY chunk received ({} chars): {:?}", chunk.len(), preview);
-                                        let messages = crate::chat_log::kiro_parser::parse_pty_chunk(&chunk, &mut kiro_state);
-                                        tracing::info!("Kiro parse_pty_chunk returned {} messages", messages.len());
+                                        tracing::info!(
+                                            "Kiro PTY chunk received ({} chars): {:?}",
+                                            chunk.len(),
+                                            preview
+                                        );
+                                        let messages =
+                                            crate::chat_log::kiro_parser::parse_pty_chunk(
+                                                &chunk,
+                                                &mut kiro_state,
+                                            );
+                                        tracing::info!(
+                                            "Kiro parse_pty_chunk returned {} messages",
+                                            messages.len()
+                                        );
                                         for msg in messages {
-                                            tracing::info!("Kiro: emitting message role={}", msg.role);
-                                            let event = crate::chat_log::ChatLogEvent::NewMessage { message: msg };
+                                            tracing::info!(
+                                                "Kiro: emitting message role={}",
+                                                msg.role
+                                            );
+                                            let event = crate::chat_log::ChatLogEvent::NewMessage {
+                                                message: msg,
+                                            };
                                             if event_tx_for_parser.send(event).is_err() {
-                                                tracing::warn!("Kiro PTY forwarder: event_tx closed, stopping");
+                                                tracing::warn!(
+                                                    "Kiro PTY forwarder: event_tx closed, stopping"
+                                                );
                                                 return;
                                             }
                                         }
                                     }
 
                                     // Check idle timeout for response completeness
-                                    if crate::chat_log::kiro_parser::is_response_complete(&kiro_state) {
+                                    if crate::chat_log::kiro_parser::is_response_complete(
+                                        &kiro_state,
+                                    ) {
                                         // Flush any remaining buffered text as a response
-                                        let remaining = std::mem::take(&mut kiro_state.response_buffer);
-                                        tracing::info!("Kiro idle timeout hit, flushing buffer ({} chars)", remaining.len());
+                                        let remaining =
+                                            std::mem::take(&mut kiro_state.response_buffer);
+                                        tracing::info!(
+                                            "Kiro idle timeout hit, flushing buffer ({} chars)",
+                                            remaining.len()
+                                        );
                                         if !remaining.trim().is_empty() {
-                                            let responses = crate::chat_log::kiro_parser::emit_response(&remaining, &mut kiro_state);
-                                            tracing::info!("Kiro emit_response returned {} messages", responses.len());
+                                            let responses =
+                                                crate::chat_log::kiro_parser::emit_response(
+                                                    &remaining,
+                                                    &mut kiro_state,
+                                                );
+                                            tracing::info!(
+                                                "Kiro emit_response returned {} messages",
+                                                responses.len()
+                                            );
                                             for response in responses {
-                                                let event = crate::chat_log::ChatLogEvent::NewMessage { message: response };
+                                                let event =
+                                                    crate::chat_log::ChatLogEvent::NewMessage {
+                                                        message: response,
+                                                    };
                                                 if event_tx_for_parser.send(event).is_err() {
                                                     return;
                                                 }
@@ -207,7 +332,10 @@ pub(crate) async fn handle(
                             });
 
                             // The task runs forever until the client disconnects
-                            tracing::info!("Kiro PTY capture started for session '{}'", session_name);
+                            tracing::info!(
+                                "Kiro PTY capture started for session '{}'",
+                                session_name
+                            );
                             return;
                         }
 
@@ -217,29 +345,37 @@ pub(crate) async fn handle(
                         // Spawn the file watcher -- the returned
                         // RecommendedWatcher must be kept alive for as long
                         // as we want notifications.
-                        let _watcher =
-                            match crate::chat_log::watcher::watch_log_file(&path, tool, event_tx, cleared_at, limit)
-                                .await
-                            {
-                                Ok(w) => w,
-                                Err(e) => {
-                                    error!("Failed to start chat log watcher: {}", e);
-                                    let _ = send_message(
-                                        &message_tx,
-                                        ServerMessage::ChatLogError {
-                                            error: e.to_string(),
-                                        },
-                                    )
-                                    .await;
-                                    return;
-                                }
-                            };
+                        let _watcher = match crate::chat_log::watcher::watch_log_file(
+                            &path, tool, event_tx, cleared_at, limit,
+                        )
+                        .await
+                        {
+                            Ok(w) => w,
+                            Err(e) => {
+                                error!("Failed to start chat log watcher: {}", e);
+                                let _ = send_message(
+                                    &message_tx,
+                                    ServerMessage::ChatLogError {
+                                        error: e.to_string(),
+                                    },
+                                )
+                                .await;
+                                return;
+                            }
+                        };
 
                         // Forward events to WebSocket
                         let session_name_owned = session_name.clone();
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
-                                crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count, context_window_usage, model_name } => {
+                                crate::chat_log::ChatLogEvent::History {
+                                    messages,
+                                    tool,
+                                    has_more,
+                                    total_count,
+                                    context_window_usage,
+                                    model_name,
+                                } => {
                                     let persisted_messages = match chat_event_store
                                         .list_messages(&session_name_owned, window_index)
                                     {
@@ -284,14 +420,15 @@ pub(crate) async fn handle(
                                         source: None,
                                     }
                                 }
-                                crate::chat_log::ChatLogEvent::ContextWindowUpdate { usage, model_name } => {
-                                    ServerMessage::ContextWindowUpdate {
-                                        session_name: session_name_owned.clone(),
-                                        window_index,
-                                        context_window_usage: usage,
-                                        model_name,
-                                    }
-                                }
+                                crate::chat_log::ChatLogEvent::ContextWindowUpdate {
+                                    usage,
+                                    model_name,
+                                } => ServerMessage::ContextWindowUpdate {
+                                    session_name: session_name_owned.clone(),
+                                    window_index,
+                                    context_window_usage: usage,
+                                    model_name,
+                                },
                                 crate::chat_log::ChatLogEvent::Error { error } => {
                                     tracing::warn!("Chat log error: {}", error);
                                     ServerMessage::ChatLogError { error }
@@ -319,9 +456,14 @@ pub(crate) async fn handle(
                 *handle_guard = Some(handle);
             }
         }
-        WebSocketMessage::WatchAcpChatLog { session_id, window_index, limit } => {
+        WebSocketMessage::WatchAcpChatLog {
+            session_id,
+            window_index,
+            limit,
+        } => {
             let window_index = window_index.unwrap_or(0);
-            let session_key = format!("acp_{}", session_id);
+            let session_key = session_key_for_external_id(&session_id);
+            let (provider, raw_session_id) = parse_direct_session_id(&session_id);
 
             tracing::debug!("Starting ACP chat log watch for session: {}", session_id);
 
@@ -342,61 +484,127 @@ pub(crate) async fn handle(
             let chat_event_store = state.chat_event_store.clone();
             let chat_clear_store = state.chat_clear_store.clone();
             let chat_log_handle = state.chat_log_handle.clone();
+            let app_state_clone = app_state.clone();
 
             let handle = tokio::spawn(async move {
-                // 1. Find OpenCode DB
+                let cleared_at = chat_clear_store
+                    .get_cleared_at(&session_key, window_index)
+                    .await;
+
+                if provider == BACKEND_CODEX {
+                    match load_codex_history(
+                        app_state_clone.clone(),
+                        session_id.clone(),
+                        session_key.clone(),
+                        cleared_at,
+                    )
+                    .await
+                    {
+                        Ok(all_messages) => {
+                            let limit_n = limit.unwrap_or(30);
+                            let total_count = all_messages.len();
+                            let has_more = total_count > limit_n;
+                            let messages = if has_more {
+                                all_messages[total_count - limit_n..].to_vec()
+                            } else {
+                                all_messages
+                            };
+
+                            let _ = send_message(
+                                &message_tx,
+                                ServerMessage::ChatHistory {
+                                    session_name: session_key.clone(),
+                                    window_index,
+                                    messages,
+                                    tool: Some(crate::chat_log::AiTool::Codex),
+                                    has_more,
+                                    total_count,
+                                    context_window_usage: None,
+                                    model_name: None,
+                                },
+                            )
+                            .await;
+                        }
+                        Err(e) => {
+                            let _ = send_message(
+                                &message_tx,
+                                ServerMessage::ChatLogError {
+                                    error: format!("Failed to read Codex history: {}", e),
+                                },
+                            )
+                            .await;
+                        }
+                    }
+                    return;
+                }
+
                 let db_path = match crate::chat_log::watcher::find_opencode_db() {
                     Ok(p) => p,
                     Err(e) => {
                         let _ = send_message(
                             &message_tx,
-                            ServerMessage::ChatLogError { error: format!("OpenCode DB not found: {}", e) },
-                        ).await;
+                            ServerMessage::ChatLogError {
+                                error: format!("OpenCode DB not found: {}", e),
+                            },
+                        )
+                        .await;
                         return;
                     }
                 };
 
-                // 2. Get cleared_at
-                let cleared_at = chat_clear_store.get_cleared_at(&session_key, window_index).await;
-
-                // 3. Read full history from OpenCode DB
                 let (opencode_messages, max_time_updated) = {
                     let db_path2 = db_path.clone();
-                    let session_id2 = session_id.clone();
+                    let session_id2 = raw_session_id.clone();
                     let t = std::time::Instant::now();
                     let result = tokio::task::spawn_blocking(move || {
-                        crate::chat_log::opencode_parser::fetch_all_messages(&db_path2, &session_id2, cleared_at)
-                    }).await.unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {}", e)))
-                        .unwrap_or_else(|e| { tracing::warn!("Failed to read OpenCode history: {}", e); (vec![], 0) });
-                    info!("[TIMING] fetch_all_messages({} msgs) took {:?}", result.0.len(), t.elapsed());
+                        crate::chat_log::opencode_parser::fetch_all_messages(
+                            &db_path2,
+                            &session_id2,
+                            cleared_at,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {}", e)))
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Failed to read OpenCode history: {}", e);
+                        (vec![], 0)
+                    });
+                    info!(
+                        "[TIMING] fetch_all_messages({} msgs) took {:?}",
+                        result.0.len(),
+                        t.elapsed()
+                    );
                     result
                 };
 
-                // 4. Read webhook/file overlay from AgentShell DB
                 let t = std::time::Instant::now();
                 let overlay = chat_event_store
                     .get_acp_overlay(&session_key, cleared_at)
-                    .unwrap_or_else(|e| { tracing::warn!("Failed to read ACP overlay: {}", e); vec![] })
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Failed to read ACP overlay: {}", e);
+                        vec![]
+                    })
                     .into_iter()
                     .map(|e| (e.timestamp_millis, e.message))
                     .collect::<Vec<_>>();
-                info!("[TIMING] get_acp_overlay({} msgs) took {:?}", overlay.len(), t.elapsed());
+                info!(
+                    "[TIMING] get_acp_overlay({} msgs) took {:?}",
+                    overlay.len(),
+                    t.elapsed()
+                );
 
-                // 5. Merge: interleave OpenCode messages and overlay by timestamp
                 let mut combined: Vec<(i64, crate::chat_log::ChatMessage)> = opencode_messages
                     .into_iter()
                     .map(|m| {
-                        let millis = m.timestamp
-                            .map(|t| t.timestamp_millis())
-                            .unwrap_or(0);
+                        let millis = m.timestamp.map(|t| t.timestamp_millis()).unwrap_or(0);
                         (millis, m)
                     })
                     .chain(overlay)
                     .collect();
                 combined.sort_by_key(|(t, _)| *t);
-                let all_messages: Vec<crate::chat_log::ChatMessage> = combined.into_iter().map(|(_, m)| m).collect();
+                let all_messages: Vec<crate::chat_log::ChatMessage> =
+                    combined.into_iter().map(|(_, m)| m).collect();
 
-                // 6. Apply pagination limit
                 let limit_n = limit.unwrap_or(30);
                 let total_count = all_messages.len();
                 let has_more = total_count > limit_n;
@@ -406,7 +614,6 @@ pub(crate) async fn handle(
                     all_messages
                 };
 
-                // 7. Send history
                 let _ = send_message(
                     &message_tx,
                     ServerMessage::ChatHistory {
@@ -422,11 +629,12 @@ pub(crate) async fn handle(
                         context_window_usage: None,
                         model_name: None,
                     },
-                ).await;
+                )
+                .await;
 
                 // 7. Poll for new messages from OpenCode DB (no persistence)
                 let mut opencode_state = crate::chat_log::opencode_parser::OpencodeState {
-                    session_id: session_id.clone(),
+                    session_id: raw_session_id.clone(),
                     last_time_updated: max_time_updated,
                     cleared_at,
                     pid: 0,
@@ -439,11 +647,18 @@ pub(crate) async fn handle(
                 loop {
                     interval.tick().await;
                     let t = std::time::Instant::now();
-                    match crate::chat_log::opencode_parser::fetch_new_messages(&db_path, &mut opencode_state) {
+                    match crate::chat_log::opencode_parser::fetch_new_messages(
+                        &db_path,
+                        &mut opencode_state,
+                    ) {
                         Ok(new_messages) => {
                             let elapsed = t.elapsed();
                             if elapsed.as_millis() > 100 || !new_messages.is_empty() {
-                                info!("[TIMING] poll fetch_new_messages({} new) took {:?}", new_messages.len(), elapsed);
+                                info!(
+                                    "[TIMING] poll fetch_new_messages({} new) took {:?}",
+                                    new_messages.len(),
+                                    elapsed
+                                );
                             }
                             for msg in new_messages {
                                 if send_message(
@@ -454,8 +669,13 @@ pub(crate) async fn handle(
                                         message: msg,
                                         source: Some("acp".to_string()),
                                     },
-                                ).await.is_err() {
-                                    tracing::debug!("ACP poll: client disconnected, stopping watcher");
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    tracing::debug!(
+                                        "ACP poll: client disconnected, stopping watcher"
+                                    );
                                     return;
                                 }
                             }
@@ -478,74 +698,139 @@ pub(crate) async fn handle(
 
             if session_name.starts_with("acp_") {
                 // ACP session: re-fetch full history and slice the requested page
-                let session_id = session_name[4..].to_string();
+                let external_session_id = session_name[4..].to_string();
+                let (provider, raw_session_id) = parse_direct_session_id(&external_session_id);
                 let session_key = session_name.clone();
+                let app_state_clone = app_state.clone();
 
                 tokio::spawn(async move {
-                    let db_path = match crate::chat_log::watcher::find_opencode_db() {
-                        Ok(p) => p,
-                        Err(e) => {
-                            let _ = send_message(&message_tx, ServerMessage::ChatLogError {
-                                error: format!("OpenCode DB not found: {}", e),
-                            }).await;
-                            return;
+                    let cleared_at = chat_clear_store
+                        .get_cleared_at(&session_key, window_index)
+                        .await;
+
+                    let messages = if provider == BACKEND_CODEX {
+                        match load_codex_history(
+                            app_state_clone.clone(),
+                            external_session_id.clone(),
+                            session_key.clone(),
+                            cleared_at,
+                        )
+                        .await
+                        {
+                            Ok(messages) => messages,
+                            Err(e) => {
+                                let _ = send_message(
+                                    &message_tx,
+                                    ServerMessage::ChatLogError {
+                                        error: format!("Failed to read Codex history: {}", e),
+                                    },
+                                )
+                                .await;
+                                return;
+                            }
                         }
+                    } else {
+                        let db_path = match crate::chat_log::watcher::find_opencode_db() {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = send_message(
+                                    &message_tx,
+                                    ServerMessage::ChatLogError {
+                                        error: format!("OpenCode DB not found: {}", e),
+                                    },
+                                )
+                                .await;
+                                return;
+                            }
+                        };
+
+                        let (opencode_messages, _) = tokio::task::spawn_blocking(move || {
+                            crate::chat_log::opencode_parser::fetch_all_messages(
+                                &db_path,
+                                &raw_session_id,
+                                cleared_at,
+                            )
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {}", e)))
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("Failed to read OpenCode history: {}", e);
+                            (vec![], 0)
+                        });
+                        opencode_messages
                     };
 
-                    let cleared_at = chat_clear_store.get_cleared_at(&session_key, window_index).await;
-
-                    let (opencode_messages, _) = tokio::task::spawn_blocking(move || {
-                        crate::chat_log::opencode_parser::fetch_all_messages(&db_path, &session_id, cleared_at)
-                    }).await.unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking failed: {}", e)))
-                        .unwrap_or_else(|e| { tracing::warn!("Failed to read OpenCode history: {}", e); (vec![], 0) });
-
-                    let total_count = opencode_messages.len();
+                    let total_count = messages.len();
                     let start = total_count.saturating_sub(offset + limit);
                     let end = total_count.saturating_sub(offset);
-                    let chunk: Vec<_> = opencode_messages[start..end].to_vec();
+                    let chunk: Vec<_> = messages[start..end].to_vec();
                     let has_more = start > 0;
 
-                    let _ = send_message(&message_tx, ServerMessage::ChatHistoryChunk {
-                        session_name: session_key,
-                        window_index,
-                        messages: chunk,
-                        has_more,
-                    }).await;
+                    let _ = send_message(
+                        &message_tx,
+                        ServerMessage::ChatHistoryChunk {
+                            session_name: session_key,
+                            window_index,
+                            messages: chunk,
+                            has_more,
+                        },
+                    )
+                    .await;
                 });
             } else {
                 // Claude Code session: re-parse log file and slice the requested page
                 let session_name_owned = session_name.clone();
                 tokio::spawn(async move {
-                    let cleared_at = chat_clear_store.get_cleared_at(&session_name_owned, window_index).await;
+                    let cleared_at = chat_clear_store
+                        .get_cleared_at(&session_name_owned, window_index)
+                        .await;
 
-                    let (path, tool) = match crate::chat_log::watcher::detect_log_file(&session_name_owned, window_index).await {
+                    let (path, tool) = match crate::chat_log::watcher::detect_log_file(
+                        &session_name_owned,
+                        window_index,
+                    )
+                    .await
+                    {
                         Ok(r) => r,
                         Err(e) => {
-                            let _ = send_message(&message_tx, ServerMessage::ChatLogError {
-                                error: format!("Failed to detect log file: {}", e),
-                            }).await;
+                            let _ = send_message(
+                                &message_tx,
+                                ServerMessage::ChatLogError {
+                                    error: format!("Failed to detect log file: {}", e),
+                                },
+                            )
+                            .await;
                             return;
                         }
                     };
 
                     // Spawn a one-shot channel to collect the initial History event.
                     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-                    if crate::chat_log::watcher::watch_log_file(&path, tool, tx, cleared_at, None).await.is_err() {
+                    if crate::chat_log::watcher::watch_log_file(&path, tool, tx, cleared_at, None)
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
-                    if let Some(crate::chat_log::ChatLogEvent::History { messages, .. }) = rx.recv().await {
+                    if let Some(crate::chat_log::ChatLogEvent::History { messages, .. }) =
+                        rx.recv().await
+                    {
                         let total_count = messages.len();
                         let start = total_count.saturating_sub(offset + limit);
                         let end = total_count.saturating_sub(offset);
                         let chunk: Vec<_> = messages[start..end].to_vec();
                         let has_more = start > 0;
 
-                        let _ = send_message(&message_tx, ServerMessage::ChatHistoryChunk {
-                            session_name: session_name_owned,
-                            window_index,
-                            messages: chunk,
-                            has_more,
-                        }).await;
+                        let _ = send_message(
+                            &message_tx,
+                            ServerMessage::ChatHistoryChunk {
+                                session_name: session_name_owned,
+                                window_index,
+                                messages: chunk,
+                                has_more,
+                            },
+                        )
+                        .await;
                     }
                 });
             }
@@ -623,12 +908,14 @@ pub(crate) async fn handle(
             let window_index_owned = window_index;
 
             let handle = tokio::spawn(async move {
-                match crate::chat_log::watcher::detect_log_file(&session_name_owned, window_index_owned)
-                    .await
+                match crate::chat_log::watcher::detect_log_file(
+                    &session_name_owned,
+                    window_index_owned,
+                )
+                .await
                 {
                     Ok((path, tool)) => {
-                        let (event_tx, mut event_rx) =
-                            tokio::sync::mpsc::unbounded_channel();
+                        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
 
                         // Get the clear timestamp
                         let cleared_at = chat_clear_store
@@ -661,7 +948,14 @@ pub(crate) async fn handle(
                         // Forward events to WebSocket
                         while let Some(event) = event_rx.recv().await {
                             let msg = match event {
-                                crate::chat_log::ChatLogEvent::History { messages, tool, has_more, total_count, context_window_usage, model_name } => {
+                                crate::chat_log::ChatLogEvent::History {
+                                    messages,
+                                    tool,
+                                    has_more,
+                                    total_count,
+                                    context_window_usage,
+                                    model_name,
+                                } => {
                                     let persisted_messages = match chat_event_store
                                         .list_messages(&session_name_owned, window_index_owned)
                                     {
@@ -676,10 +970,7 @@ pub(crate) async fn handle(
                                     };
 
                                     let merged_messages =
-                                        merge_history_messages(
-                                            messages,
-                                            persisted_messages,
-                                        );
+                                        merge_history_messages(messages, persisted_messages);
 
                                     ServerMessage::ChatHistory {
                                         session_name: session_name_owned.clone(),
@@ -700,14 +991,15 @@ pub(crate) async fn handle(
                                         source: None,
                                     }
                                 }
-                                crate::chat_log::ChatLogEvent::ContextWindowUpdate { usage, model_name } => {
-                                    ServerMessage::ContextWindowUpdate {
-                                        session_name: session_name_owned.clone(),
-                                        window_index: window_index_owned,
-                                        context_window_usage: usage,
-                                        model_name,
-                                    }
-                                }
+                                crate::chat_log::ChatLogEvent::ContextWindowUpdate {
+                                    usage,
+                                    model_name,
+                                } => ServerMessage::ContextWindowUpdate {
+                                    session_name: session_name_owned.clone(),
+                                    window_index: window_index_owned,
+                                    context_window_usage: usage,
+                                    model_name,
+                                },
                                 crate::chat_log::ChatLogEvent::Error { error } => {
                                     tracing::warn!("Chat log error: {}", error);
                                     ServerMessage::ChatLogError { error }
@@ -751,14 +1043,12 @@ pub(crate) async fn handle(
 
             // Save file to session directory if we have a valid path
             let file_path_str = if let Some(ref session_path) = session_path {
-                match state
-                    .chat_file_storage
-                    .save_file_to_directory(
-                        &file.data,
-                        &file.filename,
-                        &file.mime_type,
-                        session_path,
-                    ) {
+                match state.chat_file_storage.save_file_to_directory(
+                    &file.data,
+                    &file.filename,
+                    &file.mime_type,
+                    session_path,
+                ) {
                     Ok(path) => {
                         info!("File saved to session directory: {:?}", path);
                         Some(path.to_string_lossy().to_string())
@@ -774,16 +1064,17 @@ pub(crate) async fn handle(
             };
 
             // Save file to chat_files for display purposes (UUID-based)
-            let file_id = match state
-                .chat_file_storage
-                .save_file(&file.data, &file.filename, &file.mime_type)
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    error!("Failed to save file for display: {}", e);
-                    return Ok(());
-                }
-            };
+            let file_id =
+                match state
+                    .chat_file_storage
+                    .save_file(&file.data, &file.filename, &file.mime_type)
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        error!("Failed to save file for display: {}", e);
+                        return Ok(());
+                    }
+                };
 
             // Build combined text for chat log (prompt + file path, multi-line OK)
             let combined_text = match (&prompt, &file_path_str) {
@@ -885,7 +1176,10 @@ pub(crate) async fn handle(
                 // If session:window failed (window doesn't exist), retry with session only.
                 let (send_text, effective_target) = match &send_text {
                     Ok(output) if !output.status.success() => {
-                        warn!("SendFileToChat: target {} failed, retrying with session only ({})", target, session_name);
+                        warn!(
+                            "SendFileToChat: target {} failed, retrying with session only ({})",
+                            target, session_name
+                        );
                         let retry = tokio::process::Command::new("tmux")
                             .args(&["send-keys", "-t", &session_name, "-l", &tmux_text])
                             .output()
@@ -904,7 +1198,10 @@ pub(crate) async fn handle(
 
                 match (send_text, send_enter) {
                     (Ok(t), Ok(e)) if t.status.success() && e.status.success() => {
-                        info!("SendFileToChat: OK sent to tmux target {}: {:?}", effective_target, tmux_text);
+                        info!(
+                            "SendFileToChat: OK sent to tmux target {}: {:?}",
+                            effective_target, tmux_text
+                        );
                     }
                     (Ok(t), Ok(e)) => {
                         error!("SendFileToChat: tmux send-keys FAILED for {} — text_exit={}, enter_exit={}, text_stderr={:?}, enter_stderr={:?}",
@@ -913,7 +1210,10 @@ pub(crate) async fn handle(
                             String::from_utf8_lossy(&e.stderr));
                     }
                     (Err(e), _) | (_, Err(e)) => {
-                        error!("SendFileToChat: failed to spawn tmux for {}: {}", effective_target, e);
+                        error!(
+                            "SendFileToChat: failed to spawn tmux for {}: {}",
+                            effective_target, e
+                        );
                     }
                 }
             }
@@ -990,7 +1290,10 @@ pub(crate) async fn handle(
             // so tmux targets the active window.
             let (send_text, effective_target) = match &send_text {
                 Ok(output) if !output.status.success() => {
-                    warn!("SendChatMessage: target {} failed, retrying with session only ({})", target, session_name);
+                    warn!(
+                        "SendChatMessage: target {} failed, retrying with session only ({})",
+                        target, session_name
+                    );
                     let retry = tokio::process::Command::new("tmux")
                         .args(&["send-keys", "-t", &session_name, "-l", text])
                         .output()
@@ -1008,13 +1311,22 @@ pub(crate) async fn handle(
 
             match result {
                 Ok(output) if output.status.success() => {
-                    info!("Sent chat message to tmux: {:?} (target: {})", text, effective_target);
+                    info!(
+                        "Sent chat message to tmux: {:?} (target: {})",
+                        text, effective_target
+                    );
                 }
                 Ok(output) => {
-                    error!("tmux send-keys failed for {}: {}", effective_target, output.status);
+                    error!(
+                        "tmux send-keys failed for {}: {}",
+                        effective_target, output.status
+                    );
                 }
                 Err(e) => {
-                    error!("Failed to send chat message to tmux session {}: {}", effective_target, e);
+                    error!(
+                        "Failed to send chat message to tmux session {}: {}",
+                        effective_target, e
+                    );
                 }
             }
         }
@@ -1026,22 +1338,22 @@ pub(crate) async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use tokio::sync::{mpsc, Mutex};
-    use tempfile::TempDir;
     use crate::websocket::{
         client_manager::ClientManager,
         types::{BroadcastMessage, WsState},
     };
     use crate::{
-        chat_clear_store::ChatClearStore,
-        chat_event_store::ChatEventStore,
-        chat_file_storage::ChatFileStorage,
-        types::WebSocketMessage,
+        chat_clear_store::ChatClearStore, chat_event_store::ChatEventStore,
+        chat_file_storage::ChatFileStorage, types::WebSocketMessage,
     };
     use base64::Engine;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::{mpsc, Mutex};
 
-    fn make_ws_state(dir: &std::path::Path) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>) {
+    fn make_ws_state(
+        dir: &std::path::Path,
+    ) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>) {
         let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
         let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
@@ -1061,6 +1373,7 @@ mod tests {
             client_manager,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
             kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
+            selected_backend: "acp".to_string(),
         };
         (state, rx)
     }
@@ -1069,7 +1382,12 @@ mod tests {
     async fn test_unwatch_chat_log() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::UnwatchChatLog, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::UnwatchChatLog,
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1077,10 +1395,15 @@ mod tests {
     async fn test_clear_chat_log() {
         let dir = TempDir::new().unwrap();
         let (mut state, mut rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::ClearChatLog {
-            session_name: "test-session".to_string(),
-            window_index: 0,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::ClearChatLog {
+                session_name: "test-session".to_string(),
+                window_index: 0,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         // Should have received ChatLogCleared response
         let msg = rx.try_recv().unwrap();
@@ -1096,12 +1419,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         // acp_ prefix sessions try to read opencode DB — it won't exist, error handled gracefully
-        let result = handle(WebSocketMessage::LoadMoreChatHistory {
-            session_name: "acp_test-session-id".to_string(),
-            window_index: 0,
-            offset: 0,
-            limit: 20,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::LoadMoreChatHistory {
+                session_name: "acp_test-session-id".to_string(),
+                window_index: 0,
+                offset: 0,
+                limit: 20,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1109,12 +1437,17 @@ mod tests {
     async fn test_load_more_chat_history_regular_session() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::LoadMoreChatHistory {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            offset: 0,
-            limit: 20,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::LoadMoreChatHistory {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                offset: 0,
+                limit: 20,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1126,16 +1459,21 @@ mod tests {
         let png_data = base64::engine::general_purpose::STANDARD.encode(
             b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
         );
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data: png_data,
-                filename: "test.png".to_string(),
-                mime_type: "image/png".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data: png_data,
+                    filename: "test.png".to_string(),
+                    mime_type: "image/png".to_string(),
+                },
+                prompt: Some("Check this image".to_string()),
             },
-            prompt: Some("Check this image".to_string()),
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         // Should broadcast the file message
         let _ = rx.try_recv();
@@ -1146,16 +1484,21 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         let data = base64::engine::general_purpose::STANDARD.encode(b"document content");
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data,
-                filename: "doc.pdf".to_string(),
-                mime_type: "application/pdf".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data,
+                    filename: "doc.pdf".to_string(),
+                    mime_type: "application/pdf".to_string(),
+                },
+                prompt: None,
             },
-            prompt: None,
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1164,16 +1507,21 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         let data = base64::engine::general_purpose::STANDARD.encode(b"audio bytes");
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data,
-                filename: "sound.mp3".to_string(),
-                mime_type: "audio/mpeg".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data,
+                    filename: "sound.mp3".to_string(),
+                    mime_type: "audio/mpeg".to_string(),
+                },
+                prompt: None,
             },
-            prompt: None,
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1181,12 +1529,17 @@ mod tests {
     async fn test_send_chat_message_empty_ignored() {
         let dir = TempDir::new().unwrap();
         let (mut state, mut rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::SendChatMessage {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            message: "   ".to_string(),
-            notify: None,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::SendChatMessage {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                message: "   ".to_string(),
+                notify: None,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         // Empty messages are ignored — no response expected
         assert!(rx.try_recv().is_err());
@@ -1196,12 +1549,17 @@ mod tests {
     async fn test_send_chat_message_valid() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::SendChatMessage {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            message: "Hello from test".to_string(),
-            notify: None,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::SendChatMessage {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                message: "Hello from test".to_string(),
+                notify: None,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1209,11 +1567,16 @@ mod tests {
     async fn test_watch_chat_log_nonexistent_session() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::WatchChatLog {
-            session_name: "nonexistent-session-xyz".to_string(),
-            window_index: 0,
-            limit: None,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::WatchChatLog {
+                session_name: "nonexistent-session-xyz".to_string(),
+                window_index: 0,
+                limit: None,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         // Task is spawned asynchronously — give it a moment
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -1223,7 +1586,12 @@ mod tests {
     async fn test_unknown_message_no_op() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::Ping, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::Ping,
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1232,13 +1600,21 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         let app = make_app_state(dir.path());
-        let result = handle(WebSocketMessage::ClearChatLog {
-            session_name: "test-session".to_string(),
-            window_index: 0,
-        }, &mut state, app.clone()).await;
+        let result = handle(
+            WebSocketMessage::ClearChatLog {
+                session_name: "test-session".to_string(),
+                window_index: 0,
+            },
+            &mut state,
+            app.clone(),
+        )
+        .await;
         assert!(result.is_ok());
         // The handler uses state.chat_clear_store (not app's), verify on state's store
-        let ts = state.chat_clear_store.get_cleared_at("test-session", 0).await;
+        let ts = state
+            .chat_clear_store
+            .get_cleared_at("test-session", 0)
+            .await;
         assert!(ts.is_some());
     }
 
@@ -1250,16 +1626,31 @@ mod tests {
         let msg = crate::chat_log::ChatMessage {
             role: "user".to_string(),
             timestamp: Some(chrono::Utc::now()),
-            blocks: vec![crate::chat_log::ContentBlock::Text { text: "hello".to_string() }],
+            blocks: vec![crate::chat_log::ContentBlock::Text {
+                text: "hello".to_string(),
+            }],
         };
-        app.chat_event_store.append_message("test-sess", 0, "webhook", &msg).unwrap();
-        assert_eq!(app.chat_event_store.list_messages("test-sess", 0).unwrap().len(), 1);
+        app.chat_event_store
+            .append_message("test-sess", 0, "webhook", &msg)
+            .unwrap();
+        assert_eq!(
+            app.chat_event_store
+                .list_messages("test-sess", 0)
+                .unwrap()
+                .len(),
+            1
+        );
 
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::ClearChatLog {
-            session_name: "test-sess".to_string(),
-            window_index: 0,
-        }, &mut state, app.clone()).await;
+        let result = handle(
+            WebSocketMessage::ClearChatLog {
+                session_name: "test-sess".to_string(),
+                window_index: 0,
+            },
+            &mut state,
+            app.clone(),
+        )
+        .await;
         assert!(result.is_ok());
         // Messages should be cleared
         let msgs = app.chat_event_store.list_messages("test-sess", 0).unwrap();
@@ -1270,10 +1661,15 @@ mod tests {
     async fn test_clear_chat_log_response_content() {
         let dir = TempDir::new().unwrap();
         let (mut state, mut rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::ClearChatLog {
-            session_name: "my-session".to_string(),
-            window_index: 1,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::ClearChatLog {
+                session_name: "my-session".to_string(),
+                window_index: 1,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -1289,12 +1685,17 @@ mod tests {
     async fn test_send_chat_message_with_notify() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::SendChatMessage {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            message: "Test notification message".to_string(),
-            notify: Some(true),
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::SendChatMessage {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                message: "Test notification message".to_string(),
+                notify: Some(true),
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1302,12 +1703,17 @@ mod tests {
     async fn test_send_chat_message_no_notify() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::SendChatMessage {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            message: "No notification".to_string(),
-            notify: Some(false),
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::SendChatMessage {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                message: "No notification".to_string(),
+                notify: Some(false),
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1316,15 +1722,23 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let app = make_app_state(dir.path());
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::SendChatMessage {
-            session_name: "persist-test".to_string(),
-            window_index: 0,
-            message: "Persisted message".to_string(),
-            notify: None,
-        }, &mut state, app.clone()).await;
+        let result = handle(
+            WebSocketMessage::SendChatMessage {
+                session_name: "persist-test".to_string(),
+                window_index: 0,
+                message: "Persisted message".to_string(),
+                notify: None,
+            },
+            &mut state,
+            app.clone(),
+        )
+        .await;
         assert!(result.is_ok());
         // The message uses the state's chat_event_store, not app's
-        let msgs = state.chat_event_store.list_messages("persist-test", 0).unwrap();
+        let msgs = state
+            .chat_event_store
+            .list_messages("persist-test", 0)
+            .unwrap();
         assert!(!msgs.is_empty());
     }
 
@@ -1332,11 +1746,16 @@ mod tests {
     async fn test_watch_acp_chat_log_no_opencode_db() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::WatchAcpChatLog {
-            session_id: "test-acp-session".to_string(),
-            window_index: Some(0),
-            limit: Some(20),
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::WatchAcpChatLog {
+                session_id: "test-acp-session".to_string(),
+                window_index: Some(0),
+                limit: Some(20),
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         // Spawned task will fail to find opencode DB — should handle gracefully
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -1351,18 +1770,27 @@ mod tests {
             let msg = crate::chat_log::ChatMessage {
                 role: "user".to_string(),
                 timestamp: Some(chrono::Utc::now()),
-                blocks: vec![crate::chat_log::ContentBlock::Text { text: format!("Msg {}", i) }],
+                blocks: vec![crate::chat_log::ContentBlock::Text {
+                    text: format!("Msg {}", i),
+                }],
             };
-            app.chat_event_store.append_message("acp_test-hist", 0, "webhook", &msg).unwrap();
+            app.chat_event_store
+                .append_message("acp_test-hist", 0, "webhook", &msg)
+                .unwrap();
         }
 
         let (mut state, mut rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::LoadMoreChatHistory {
-            session_name: "acp_test-hist".to_string(),
-            window_index: 0,
-            offset: 0,
-            limit: 3,
-        }, &mut state, app).await;
+        let result = handle(
+            WebSocketMessage::LoadMoreChatHistory {
+                session_name: "acp_test-hist".to_string(),
+                window_index: 0,
+                offset: 0,
+                limit: 3,
+            },
+            &mut state,
+            app,
+        )
+        .await;
         assert!(result.is_ok());
         // Should receive a response (chat-history-chunk or error)
         let _ = rx.try_recv();
@@ -1375,16 +1803,21 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         // Invalid base64 data - should fail at save_file and return early
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data: "NOT_VALID_BASE64!!!".to_string(),
-                filename: "test.txt".to_string(),
-                mime_type: "text/plain".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data: "NOT_VALID_BASE64!!!".to_string(),
+                    filename: "test.txt".to_string(),
+                    mime_type: "text/plain".to_string(),
+                },
+                prompt: None,
             },
-            prompt: None,
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1394,16 +1827,21 @@ mod tests {
         let (mut state, _rx) = make_ws_state(dir.path());
         // Session doesn't exist - session_path will be None, but save_file for display should still work
         let data = base64::engine::general_purpose::STANDARD.encode(b"test content");
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "nonexistent-session-xyz-123".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data,
-                filename: "test.txt".to_string(),
-                mime_type: "text/plain".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "nonexistent-session-xyz-123".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data,
+                    filename: "test.txt".to_string(),
+                    mime_type: "text/plain".to_string(),
+                },
+                prompt: None,
             },
-            prompt: None,
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1413,16 +1851,21 @@ mod tests {
         let (mut state, _rx) = make_ws_state(dir.path());
         // File with prompt only (no combined text path from file)
         let data = base64::engine::general_purpose::STANDARD.encode(b"content");
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data,
-                filename: "test.txt".to_string(),
-                mime_type: "text/plain".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data,
+                    filename: "test.txt".to_string(),
+                    mime_type: "text/plain".to_string(),
+                },
+                prompt: Some("Analyze this file".to_string()),
             },
-            prompt: Some("Analyze this file".to_string()),
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1432,16 +1875,21 @@ mod tests {
         let (mut state, _rx) = make_ws_state(dir.path());
         // Video file - falls through to generic File block
         let data = base64::engine::general_purpose::STANDARD.encode(b"video data");
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data,
-                filename: "video.mp4".to_string(),
-                mime_type: "video/mp4".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data,
+                    filename: "video.mp4".to_string(),
+                    mime_type: "video/mp4".to_string(),
+                },
+                prompt: None,
             },
-            prompt: None,
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1451,16 +1899,21 @@ mod tests {
         let (mut state, _rx) = make_ws_state(dir.path());
         // With prompt AND valid session (so file_path_str is Some)
         let data = base64::engine::general_purpose::STANDARD.encode(b"file content");
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data,
-                filename: "doc.pdf".to_string(),
-                mime_type: "application/pdf".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data,
+                    filename: "doc.pdf".to_string(),
+                    mime_type: "application/pdf".to_string(),
+                },
+                prompt: Some("Review this document".to_string()),
             },
-            prompt: Some("Review this document".to_string()),
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1470,11 +1923,16 @@ mod tests {
         let (mut state, _rx) = make_ws_state(dir.path());
         // This will spawn a task that tries to detect log file for a nonexistent session
         // The test verifies the handle returns Ok and the spawned task handles the error gracefully
-        let result = handle(WebSocketMessage::WatchChatLog {
-            session_name: "definitely-does-not-exist-12345".to_string(),
-            window_index: 0,
-            limit: None,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::WatchChatLog {
+                session_name: "definitely-does-not-exist-12345".to_string(),
+                window_index: 0,
+                limit: None,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         // Give the spawned task time to run and fail
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -1485,11 +1943,16 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         // Pre-existing watcher should be cancelled
-        let result = handle(WebSocketMessage::WatchChatLog {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            limit: None,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::WatchChatLog {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                limit: None,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         // Verify current session was set
@@ -1502,13 +1965,19 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         // Message > 50 chars should be truncated in notification preview
-        let long_msg = "This is a very long message that exceeds fifty characters and should be truncated";
-        let result = handle(WebSocketMessage::SendChatMessage {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            message: long_msg.to_string(),
-            notify: Some(true),
-        }, &mut state, make_app_state(dir.path())).await;
+        let long_msg =
+            "This is a very long message that exceeds fifty characters and should be truncated";
+        let result = handle(
+            WebSocketMessage::SendChatMessage {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                message: long_msg.to_string(),
+                notify: Some(true),
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1517,12 +1986,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         // Short message (< 50 chars) notification preview
-        let result = handle(WebSocketMessage::SendChatMessage {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            message: "Short".to_string(),
-            notify: Some(true),
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::SendChatMessage {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                message: "Short".to_string(),
+                notify: Some(true),
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1531,14 +2005,25 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         // First start watching
-        handle(WebSocketMessage::WatchChatLog {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            limit: None,
-        }, &mut state, make_app_state(dir.path())).await.unwrap();
+        handle(
+            WebSocketMessage::WatchChatLog {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                limit: None,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await
+        .unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         // Then unwatch - should abort the handle
-        let result = handle(WebSocketMessage::UnwatchChatLog, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::UnwatchChatLog,
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1551,19 +2036,28 @@ mod tests {
             let msg = crate::chat_log::ChatMessage {
                 role: "user".to_string(),
                 timestamp: Some(chrono::Utc::now()),
-                blocks: vec![crate::chat_log::ContentBlock::Text { text: format!("Msg {}", i) }],
+                blocks: vec![crate::chat_log::ContentBlock::Text {
+                    text: format!("Msg {}", i),
+                }],
             };
-            app.chat_event_store.append_message("acp_paginate-test", 0, "webhook", &msg).unwrap();
+            app.chat_event_store
+                .append_message("acp_paginate-test", 0, "webhook", &msg)
+                .unwrap();
         }
 
         let (mut state, _rx) = make_ws_state(dir.path());
         // Request with offset 5, limit 3
-        let result = handle(WebSocketMessage::LoadMoreChatHistory {
-            session_name: "acp_paginate-test".to_string(),
-            window_index: 0,
-            offset: 5,
-            limit: 3,
-        }, &mut state, app).await;
+        let result = handle(
+            WebSocketMessage::LoadMoreChatHistory {
+                session_name: "acp_paginate-test".to_string(),
+                window_index: 0,
+                offset: 5,
+                limit: 3,
+            },
+            &mut state,
+            app,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1576,18 +2070,27 @@ mod tests {
             let msg = crate::chat_log::ChatMessage {
                 role: "user".to_string(),
                 timestamp: Some(chrono::Utc::now()),
-                blocks: vec![crate::chat_log::ContentBlock::Text { text: format!("Msg {}", i) }],
+                blocks: vec![crate::chat_log::ContentBlock::Text {
+                    text: format!("Msg {}", i),
+                }],
             };
-            app.chat_event_store.append_message("acp_offset-test", 0, "webhook", &msg).unwrap();
+            app.chat_event_store
+                .append_message("acp_offset-test", 0, "webhook", &msg)
+                .unwrap();
         }
 
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::LoadMoreChatHistory {
-            session_name: "acp_offset-test".to_string(),
-            window_index: 0,
-            offset: 10,
-            limit: 5,
-        }, &mut state, app).await;
+        let result = handle(
+            WebSocketMessage::LoadMoreChatHistory {
+                session_name: "acp_offset-test".to_string(),
+                window_index: 0,
+                offset: 10,
+                limit: 5,
+            },
+            &mut state,
+            app,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1595,11 +2098,16 @@ mod tests {
     async fn test_watch_chat_log_with_limit() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::WatchChatLog {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            limit: Some(50),
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::WatchChatLog {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                limit: Some(50),
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
@@ -1609,16 +2117,21 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
         let data = base64::engine::general_purpose::STANDARD.encode(b"content");
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data,
-                filename: "test.txt".to_string(),
-                mime_type: "text/plain".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data,
+                    filename: "test.txt".to_string(),
+                    mime_type: "text/plain".to_string(),
+                },
+                prompt: Some("   ".to_string()),
             },
-            prompt: Some("   ".to_string()),
-        }, &mut state, make_app_state(dir.path())).await;
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1626,11 +2139,16 @@ mod tests {
     async fn test_watch_acp_chat_log_with_limit() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::WatchAcpChatLog {
-            session_id: "test-acp-session".to_string(),
-            window_index: Some(0),
-            limit: Some(50),
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::WatchAcpChatLog {
+                session_id: "test-acp-session".to_string(),
+                window_index: Some(0),
+                limit: Some(50),
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
@@ -1639,10 +2157,15 @@ mod tests {
     async fn test_clear_chat_log_nonexistent_session() {
         let dir = TempDir::new().unwrap();
         let (mut state, _rx) = make_ws_state(dir.path());
-        let result = handle(WebSocketMessage::ClearChatLog {
-            session_name: "nonexistent-session-xyz-123".to_string(),
-            window_index: 0,
-        }, &mut state, make_app_state(dir.path())).await;
+        let result = handle(
+            WebSocketMessage::ClearChatLog {
+                session_name: "nonexistent-session-xyz-123".to_string(),
+                window_index: 0,
+            },
+            &mut state,
+            make_app_state(dir.path()),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1653,16 +2176,21 @@ mod tests {
         let (mut state, _rx) = make_ws_state(dir.path());
         // File gets saved to state.chat_file_storage, not app's
         let data = base64::engine::general_purpose::STANDARD.encode(b"test content");
-        let result = handle(WebSocketMessage::SendFileToChat {
-            session_name: "AgentShell".to_string(),
-            window_index: 0,
-            file: crate::types::FileAttachment {
-                data,
-                filename: "test.txt".to_string(),
-                mime_type: "text/plain".to_string(),
+        let result = handle(
+            WebSocketMessage::SendFileToChat {
+                session_name: "AgentShell".to_string(),
+                window_index: 0,
+                file: crate::types::FileAttachment {
+                    data,
+                    filename: "test.txt".to_string(),
+                    mime_type: "text/plain".to_string(),
+                },
+                prompt: None,
             },
-            prompt: None,
-        }, &mut state, app).await;
+            &mut state,
+            app,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -1672,8 +2200,10 @@ mod tests {
         let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
         let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
-        let notification_store = Arc::new(crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap());
-        let favorite_store = Arc::new(crate::favorite_store::FavoriteStore::new(dir.to_path_buf()).unwrap());
+        let notification_store =
+            Arc::new(crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap());
+        let favorite_store =
+            Arc::new(crate::favorite_store::FavoriteStore::new(dir.to_path_buf()).unwrap());
         let tag_store = Arc::new(crate::tag_store::TagStore::new(dir.to_path_buf()).unwrap());
         Arc::new(crate::AppState {
             enable_audio_logs: false,
@@ -1684,6 +2214,7 @@ mod tests {
             chat_clear_store,
             notification_store,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+            codex_app_client: Arc::new(tokio::sync::RwLock::new(None)),
             favorite_store,
             tag_store,
             shutdown_token: tokio_util::sync::CancellationToken::new(),

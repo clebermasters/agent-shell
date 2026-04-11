@@ -1,5 +1,5 @@
 use anyhow::Result;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::{process::Stdio, sync::Arc};
 use tokio::{
     io::AsyncReadExt,

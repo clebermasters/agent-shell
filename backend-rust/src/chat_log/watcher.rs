@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -9,7 +10,9 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use super::{claude_parser, codex_parser, kiro_parser, opencode_parser, AiTool, ChatLogEvent, ChatMessage};
+use super::{
+    claude_parser, codex_parser, kiro_parser, opencode_parser, AiTool, ChatLogEvent, ChatMessage,
+};
 
 // ---------------------------------------------------------------------------
 // Log file detection
@@ -20,63 +23,9 @@ use super::{claude_parser, codex_parser, kiro_parser, opencode_parser, AiTool, C
 pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(PathBuf, AiTool)> {
     let target = format!("{session_name}:{window_index}");
     let pane_pid = get_pane_pid(&target).await?;
-    let descendants = get_descendant_pids(pane_pid)?;
-
-    for pid in &descendants {
-        let name = match process_name(*pid) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        if name == "claude" {
-            let cwd = get_process_cwd(*pid)?;
-            let log = find_claude_log(&cwd)?;
-            info!("detected Claude log: {}", log.display());
-            return Ok((log, AiTool::Claude));
-        }
-
-        if name == "codex" {
-            let cwd = get_process_cwd(*pid)?;
-            let log = find_codex_log(&cwd)?;
-            info!(
-                "detected Codex log: {} (cwd: {})",
-                log.display(),
-                cwd.display()
-            );
-            return Ok((log, AiTool::Codex));
-        }
-
-        if name == "opencode" {
-            let cwd = get_process_cwd(*pid)?;
-            let log = find_opencode_db()?;
-            info!(
-                "detected Opencode database: {} for PID {} (cwd: {})",
-                log.display(),
-                pid,
-                cwd.display()
-            );
-            return Ok((log, AiTool::Opencode { cwd, pid: *pid }));
-        }
-
-        if name == "kiro-cli-chat" || name == "kiro-cli" {
-            // Note: kiro-cli's comm is "kiro-cli" (not "kiro-cli-chat").
-            // We check both for compatibility.
-            let cwd = get_process_cwd(*pid)?;
-            let session_id = kiro_parser::find_session_id(&cwd)
-                .unwrap_or_else(|_| format!("session-{}", pid));
-            info!(
-                "detected kiro-cli for PID {} (comm={}, cwd: {}, session: {})",
-                pid,
-                name,
-                cwd.display(),
-                session_id
-            );
-            // Return /dev/null as the "log path" — kiro uses PTY capture, not file watching
-            return Ok((PathBuf::from("/dev/null"), AiTool::Kiro { cwd, pid: *pid, session_id }));
-        }
-    }
-
-    bail!("no AI tool (claude/codex/opencode/kiro) found among descendants of pane PID {pane_pid}");
+    tokio::task::spawn_blocking(move || detect_log_file_for_pane_pid(pane_pid))
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to join log detection task: {e}"))?
 }
 
 /// Detect which AI tool (if any) is running in window 0 of the given tmux session.
@@ -84,18 +33,10 @@ pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(P
 pub async fn detect_tool_name(session_name: &str) -> Option<String> {
     let target = format!("{session_name}:0");
     let pane_pid = get_pane_pid(&target).await.ok()?;
-    let descendants = get_descendant_pids(pane_pid).ok()?;
-
-    for pid in &descendants {
-        match process_name(*pid).as_deref() {
-            Some("claude") => return Some("claude".to_string()),
-            Some("codex") => return Some("codex".to_string()),
-            Some("opencode") => return Some("opencode".to_string()),
-            Some("kiro-cli") | Some("kiro-cli-chat") => return Some("kiro".to_string()),
-            _ => {}
-        }
-    }
-    None
+    tokio::task::spawn_blocking(move || detect_tool_name_for_pane_pid(pane_pid))
+        .await
+        .ok()
+        .flatten()
 }
 
 // ---------------------------------------------------------------------------
@@ -155,10 +96,10 @@ pub async fn watch_log_file(
     };
 
     let ctx_info: Option<(f64, String)> = match &tool {
-        AiTool::Claude => claude_parser::extract_context_usage(path)
-            .map(|c| (c.usage_pct, c.model)),
-        AiTool::Codex => codex_parser::extract_context_usage(path)
-            .map(|c| (c.usage_pct, c.model)),
+        AiTool::Claude => {
+            claude_parser::extract_context_usage(path).map(|c| (c.usage_pct, c.model))
+        }
+        AiTool::Codex => codex_parser::extract_context_usage(path).map(|c| (c.usage_pct, c.model)),
         _ => None,
     };
 
@@ -472,13 +413,14 @@ async fn get_pane_pid(target: &str) -> Result<u32> {
 /// This avoids shelling out to `ps` on every call and works on Linux by
 /// scanning `/proc/*/stat` for processes whose PPID matches.
 fn get_descendant_pids(parent_pid: u32) -> Result<Vec<u32>> {
+    let children_by_parent = scan_proc_children_map();
     let mut result = vec![parent_pid];
     let mut queue = vec![parent_pid];
 
     while let Some(ppid) = queue.pop() {
-        for child in direct_children(ppid) {
-            result.push(child);
-            queue.push(child);
+        for child in children_by_parent.get(&ppid).into_iter().flatten() {
+            result.push(*child);
+            queue.push(*child);
         }
     }
 
@@ -487,38 +429,7 @@ fn get_descendant_pids(parent_pid: u32) -> Result<Vec<u32>> {
 
 /// Return the immediate child PIDs of `ppid` by scanning `/proc`.
 fn direct_children(ppid: u32) -> Vec<u32> {
-    let mut children = Vec::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return children;
-    };
-
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
-            continue;
-        };
-
-        // /proc/<pid>/stat format: pid (comm) state ppid ...
-        let stat_path = format!("/proc/{pid}/stat");
-        let Ok(stat) = std::fs::read_to_string(&stat_path) else {
-            continue;
-        };
-
-        // The comm field can contain spaces and parentheses, so find the last
-        // ')' to locate the end of the comm field reliably.
-        let Some(after_comm) = stat.rfind(')') else {
-            continue;
-        };
-        let fields: Vec<&str> = stat[after_comm + 2..].split_whitespace().collect();
-        // fields[0] = state, fields[1] = ppid
-        if let Some(parent) = fields.get(1).and_then(|s| s.parse::<u32>().ok()) {
-            if parent == ppid {
-                children.push(pid);
-            }
-        }
-    }
-
-    children
+    scan_proc_children_map().remove(&ppid).unwrap_or_default()
 }
 
 /// Read the executable name for a given PID from `/proc/<pid>/comm`.
@@ -527,6 +438,117 @@ fn process_name(pid: u32) -> Option<String> {
     std::fs::read_to_string(path)
         .ok()
         .map(|s| s.trim().to_string())
+}
+
+fn detect_log_file_for_pane_pid(pane_pid: u32) -> Result<(PathBuf, AiTool)> {
+    let descendants = get_descendant_pids(pane_pid)?;
+
+    for pid in &descendants {
+        let name = match process_name(*pid) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        if name == "claude" {
+            let cwd = get_process_cwd(*pid)?;
+            let log = find_claude_log(&cwd)?;
+            info!("detected Claude log: {}", log.display());
+            return Ok((log, AiTool::Claude));
+        }
+
+        if name == "codex" {
+            let cwd = get_process_cwd(*pid)?;
+            let log = find_codex_log(&cwd)?;
+            info!(
+                "detected Codex log: {} (cwd: {})",
+                log.display(),
+                cwd.display()
+            );
+            return Ok((log, AiTool::Codex));
+        }
+
+        if name == "opencode" {
+            let cwd = get_process_cwd(*pid)?;
+            let log = find_opencode_db()?;
+            info!(
+                "detected Opencode database: {} for PID {} (cwd: {})",
+                log.display(),
+                pid,
+                cwd.display()
+            );
+            return Ok((log, AiTool::Opencode { cwd, pid: *pid }));
+        }
+
+        if name == "kiro-cli-chat" || name == "kiro-cli" {
+            let cwd = get_process_cwd(*pid)?;
+            let session_id =
+                kiro_parser::find_session_id(&cwd).unwrap_or_else(|_| format!("session-{}", pid));
+            info!(
+                "detected kiro-cli for PID {} (comm={}, cwd: {}, session: {})",
+                pid,
+                name,
+                cwd.display(),
+                session_id
+            );
+            return Ok((
+                PathBuf::from("/dev/null"),
+                AiTool::Kiro {
+                    cwd,
+                    pid: *pid,
+                    session_id,
+                },
+            ));
+        }
+    }
+
+    bail!("no AI tool (claude/codex/opencode/kiro) found among descendants of pane PID {pane_pid}");
+}
+
+fn detect_tool_name_for_pane_pid(pane_pid: u32) -> Option<String> {
+    let descendants = get_descendant_pids(pane_pid).ok()?;
+
+    for pid in &descendants {
+        match process_name(*pid).as_deref() {
+            Some("claude") => return Some("claude".to_string()),
+            Some("codex") => return Some("codex".to_string()),
+            Some("opencode") => return Some("opencode".to_string()),
+            Some("kiro-cli") | Some("kiro-cli-chat") => return Some("kiro".to_string()),
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn scan_proc_children_map() -> HashMap<u32, Vec<u32>> {
+    let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return children_by_parent;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+
+        let stat_path = format!("/proc/{pid}/stat");
+        let Ok(stat) = std::fs::read_to_string(&stat_path) else {
+            continue;
+        };
+
+        if let Some(parent) = parse_parent_pid_from_stat(&stat) {
+            children_by_parent.entry(parent).or_default().push(pid);
+        }
+    }
+
+    children_by_parent
+}
+
+fn parse_parent_pid_from_stat(stat: &str) -> Option<u32> {
+    let after_comm = stat.rfind(')')?;
+    let fields: Vec<&str> = stat[after_comm + 2..].split_whitespace().collect();
+    fields.get(1).and_then(|s| s.parse::<u32>().ok())
 }
 
 /// Read the current working directory of a process via its `/proc` symlink.
@@ -759,7 +781,7 @@ mod tests {
     #[test]
     fn test_direct_children_does_not_panic() {
         let children = direct_children(1); // init/systemd always exists on Linux
-        // May be empty or have some children — just shouldn't panic
+                                           // May be empty or have some children — just shouldn't panic
         let _ = children;
     }
 
@@ -807,7 +829,13 @@ mod tests {
         let result = newest_jsonl_in(dir.path());
         assert!(result.is_some());
         // Should return the newer file
-        assert!(result.unwrap().file_name().unwrap().to_str().unwrap().ends_with(".jsonl"));
+        assert!(result
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .ends_with(".jsonl"));
     }
 
     #[test]
@@ -833,7 +861,13 @@ mod tests {
 
     #[test]
     fn test_parse_line_opencode_always_none() {
-        let result = parse_line("{}", &AiTool::Opencode { pid: 0, cwd: std::path::PathBuf::new() });
+        let result = parse_line(
+            "{}",
+            &AiTool::Opencode {
+                pid: 0,
+                cwd: std::path::PathBuf::new(),
+            },
+        );
         assert!(result.is_none());
     }
 
@@ -889,7 +923,10 @@ mod tests {
 
         // Append more content
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         writeln!(f, "{{\"line\":2}}").unwrap();
 
         let _ = read_new_lines(&path, &mut pos, &AiTool::Claude);

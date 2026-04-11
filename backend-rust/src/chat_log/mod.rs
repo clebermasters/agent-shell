@@ -71,8 +71,15 @@ use std::path::PathBuf;
 pub enum AiTool {
     Claude,
     Codex,
-    Opencode { cwd: PathBuf, pid: u32 },
-    Kiro { cwd: PathBuf, pid: u32, session_id: String },
+    Opencode {
+        cwd: PathBuf,
+        pid: u32,
+    },
+    Kiro {
+        cwd: PathBuf,
+        pid: u32,
+        session_id: String,
+    },
 }
 
 /// Events emitted by the log watcher.
@@ -104,7 +111,9 @@ mod tests {
 
     #[test]
     fn test_content_block_text_roundtrip() {
-        let block = ContentBlock::Text { text: "hello world".to_string() };
+        let block = ContentBlock::Text {
+            text: "hello world".to_string(),
+        };
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("\"type\":\"text\""));
         let parsed: ContentBlock = serde_json::from_str(&json).unwrap();
@@ -125,7 +134,11 @@ mod tests {
         assert!(json.contains("\"type\":\"tool_call\""));
         let parsed: ContentBlock = serde_json::from_str(&json).unwrap();
         match parsed {
-            ContentBlock::ToolCall { name, summary, input } => {
+            ContentBlock::ToolCall {
+                name,
+                summary,
+                input,
+            } => {
                 assert_eq!(name, "bash");
                 assert_eq!(summary, "Running command");
                 assert!(input.is_some());
@@ -144,11 +157,14 @@ mod tests {
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("\"toolName\":\"bash\""));
         assert!(!json.contains("\"content\"")); // skip_serializing_if None
-        // Deserialize with content present
-        let json_with_content = r#"{"type":"tool_result","toolName":"bash","summary":"Done","content":"output"}"#;
+                                                // Deserialize with content present
+        let json_with_content =
+            r#"{"type":"tool_result","toolName":"bash","summary":"Done","content":"output"}"#;
         let parsed: ContentBlock = serde_json::from_str(json_with_content).unwrap();
         match parsed {
-            ContentBlock::ToolResult { content, .. } => assert_eq!(content, Some("output".to_string())),
+            ContentBlock::ToolResult { content, .. } => {
+                assert_eq!(content, Some("output".to_string()))
+            }
             _ => panic!("Expected ToolResult variant"),
         }
     }
@@ -176,8 +192,12 @@ mod tests {
             role: "assistant".to_string(),
             timestamp: Some(chrono::Utc::now()),
             blocks: vec![
-                ContentBlock::Text { text: "Hello".to_string() },
-                ContentBlock::Thinking { content: "Let me think...".to_string() },
+                ContentBlock::Text {
+                    text: "Hello".to_string(),
+                },
+                ContentBlock::Thinking {
+                    content: "Let me think...".to_string(),
+                },
             ],
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -202,7 +222,10 @@ mod tests {
         assert_eq!(json, "\"codex\"");
 
         // Opencode
-        let tool = AiTool::Opencode { cwd: PathBuf::from("/tmp"), pid: 1234 };
+        let tool = AiTool::Opencode {
+            cwd: PathBuf::from("/tmp"),
+            pid: 1234,
+        };
         let json = serde_json::to_string(&tool).unwrap();
         assert!(json.contains("opencode"));
         let parsed: AiTool = serde_json::from_str(&json).unwrap();

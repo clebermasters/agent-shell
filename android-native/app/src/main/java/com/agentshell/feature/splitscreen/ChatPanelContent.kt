@@ -172,6 +172,46 @@ fun ChatPanelContent(
                         messages.addAll(parsed)
                     }
                 }
+                "acp-tool-call" -> {
+                    if (!isAcp) return@collect
+                    val sid = message["sessionId"] as? String ?: return@collect
+                    if (sid != sessionName && sid != "acp_$sessionName") return@collect
+                    val toolCallId = message["toolCallId"] as? String ?: UUID.randomUUID().toString()
+                    val title = message["title"] as? String ?: "Unknown Tool"
+                    val kind = message["kind"] as? String ?: ""
+                    withContext(Dispatchers.Main) {
+                        messages.add(
+                            ChatMessage(
+                                id = "tool_call:$toolCallId",
+                                type = "tool_call",
+                                timestamp = System.currentTimeMillis(),
+                                blocks = listOf(
+                                    ChatBlock(type = "tool_call", toolName = title, summary = kind),
+                                ),
+                            )
+                        )
+                    }
+                }
+                "acp-tool-result" -> {
+                    if (!isAcp) return@collect
+                    val sid = message["sessionId"] as? String ?: return@collect
+                    if (sid != sessionName && sid != "acp_$sessionName") return@collect
+                    val toolCallId = message["toolCallId"] as? String ?: UUID.randomUUID().toString()
+                    val status = message["status"] as? String ?: ""
+                    val output = message["output"] as? String ?: ""
+                    withContext(Dispatchers.Main) {
+                        messages.add(
+                            ChatMessage(
+                                id = "tool_result:$toolCallId",
+                                type = "tool_result",
+                                timestamp = System.currentTimeMillis(),
+                                blocks = listOf(
+                                    ChatBlock(type = "tool_result", content = output, summary = status),
+                                ),
+                            )
+                        )
+                    }
+                }
             }
         }
     }

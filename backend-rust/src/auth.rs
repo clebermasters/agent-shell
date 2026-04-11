@@ -5,8 +5,7 @@ use tracing::warn;
 /// Read AUTH_TOKEN from environment. Panics at startup if not set or empty.
 /// Call `require_auth_token()` once during startup to enforce this invariant.
 fn expected_token() -> String {
-    let token = std::env::var("AUTH_TOKEN")
-        .unwrap_or_default();
+    let token = std::env::var("AUTH_TOKEN").unwrap_or_default();
     if token.is_empty() {
         eprintln!("FATAL: AUTH_TOKEN environment variable is not set or is empty.");
         eprintln!("Set AUTH_TOKEN to a strong secret before starting the server.");
@@ -37,10 +36,8 @@ fn percent_decode(input: &[u8]) -> String {
     let mut i = 0;
     while i < input.len() {
         if input[i] == b'%' && i + 2 < input.len() {
-            if let Ok(byte) = u8::from_str_radix(
-                &String::from_utf8_lossy(&input[i + 1..i + 3]),
-                16,
-            ) {
+            if let Ok(byte) = u8::from_str_radix(&String::from_utf8_lossy(&input[i + 1..i + 3]), 16)
+            {
                 output.push(byte);
                 i += 3;
                 continue;
@@ -70,10 +67,7 @@ pub async fn auth_middleware(request: Request, next: Next) -> Result<Response, S
     let expected = expected_token();
 
     // Check query parameter first (?token=xxx)
-    let token_from_query = request
-        .uri()
-        .query()
-        .and_then(extract_token_from_query);
+    let token_from_query = request.uri().query().and_then(extract_token_from_query);
 
     // Check X-Auth-Token header as fallback
     let token_from_header = request
@@ -135,7 +129,10 @@ mod tests {
     #[test]
     fn test_extract_token_url_encoded() {
         let query = "token=hello%20world";
-        assert_eq!(extract_token_from_query(query), Some("hello world".to_string()));
+        assert_eq!(
+            extract_token_from_query(query),
+            Some("hello world".to_string())
+        );
     }
 
     #[test]

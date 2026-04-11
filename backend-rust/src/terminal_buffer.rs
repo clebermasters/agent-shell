@@ -1,5 +1,5 @@
-use simdutf8;
 use lazy_static::lazy_static;
+use simdutf8;
 
 lazy_static! {
     /// Pattern to match Device Attributes (DA) responses
@@ -287,7 +287,7 @@ mod tests {
         let mut decoder = Utf8StreamDecoder::new();
         let text = "€€";
         let bytes = text.as_bytes(); // 6 bytes total
-        // Split at byte 4 (middle of second €)
+                                     // Split at byte 4 (middle of second €)
         let (o1, _) = decoder.decode_chunk(&bytes[..4]);
         let (o2, _) = decoder.decode_chunk(&bytes[4..]);
         assert_eq!(format!("{}{}", o1, o2), text);

@@ -9,7 +9,6 @@ pub struct JsonRpcRequest {
     pub params: Option<serde_json::Value>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
@@ -140,7 +139,8 @@ mod tests {
 
     #[test]
     fn test_response_with_error_no_result() {
-        let line = r#"{"jsonrpc":"2.0","id":5,"error":{"code":-32600,"message":"Invalid Request"}}"#;
+        let line =
+            r#"{"jsonrpc":"2.0","id":5,"error":{"code":-32600,"message":"Invalid Request"}}"#;
         let msg = parse_jsonrpc_message(line).unwrap();
         match msg {
             JsonRpcMessage::Response(resp) => {

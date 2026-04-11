@@ -40,85 +40,191 @@ pub(crate) async fn handle(
         WebSocketMessage::GitStatus { session_name, path } => {
             handle_git_status(tx, session_name, path).await?;
         }
-        WebSocketMessage::GitDiff { session_name, path, file_path, staged } => {
+        WebSocketMessage::GitDiff {
+            session_name,
+            path,
+            file_path,
+            staged,
+        } => {
             handle_git_diff(tx, session_name, path, file_path, staged).await?;
         }
-        WebSocketMessage::GitLog { session_name, path, limit, offset } => {
+        WebSocketMessage::GitLog {
+            session_name,
+            path,
+            limit,
+            offset,
+        } => {
             handle_git_log(tx, session_name, path, limit, offset).await?;
         }
         WebSocketMessage::GitBranches { session_name, path } => {
             handle_git_branches(tx, session_name, path).await?;
         }
-        WebSocketMessage::GitCheckout { session_name, path, branch } => {
+        WebSocketMessage::GitCheckout {
+            session_name,
+            path,
+            branch,
+        } => {
             handle_git_checkout(tx, session_name, path, branch).await?;
         }
-        WebSocketMessage::GitCreateBranch { session_name, path, branch, start_point } => {
+        WebSocketMessage::GitCreateBranch {
+            session_name,
+            path,
+            branch,
+            start_point,
+        } => {
             handle_git_create_branch(tx, session_name, path, branch, start_point).await?;
         }
-        WebSocketMessage::GitDeleteBranch { session_name, path, branch } => {
+        WebSocketMessage::GitDeleteBranch {
+            session_name,
+            path,
+            branch,
+        } => {
             handle_git_delete_branch(tx, session_name, path, branch).await?;
         }
-        WebSocketMessage::GitStage { session_name, path, files } => {
+        WebSocketMessage::GitStage {
+            session_name,
+            path,
+            files,
+        } => {
             handle_git_stage(tx, session_name, path, files).await?;
         }
-        WebSocketMessage::GitUnstage { session_name, path, files } => {
+        WebSocketMessage::GitUnstage {
+            session_name,
+            path,
+            files,
+        } => {
             handle_git_unstage(tx, session_name, path, files).await?;
         }
-        WebSocketMessage::GitCommit { session_name, path, message } => {
+        WebSocketMessage::GitCommit {
+            session_name,
+            path,
+            message,
+        } => {
             handle_git_commit(tx, session_name, path, message).await?;
         }
-        WebSocketMessage::GitPush { session_name, path, remote, branch } => {
+        WebSocketMessage::GitPush {
+            session_name,
+            path,
+            remote,
+            branch,
+        } => {
             handle_git_push(tx, session_name, path, remote, branch).await?;
         }
         WebSocketMessage::GitPull { session_name, path } => {
             handle_git_pull(tx, session_name, path).await?;
         }
-        WebSocketMessage::GitStash { session_name, path, action } => {
+        WebSocketMessage::GitStash {
+            session_name,
+            path,
+            action,
+        } => {
             handle_git_stash(tx, session_name, path, action).await?;
         }
-        WebSocketMessage::GitCommitFiles { session_name, path, commit_hash } => {
+        WebSocketMessage::GitCommitFiles {
+            session_name,
+            path,
+            commit_hash,
+        } => {
             handle_git_commit_files(tx, session_name, path, commit_hash).await?;
         }
-        WebSocketMessage::GitCommitDiff { session_name, path, commit_hash, file_path } => {
+        WebSocketMessage::GitCommitDiff {
+            session_name,
+            path,
+            commit_hash,
+            file_path,
+        } => {
             handle_git_commit_diff(tx, session_name, path, commit_hash, file_path).await?;
         }
-        WebSocketMessage::GitSearch { session_name, path, query, author, since, limit } => {
+        WebSocketMessage::GitSearch {
+            session_name,
+            path,
+            query,
+            author,
+            since,
+            limit,
+        } => {
             handle_git_search(tx, session_name, path, query, author, since, limit).await?;
         }
-        WebSocketMessage::GitFileHistory { session_name, path, file_path, limit, offset } => {
+        WebSocketMessage::GitFileHistory {
+            session_name,
+            path,
+            file_path,
+            limit,
+            offset,
+        } => {
             handle_git_file_history(tx, session_name, path, file_path, limit, offset).await?;
         }
-        WebSocketMessage::GitCherryPick { session_name, path, commit_hash } => {
+        WebSocketMessage::GitCherryPick {
+            session_name,
+            path,
+            commit_hash,
+        } => {
             handle_git_cherry_pick(tx, session_name, path, commit_hash).await?;
         }
-        WebSocketMessage::GitRevert { session_name, path, commit_hash } => {
+        WebSocketMessage::GitRevert {
+            session_name,
+            path,
+            commit_hash,
+        } => {
             handle_git_revert(tx, session_name, path, commit_hash).await?;
         }
-        WebSocketMessage::GitMerge { session_name, path, branch } => {
+        WebSocketMessage::GitMerge {
+            session_name,
+            path,
+            branch,
+        } => {
             handle_git_merge(tx, session_name, path, branch).await?;
         }
-        WebSocketMessage::GitBlame { session_name, path, file_path } => {
+        WebSocketMessage::GitBlame {
+            session_name,
+            path,
+            file_path,
+        } => {
             handle_git_blame(tx, session_name, path, file_path).await?;
         }
-        WebSocketMessage::GitCompare { session_name, path, base_branch, compare_branch } => {
+        WebSocketMessage::GitCompare {
+            session_name,
+            path,
+            base_branch,
+            compare_branch,
+        } => {
             handle_git_compare(tx, session_name, path, base_branch, compare_branch).await?;
         }
         WebSocketMessage::GitRepoInfo { session_name, path } => {
             handle_git_repo_info(tx, session_name, path).await?;
         }
-        WebSocketMessage::GitAmend { session_name, path, message } => {
+        WebSocketMessage::GitAmend {
+            session_name,
+            path,
+            message,
+        } => {
             handle_git_amend(tx, session_name, path, message).await?;
         }
         WebSocketMessage::GitListTags { session_name, path } => {
             handle_git_list_tags(tx, session_name, path).await?;
         }
-        WebSocketMessage::GitCreateTag { session_name, path, name, commit_hash, message } => {
+        WebSocketMessage::GitCreateTag {
+            session_name,
+            path,
+            name,
+            commit_hash,
+            message,
+        } => {
             handle_git_create_tag(tx, session_name, path, name, commit_hash, message).await?;
         }
-        WebSocketMessage::GitDeleteTag { session_name, path, name } => {
+        WebSocketMessage::GitDeleteTag {
+            session_name,
+            path,
+            name,
+        } => {
             handle_git_delete_tag(tx, session_name, path, name).await?;
         }
-        WebSocketMessage::GitResolveConflict { session_name, path, file_path, resolution } => {
+        WebSocketMessage::GitResolveConflict {
+            session_name,
+            path,
+            file_path,
+            resolution,
+        } => {
             handle_git_resolve_conflict(tx, session_name, path, file_path, resolution).await?;
         }
         _ => {}
@@ -143,9 +249,13 @@ async fn handle_git_status(
     };
 
     if !is_git_repo(&cwd) {
-        send_message(tx, ServerMessage::Error {
-            message: format!("Not a git repository: {}", cwd),
-        }).await?;
+        send_message(
+            tx,
+            ServerMessage::Error {
+                message: format!("Not a git repository: {}", cwd),
+            },
+        )
+        .await?;
         return Ok(());
     }
 
@@ -170,9 +280,16 @@ async fn handle_git_status(
 
             for line in stdout.lines() {
                 if line.starts_with("# branch.head ") {
-                    branch = line.strip_prefix("# branch.head ").unwrap_or("").to_string();
+                    branch = line
+                        .strip_prefix("# branch.head ")
+                        .unwrap_or("")
+                        .to_string();
                 } else if line.starts_with("# branch.upstream ") {
-                    upstream = Some(line.strip_prefix("# branch.upstream ").unwrap_or("").to_string());
+                    upstream = Some(
+                        line.strip_prefix("# branch.upstream ")
+                            .unwrap_or("")
+                            .to_string(),
+                    );
                 } else if line.starts_with("# branch.ab ") {
                     let ab = line.strip_prefix("# branch.ab ").unwrap_or("");
                     for part in ab.split_whitespace() {
@@ -249,9 +366,13 @@ async fn handle_git_status(
         }
         Err(e) => {
             error!("git status failed: {}", e);
-            send_message(tx, ServerMessage::Error {
-                message: format!("git status failed: {}", e),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git status failed: {}", e),
+                },
+            )
+            .await?;
         }
     }
     Ok(())
@@ -332,18 +453,26 @@ async fn handle_git_diff(
                     deletions += 1;
                 }
             }
-            send_message(tx, ServerMessage::GitDiffResult {
-                file_path: target_file,
-                diff,
-                additions,
-                deletions,
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::GitDiffResult {
+                    file_path: target_file,
+                    diff,
+                    additions,
+                    deletions,
+                },
+            )
+            .await?;
         }
         Err(e) => {
             error!("git diff failed: {}", e);
-            send_message(tx, ServerMessage::Error {
-                message: format!("git diff failed: {}", e),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git diff failed: {}", e),
+                },
+            )
+            .await?;
         }
     }
     Ok(())
@@ -391,13 +520,13 @@ async fn handle_git_log(
             let mut commits: Vec<GitCommitInfo> = Vec::new();
 
             for line in stdout.lines() {
-                if line.is_empty() { continue; }
+                if line.is_empty() {
+                    continue;
+                }
                 let parts: Vec<&str> = line.split('\0').collect();
                 if parts.len() >= 7 {
-                    let parents: Vec<String> = parts[5]
-                        .split_whitespace()
-                        .map(|s| s.to_string())
-                        .collect();
+                    let parents: Vec<String> =
+                        parts[5].split_whitespace().map(|s| s.to_string()).collect();
                     let refs: Vec<String> = if parts[6].is_empty() {
                         vec![]
                     } else {
@@ -422,9 +551,13 @@ async fn handle_git_log(
         }
         Err(e) => {
             error!("git log failed: {}", e);
-            send_message(tx, ServerMessage::Error {
-                message: format!("git log failed: {}", e),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git log failed: {}", e),
+                },
+            )
+            .await?;
         }
     }
     Ok(())
@@ -462,14 +595,24 @@ async fn handle_git_branches(
             let mut branches: Vec<GitBranchInfo> = Vec::new();
 
             for line in stdout.lines() {
-                if line.is_empty() { continue; }
+                if line.is_empty() {
+                    continue;
+                }
                 let parts: Vec<&str> = line.split('\0').collect();
                 if parts.len() >= 5 {
                     let current = parts[0] == "*";
                     let name = parts[1].to_string();
-                    let tracking = if parts[2].is_empty() { None } else { Some(parts[2].to_string()) };
+                    let tracking = if parts[2].is_empty() {
+                        None
+                    } else {
+                        Some(parts[2].to_string())
+                    };
                     let track_info = parts[3];
-                    let last_commit = if parts[4].is_empty() { None } else { Some(parts[4].to_string()) };
+                    let last_commit = if parts[4].is_empty() {
+                        None
+                    } else {
+                        Some(parts[4].to_string())
+                    };
 
                     let (ahead, behind) = parse_track_info(track_info);
 
@@ -488,9 +631,13 @@ async fn handle_git_branches(
         }
         Err(e) => {
             error!("git branch failed: {}", e);
-            send_message(tx, ServerMessage::Error {
-                message: format!("git branch failed: {}", e),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git branch failed: {}", e),
+                },
+            )
+            .await?;
         }
     }
     Ok(())
@@ -764,35 +911,59 @@ async fn handle_git_stash(
         "list" => {
             let output = tokio::process::Command::new("git")
                 .args(["stash", "list", "--format=%gd%x00%s%x00%aI"])
-                .current_dir(&cwd).output().await;
+                .current_dir(&cwd)
+                .output()
+                .await;
             match output {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout);
-                    let entries: Vec<GitStashEntry> = stdout.lines().filter(|l| !l.is_empty()).enumerate().map(|(i, line)| {
-                        let parts: Vec<&str> = line.split('\0').collect();
-                        GitStashEntry {
-                            index: i as u32,
-                            message: parts.get(1).unwrap_or(&"").to_string(),
-                            date: parts.get(2).unwrap_or(&"").to_string(),
-                        }
-                    }).collect();
+                    let entries: Vec<GitStashEntry> = stdout
+                        .lines()
+                        .filter(|l| !l.is_empty())
+                        .enumerate()
+                        .map(|(i, line)| {
+                            let parts: Vec<&str> = line.split('\0').collect();
+                            GitStashEntry {
+                                index: i as u32,
+                                message: parts.get(1).unwrap_or(&"").to_string(),
+                                date: parts.get(2).unwrap_or(&"").to_string(),
+                            }
+                        })
+                        .collect();
                     send_message(tx, ServerMessage::GitStashListResult { entries }).await?;
                 }
-                Err(e) => { send_message(tx, ServerMessage::Error { message: format!("git stash list failed: {}", e) }).await?; }
+                Err(e) => {
+                    send_message(
+                        tx,
+                        ServerMessage::Error {
+                            message: format!("git stash list failed: {}", e),
+                        },
+                    )
+                    .await?;
+                }
             }
             Ok(())
         }
         "push" | "pop" | "drop" | "apply" => {
             let args = vec!["stash", &action];
             let output = tokio::process::Command::new("git")
-                .args(&args).current_dir(&cwd).output().await;
+                .args(&args)
+                .current_dir(&cwd)
+                .output()
+                .await;
             send_operation_result(tx, "stash", output).await
         }
         other => {
-            send_message(tx, ServerMessage::GitOperationResult {
-                operation: "stash".to_string(), success: false, message: None,
-                error: Some(format!("Unknown stash action: {}", other)),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::GitOperationResult {
+                    operation: "stash".to_string(),
+                    success: false,
+                    message: None,
+                    error: Some(format!("Unknown stash action: {}", other)),
+                },
+            )
+            .await?;
             Ok(())
         }
     }
@@ -812,26 +983,46 @@ async fn handle_git_search(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let limit_val = limit.unwrap_or(50);
     let mut args = vec![
-        "log".to_string(), "--all".to_string(),
+        "log".to_string(),
+        "--all".to_string(),
         format!("--format=%H%x00%h%x00%s%x00%an%x00%aI%x00%P%x00%D"),
         format!("-n{}", limit_val),
         format!("--grep={}", query),
         "-i".to_string(),
     ];
-    if let Some(ref a) = author { args.push(format!("--author={}", a)); }
-    if let Some(ref s) = since { args.push(format!("--since={}", s)); }
+    if let Some(ref a) = author {
+        args.push(format!("--author={}", a));
+    }
+    if let Some(ref s) = since {
+        args.push(format!("--since={}", s));
+    }
 
-    let output = tokio::process::Command::new("git").args(&args).current_dir(&cwd).output().await;
+    let output = tokio::process::Command::new("git")
+        .args(&args)
+        .current_dir(&cwd)
+        .output()
+        .await;
     match output {
         Ok(out) => {
             let commits = parse_log_output(&String::from_utf8_lossy(&out.stdout));
             send_message(tx, ServerMessage::GitSearchResult { query, commits }).await?;
         }
-        Err(e) => { send_message(tx, ServerMessage::Error { message: format!("git search failed: {}", e) }).await?; }
+        Err(e) => {
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git search failed: {}", e),
+                },
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -849,7 +1040,10 @@ async fn handle_git_file_history(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let limit_val = limit.unwrap_or(50);
     let offset_val = offset.unwrap_or(0);
@@ -861,18 +1055,38 @@ async fn handle_git_file_history(
             &format!("--format=%H%x00%h%x00%s%x00%an%x00%aI%x00%P%x00%D"),
             &format!("--skip={}", offset_val),
             &format!("-n{}", fetch_count),
-            "--follow", "--", &file_path,
+            "--follow",
+            "--",
+            &file_path,
         ])
-        .current_dir(&cwd).output().await;
+        .current_dir(&cwd)
+        .output()
+        .await;
 
     match output {
         Ok(out) => {
             let mut commits = parse_log_output(&String::from_utf8_lossy(&out.stdout));
             let has_more = commits.len() > limit_val;
             commits.truncate(limit_val);
-            send_message(tx, ServerMessage::GitFileHistoryResult { file_path, commits, has_more }).await?;
+            send_message(
+                tx,
+                ServerMessage::GitFileHistoryResult {
+                    file_path,
+                    commits,
+                    has_more,
+                },
+            )
+            .await?;
         }
-        Err(e) => { send_message(tx, ServerMessage::Error { message: format!("git file-history failed: {}", e) }).await?; }
+        Err(e) => {
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git file-history failed: {}", e),
+                },
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -888,11 +1102,16 @@ async fn handle_git_cherry_pick(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let output = tokio::process::Command::new("git")
         .args(["cherry-pick", &commit_hash])
-        .current_dir(&cwd).output().await;
+        .current_dir(&cwd)
+        .output()
+        .await;
     send_operation_result(tx, "cherry-pick", output).await
 }
 
@@ -907,11 +1126,16 @@ async fn handle_git_revert(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let output = tokio::process::Command::new("git")
         .args(["revert", "--no-edit", &commit_hash])
-        .current_dir(&cwd).output().await;
+        .current_dir(&cwd)
+        .output()
+        .await;
     send_operation_result(tx, "revert", output).await
 }
 
@@ -926,11 +1150,16 @@ async fn handle_git_merge(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let output = tokio::process::Command::new("git")
         .args(["merge", &branch])
-        .current_dir(&cwd).output().await;
+        .current_dir(&cwd)
+        .output()
+        .await;
     send_operation_result(tx, "merge", output).await
 }
 
@@ -945,11 +1174,16 @@ async fn handle_git_blame(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let output = tokio::process::Command::new("git")
         .args(["blame", "--porcelain", &file_path])
-        .current_dir(&cwd).output().await;
+        .current_dir(&cwd)
+        .output()
+        .await;
 
     match output {
         Ok(out) => {
@@ -957,7 +1191,15 @@ async fn handle_git_blame(
             let lines = parse_blame_porcelain(&stdout);
             send_message(tx, ServerMessage::GitBlameResult { file_path, lines }).await?;
         }
-        Err(e) => { send_message(tx, ServerMessage::Error { message: format!("git blame failed: {}", e) }).await?; }
+        Err(e) => {
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git blame failed: {}", e),
+                },
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -1007,20 +1249,36 @@ async fn handle_git_compare(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
 
     // Count ahead/behind
     let rev_list = tokio::process::Command::new("git")
-        .args(["rev-list", "--left-right", "--count", &format!("{}...{}", base_branch, compare_branch)])
-        .current_dir(&cwd).output().await;
+        .args([
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{}...{}", base_branch, compare_branch),
+        ])
+        .current_dir(&cwd)
+        .output()
+        .await;
 
     let (ahead, behind) = match rev_list {
         Ok(out) => {
             let s = String::from_utf8_lossy(&out.stdout);
             let parts: Vec<&str> = s.trim().split('\t').collect();
-            let b = parts.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
-            let a = parts.get(1).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            let b = parts
+                .first()
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
+            let a = parts
+                .get(1)
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(0);
             (a, b)
         }
         Err(_) => (0, 0),
@@ -1034,16 +1292,26 @@ async fn handle_git_compare(
             "-n50",
             &format!("{}..{}", base_branch, compare_branch),
         ])
-        .current_dir(&cwd).output().await;
+        .current_dir(&cwd)
+        .output()
+        .await;
 
     let commits = match log_output {
         Ok(out) => parse_log_output(&String::from_utf8_lossy(&out.stdout)),
         Err(_) => vec![],
     };
 
-    send_message(tx, ServerMessage::GitCompareResult {
-        base_branch, compare_branch, ahead, behind, commits,
-    }).await?;
+    send_message(
+        tx,
+        ServerMessage::GitCompareResult {
+            base_branch,
+            compare_branch,
+            ahead,
+            behind,
+            commits,
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -1057,71 +1325,138 @@ async fn handle_git_repo_info(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
 
     // Remotes
     let remotes_out = tokio::process::Command::new("git")
-        .args(["remote", "-v"]).current_dir(&cwd).output().await;
+        .args(["remote", "-v"])
+        .current_dir(&cwd)
+        .output()
+        .await;
     let remotes = match remotes_out {
-        Ok(out) => {
-            String::from_utf8_lossy(&out.stdout).lines().map(|line| {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|line| {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 GitRemoteInfo {
                     name: parts.first().unwrap_or(&"").to_string(),
                     url: parts.get(1).unwrap_or(&"").to_string(),
-                    remote_type: parts.get(2).unwrap_or(&"").trim_matches(|c| c == '(' || c == ')').to_string(),
+                    remote_type: parts
+                        .get(2)
+                        .unwrap_or(&"")
+                        .trim_matches(|c| c == '(' || c == ')')
+                        .to_string(),
                 }
-            }).collect()
-        }
+            })
+            .collect(),
         Err(_) => vec![],
     };
 
     // Total commits
     let count_out = tokio::process::Command::new("git")
-        .args(["rev-list", "--count", "HEAD"]).current_dir(&cwd).output().await;
-    let total_commits = count_out.ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().unwrap_or(0))
+        .args(["rev-list", "--count", "HEAD"])
+        .current_dir(&cwd)
+        .output()
+        .await;
+    let total_commits = count_out
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u64>()
+                .unwrap_or(0)
+        })
         .unwrap_or(0);
 
     // Current branch
     let branch_out = tokio::process::Command::new("git")
-        .args(["branch", "--show-current"]).current_dir(&cwd).output().await;
-    let current_branch = branch_out.ok()
+        .args(["branch", "--show-current"])
+        .current_dir(&cwd)
+        .output()
+        .await;
+    let current_branch = branch_out
+        .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
 
     // Branch count
     let bc_out = tokio::process::Command::new("git")
-        .args(["branch", "--list"]).current_dir(&cwd).output().await;
-    let branch_count = bc_out.ok()
+        .args(["branch", "--list"])
+        .current_dir(&cwd)
+        .output()
+        .await;
+    let branch_count = bc_out
+        .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).lines().count() as u32)
         .unwrap_or(0);
 
     // Tag count
     let tc_out = tokio::process::Command::new("git")
-        .args(["tag", "--list"]).current_dir(&cwd).output().await;
-    let tag_count = tc_out.ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.is_empty()).count() as u32)
+        .args(["tag", "--list"])
+        .current_dir(&cwd)
+        .output()
+        .await;
+    let tag_count = tc_out
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .count() as u32
+        })
         .unwrap_or(0);
 
     // Repo size
     let size_out = tokio::process::Command::new("du")
-        .args(["-sh", ".git"]).current_dir(&cwd).output().await;
-    let repo_size = size_out.ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).split('\t').next().unwrap_or("?").trim().to_string())
+        .args(["-sh", ".git"])
+        .current_dir(&cwd)
+        .output()
+        .await;
+    let repo_size = size_out
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split('\t')
+                .next()
+                .unwrap_or("?")
+                .trim()
+                .to_string()
+        })
         .unwrap_or_else(|| "?".to_string());
 
     // Last commit
     let last_out = tokio::process::Command::new("git")
-        .args(["log", "-1", "--format=%H%x00%h%x00%s%x00%an%x00%aI%x00%P%x00%D"])
-        .current_dir(&cwd).output().await;
-    let last_commit = last_out.ok()
-        .and_then(|o| parse_log_output(&String::from_utf8_lossy(&o.stdout)).into_iter().next());
+        .args([
+            "log",
+            "-1",
+            "--format=%H%x00%h%x00%s%x00%an%x00%aI%x00%P%x00%D",
+        ])
+        .current_dir(&cwd)
+        .output()
+        .await;
+    let last_commit = last_out.ok().and_then(|o| {
+        parse_log_output(&String::from_utf8_lossy(&o.stdout))
+            .into_iter()
+            .next()
+    });
 
-    send_message(tx, ServerMessage::GitRepoInfoResult {
-        remotes, total_commits, current_branch, branch_count, tag_count, repo_size, last_commit,
-    }).await?;
+    send_message(
+        tx,
+        ServerMessage::GitRepoInfoResult {
+            remotes,
+            total_commits,
+            current_branch,
+            branch_count,
+            tag_count,
+            repo_size,
+            last_commit,
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -1136,7 +1471,10 @@ async fn handle_git_amend(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let mut args = vec!["commit", "--amend"];
     let msg;
@@ -1148,7 +1486,10 @@ async fn handle_git_amend(
         args.push("--no-edit");
     }
     let output = tokio::process::Command::new("git")
-        .args(&args).current_dir(&cwd).output().await;
+        .args(&args)
+        .current_dir(&cwd)
+        .output()
+        .await;
     send_operation_result(tx, "amend", output).await
 }
 
@@ -1162,7 +1503,10 @@ async fn handle_git_list_tags(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let output = tokio::process::Command::new("git")
         .args(["tag", "-l", "--format=%(objectname:short)%00%(refname:short)%00%(contents:subject)%00%(creatordate:iso-strict)%00%(objecttype)"])
@@ -1171,19 +1515,37 @@ async fn handle_git_list_tags(
     match output {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            let tags: Vec<GitTagInfo> = stdout.lines().filter(|l| !l.is_empty()).map(|line| {
-                let parts: Vec<&str> = line.split('\0').collect();
-                GitTagInfo {
-                    hash: parts.first().unwrap_or(&"").to_string(),
-                    name: parts.get(1).unwrap_or(&"").to_string(),
-                    message: parts.get(2).filter(|s| !s.is_empty()).map(|s| s.to_string()),
-                    date: parts.get(3).filter(|s| !s.is_empty()).map(|s| s.to_string()),
-                    is_annotated: parts.get(4).map(|s| *s == "tag").unwrap_or(false),
-                }
-            }).collect();
+            let tags: Vec<GitTagInfo> = stdout
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|line| {
+                    let parts: Vec<&str> = line.split('\0').collect();
+                    GitTagInfo {
+                        hash: parts.first().unwrap_or(&"").to_string(),
+                        name: parts.get(1).unwrap_or(&"").to_string(),
+                        message: parts
+                            .get(2)
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string()),
+                        date: parts
+                            .get(3)
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string()),
+                        is_annotated: parts.get(4).map(|s| *s == "tag").unwrap_or(false),
+                    }
+                })
+                .collect();
             send_message(tx, ServerMessage::GitTagsResult { tags }).await?;
         }
-        Err(e) => { send_message(tx, ServerMessage::Error { message: format!("git tag list failed: {}", e) }).await?; }
+        Err(e) => {
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git tag list failed: {}", e),
+                },
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -1198,7 +1560,10 @@ async fn handle_git_create_tag(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let mut args = vec!["tag".to_string()];
     if let Some(ref m) = message {
@@ -1209,10 +1574,15 @@ async fn handle_git_create_tag(
     } else {
         args.push(name.clone());
     }
-    if let Some(ref h) = commit_hash { args.push(h.clone()); }
+    if let Some(ref h) = commit_hash {
+        args.push(h.clone());
+    }
 
     let output = tokio::process::Command::new("git")
-        .args(&args).current_dir(&cwd).output().await;
+        .args(&args)
+        .current_dir(&cwd)
+        .output()
+        .await;
     send_operation_result(tx, "create-tag", output).await
 }
 
@@ -1224,10 +1594,16 @@ async fn handle_git_delete_tag(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let output = tokio::process::Command::new("git")
-        .args(["tag", "-d", &name]).current_dir(&cwd).output().await;
+        .args(["tag", "-d", &name])
+        .current_dir(&cwd)
+        .output()
+        .await;
     send_operation_result(tx, "delete-tag", output).await
 }
 
@@ -1243,29 +1619,45 @@ async fn handle_git_resolve_conflict(
 ) -> anyhow::Result<()> {
     let cwd = match resolve_cwd(&session_name, &path) {
         Ok(c) => c,
-        Err(e) => { send_message(tx, ServerMessage::Error { message: e }).await?; return Ok(()); }
+        Err(e) => {
+            send_message(tx, ServerMessage::Error { message: e }).await?;
+            return Ok(());
+        }
     };
     let strategy = match resolution.as_str() {
         "ours" => "--ours",
         "theirs" => "--theirs",
         _ => {
-            send_message(tx, ServerMessage::GitOperationResult {
-                operation: "resolve-conflict".to_string(), success: false,
-                message: None, error: Some(format!("Unknown resolution: {}. Use 'ours' or 'theirs'", resolution)),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::GitOperationResult {
+                    operation: "resolve-conflict".to_string(),
+                    success: false,
+                    message: None,
+                    error: Some(format!(
+                        "Unknown resolution: {}. Use 'ours' or 'theirs'",
+                        resolution
+                    )),
+                },
+            )
+            .await?;
             return Ok(());
         }
     };
     let checkout = tokio::process::Command::new("git")
         .args(["checkout", strategy, "--", &file_path])
-        .current_dir(&cwd).output().await;
+        .current_dir(&cwd)
+        .output()
+        .await;
 
     if let Ok(ref out) = checkout {
         if out.status.success() {
             // Stage the resolved file
             let _ = tokio::process::Command::new("git")
                 .args(["add", "--", &file_path])
-                .current_dir(&cwd).output().await;
+                .current_dir(&cwd)
+                .output()
+                .await;
         }
     }
     send_operation_result(tx, "resolve-conflict", checkout).await
@@ -1275,20 +1667,30 @@ async fn handle_git_resolve_conflict(
 // shared log parser
 // ---------------------------------------------------------------------------
 fn parse_log_output(stdout: &str) -> Vec<GitCommitInfo> {
-    stdout.lines().filter(|l| !l.is_empty()).filter_map(|line| {
-        let parts: Vec<&str> = line.split('\0').collect();
-        if parts.len() >= 7 {
-            Some(GitCommitInfo {
-                hash: parts[0].to_string(),
-                short_hash: parts[1].to_string(),
-                message: parts[2].to_string(),
-                author: parts[3].to_string(),
-                date: parts[4].to_string(),
-                parents: parts[5].split_whitespace().map(|s| s.to_string()).collect(),
-                refs: if parts[6].is_empty() { vec![] } else { parts[6].split(", ").map(|s| s.to_string()).collect() },
-            })
-        } else { None }
-    }).collect()
+    stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\0').collect();
+            if parts.len() >= 7 {
+                Some(GitCommitInfo {
+                    hash: parts[0].to_string(),
+                    short_hash: parts[1].to_string(),
+                    message: parts[2].to_string(),
+                    author: parts[3].to_string(),
+                    date: parts[4].to_string(),
+                    parents: parts[5].split_whitespace().map(|s| s.to_string()).collect(),
+                    refs: if parts[6].is_empty() {
+                        vec![]
+                    } else {
+                        parts[6].split(", ").map(|s| s.to_string()).collect()
+                    },
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1310,13 +1712,25 @@ async fn handle_git_commit_files(
 
     // Get file list with status and numstat in one shot
     let output = tokio::process::Command::new("git")
-        .args(["diff-tree", "--no-commit-id", "-r", "--name-status", &commit_hash])
+        .args([
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--name-status",
+            &commit_hash,
+        ])
         .current_dir(&cwd)
         .output()
         .await;
 
     let numstat_output = tokio::process::Command::new("git")
-        .args(["diff-tree", "--no-commit-id", "-r", "--numstat", &commit_hash])
+        .args([
+            "diff-tree",
+            "--no-commit-id",
+            "-r",
+            "--numstat",
+            &commit_hash,
+        ])
         .current_dir(&cwd)
         .output()
         .await;
@@ -1327,7 +1741,8 @@ async fn handle_git_commit_files(
             let numstat_str = String::from_utf8_lossy(&numstat_out.stdout);
 
             // Parse numstat into a map: file -> (adds, dels)
-            let mut stats: std::collections::HashMap<String, (Option<u32>, Option<u32>)> = std::collections::HashMap::new();
+            let mut stats: std::collections::HashMap<String, (Option<u32>, Option<u32>)> =
+                std::collections::HashMap::new();
             for line in numstat_str.lines() {
                 let parts: Vec<&str> = line.split('\t').collect();
                 if parts.len() >= 3 {
@@ -1339,12 +1754,15 @@ async fn handle_git_commit_files(
 
             let mut files = Vec::new();
             for line in status_str.lines() {
-                if line.is_empty() { continue; }
+                if line.is_empty() {
+                    continue;
+                }
                 let parts: Vec<&str> = line.split('\t').collect();
                 if parts.len() >= 2 {
                     let status = parts[0].chars().next().unwrap_or('M').to_string();
                     let file_path = parts[1].to_string();
-                    let (additions, deletions) = stats.get(&file_path).copied().unwrap_or((None, None));
+                    let (additions, deletions) =
+                        stats.get(&file_path).copied().unwrap_or((None, None));
                     files.push(GitFileChange {
                         path: file_path,
                         status,
@@ -1354,16 +1772,21 @@ async fn handle_git_commit_files(
                 }
             }
 
-            send_message(tx, ServerMessage::GitCommitFilesResult {
-                commit_hash,
-                files,
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::GitCommitFilesResult { commit_hash, files },
+            )
+            .await?;
         }
         (Err(e), _) | (_, Err(e)) => {
             error!("git diff-tree failed: {}", e);
-            send_message(tx, ServerMessage::Error {
-                message: format!("git diff-tree failed: {}", e),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git diff-tree failed: {}", e),
+                },
+            )
+            .await?;
         }
     }
     Ok(())
@@ -1388,7 +1811,12 @@ async fn handle_git_commit_diff(
     };
 
     let output = tokio::process::Command::new("git")
-        .args(["diff", &format!("{}^..{}", commit_hash, commit_hash), "--", &file_path])
+        .args([
+            "diff",
+            &format!("{}^..{}", commit_hash, commit_hash),
+            "--",
+            &file_path,
+        ])
         .current_dir(&cwd)
         .output()
         .await;
@@ -1405,18 +1833,26 @@ async fn handle_git_commit_diff(
                     deletions += 1;
                 }
             }
-            send_message(tx, ServerMessage::GitDiffResult {
-                file_path,
-                diff,
-                additions,
-                deletions,
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::GitDiffResult {
+                    file_path,
+                    diff,
+                    additions,
+                    deletions,
+                },
+            )
+            .await?;
         }
         Err(e) => {
             error!("git diff for commit failed: {}", e);
-            send_message(tx, ServerMessage::Error {
-                message: format!("git diff failed: {}", e),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::Error {
+                    message: format!("git diff failed: {}", e),
+                },
+            )
+            .await?;
         }
     }
     Ok(())
@@ -1436,24 +1872,40 @@ async fn send_operation_result(
             let success = out.status.success();
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            let message = if stdout.is_empty() { None } else { Some(stdout) };
-            let error = if success || stderr.is_empty() { None } else { Some(stderr) };
+            let message = if stdout.is_empty() {
+                None
+            } else {
+                Some(stdout)
+            };
+            let error = if success || stderr.is_empty() {
+                None
+            } else {
+                Some(stderr)
+            };
 
-            send_message(tx, ServerMessage::GitOperationResult {
-                operation: operation.to_string(),
-                success,
-                message,
-                error,
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::GitOperationResult {
+                    operation: operation.to_string(),
+                    success,
+                    message,
+                    error,
+                },
+            )
+            .await?;
         }
         Err(e) => {
             error!("git {} failed: {}", operation, e);
-            send_message(tx, ServerMessage::GitOperationResult {
-                operation: operation.to_string(),
-                success: false,
-                message: None,
-                error: Some(format!("Failed to execute git: {}", e)),
-            }).await?;
+            send_message(
+                tx,
+                ServerMessage::GitOperationResult {
+                    operation: operation.to_string(),
+                    success: false,
+                    message: None,
+                    error: Some(format!("Failed to execute git: {}", e)),
+                },
+            )
+            .await?;
         }
     }
     Ok(())

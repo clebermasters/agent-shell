@@ -71,7 +71,10 @@ pub async fn list_notifications(
     Query(query): Query<ListQuery>,
 ) -> Json<ListResponse> {
     let limit = query.limit.unwrap_or(50);
-    let notifications = state.notification_store.list(limit + 1, query.before).unwrap_or_default();
+    let notifications = state
+        .notification_store
+        .list(limit + 1, query.before)
+        .unwrap_or_default();
     let has_more = notifications.len() > limit;
 
     let notifications: Vec<NotificationListItem> = notifications
@@ -89,7 +92,10 @@ pub async fn list_notifications(
             } else {
                 vec![]
             };
-            NotificationListItem { notification: n, files }
+            NotificationListItem {
+                notification: n,
+                files,
+            }
         })
         .collect();
 
@@ -110,16 +116,15 @@ pub async fn create_notification(
     let mut files = Vec::new();
     for file_req in &req.files {
         let file_id = Uuid::new_v4().to_string();
-        let file_dir = PathBuf::from(&base_dir)
-            .join("notifications")
-            .join(&id);
-        
+        let file_dir = PathBuf::from(&base_dir).join("notifications").join(&id);
+
         std::fs::create_dir_all(&file_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let file_path = file_dir.join(&file_req.filename);
-        let decoded = STANDARD.decode(&file_req.data)
+        let decoded = STANDARD
+            .decode(&file_req.data)
             .map_err(|_| StatusCode::BAD_REQUEST)?;
-        
+
         std::fs::write(&file_path, &decoded).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let notification_file = NotificationFile {
@@ -144,7 +149,9 @@ pub async fn create_notification(
         file_count: req.files.len() as i32,
     };
 
-    state.notification_store.insert(&notification, files)
+    state
+        .notification_store
+        .insert(&notification, files)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let broadcast_msg = ServerMessage::NotificationEvent {
@@ -161,7 +168,10 @@ pub async fn create_notification(
     };
     state.client_manager.broadcast(broadcast_msg).await;
 
-    Ok((StatusCode::CREATED, Json(CreateResponse { id, received: true })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateResponse { id, received: true }),
+    ))
 }
 
 pub async fn mark_read(
@@ -185,9 +195,7 @@ pub async fn delete_notification(
     Json(DeleteResponse { success })
 }
 
-pub async fn delete_all_notifications(
-    State(state): State<Arc<AppState>>,
-) -> Json<DeleteResponse> {
+pub async fn delete_all_notifications(State(state): State<Arc<AppState>>) -> Json<DeleteResponse> {
     let success = state.notification_store.delete_all().is_ok();
     Json(DeleteResponse { success })
 }

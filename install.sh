@@ -8,6 +8,54 @@ BACKEND_PORT=4010
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$PROJECT_DIR/.env"
 
+get_user_home() {
+    local user="$1"
+    local home
+    home=$(getent passwd "$user" 2>/dev/null | cut -d: -f6)
+    if [ -z "$home" ]; then
+        home=$(eval echo "~$user")
+    fi
+    echo "$home"
+}
+
+build_service_path() {
+    local user="$1"
+    local user_home="$2"
+    local path_list=()
+    local codex_bin=""
+    local opencode_bin=""
+    local bun_bin=""
+
+    if command -v sudo >/dev/null 2>&1; then
+        codex_bin=$(sudo -u "$user" bash -lc 'command -v codex 2>/dev/null || true')
+        opencode_bin=$(sudo -u "$user" bash -lc 'command -v opencode 2>/dev/null || true')
+        bun_bin=$(sudo -u "$user" bash -lc 'command -v bun 2>/dev/null || true')
+    else
+        codex_bin=$(command -v codex 2>/dev/null || true)
+        opencode_bin=$(command -v opencode 2>/dev/null || true)
+        bun_bin=$(command -v bun 2>/dev/null || true)
+    fi
+
+    [ -n "$codex_bin" ] && path_list+=("$(dirname "$codex_bin")")
+    [ -n "$opencode_bin" ] && path_list+=("$(dirname "$opencode_bin")")
+    [ -n "$bun_bin" ] && path_list+=("$(dirname "$bun_bin")")
+    path_list+=(
+        "$user_home/.local/bin"
+        "$user_home/.npm-global/bin"
+        "$user_home/.opencode/bin"
+        "$user_home/.bun/bin"
+        "$user_home/.cargo/bin"
+        "/usr/local/bin"
+        "/usr/bin"
+        "/bin"
+    )
+
+    awk '
+        BEGIN { RS=":"; ORS=":" }
+        NF && !seen[$0]++ { print $0 }
+    ' <<< "$(IFS=:; echo "${path_list[*]}")" | sed 's/:$//'
+}
+
 # Read AUTH_TOKEN from .env if not already set
 if [ -z "$AUTH_TOKEN" ] && [ -f "$ENV_FILE" ]; then
     AUTH_TOKEN=$(grep -E '^AUTH_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | xargs)
@@ -25,8 +73,13 @@ else
     SERVICE_USER=$(whoami)
 fi
 
+SERVICE_HOME="$(get_user_home "$SERVICE_USER")"
+SERVICE_PATH="$(build_service_path "$SERVICE_USER" "$SERVICE_HOME")"
+
 echo "Installation directory: $INSTALL_DIR"
 echo "Service user: $SERVICE_USER"
+echo "Service home: $SERVICE_HOME"
+echo "Service PATH: $SERVICE_PATH"
 if [ -n "$AUTH_TOKEN" ]; then
     echo "AUTH_TOKEN: set (${#AUTH_TOKEN} chars)"
 else
@@ -72,7 +125,7 @@ WorkingDirectory=$INSTALL_DIR/backend
 ExecStart=$INSTALL_DIR/backend/agentshell-backend
 Environment="RUST_LOG=info"
 Environment="AUTH_TOKEN=$AUTH_TOKEN"
-Environment="PATH=/home/cleber_rodrigues/.opencode/bin:/home/cleber_rodrigues/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=$SERVICE_PATH"
 Restart=always
 RestartSec=5
 StandardOutput=journal

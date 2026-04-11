@@ -21,7 +21,7 @@ impl ChatClearStore {
     pub fn new(data_dir: &PathBuf) -> Self {
         let path = data_dir.join("chat_clear_state.json");
         let state = Self::load_from_file(&path).unwrap_or_default();
-        
+
         Self {
             path,
             state: Arc::new(RwLock::new(state)),
@@ -32,20 +32,18 @@ impl ChatClearStore {
         if !path.exists() {
             return None;
         }
-        
+
         match fs::read_to_string(path) {
-            Ok(content) => {
-                match serde_json::from_str(&content) {
-                    Ok(state) => {
-                        debug!("Loaded chat clear state from {:?}", path);
-                        Some(state)
-                    }
-                    Err(e) => {
-                        warn!("Failed to parse chat clear state: {}", e);
-                        None
-                    }
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(state) => {
+                    debug!("Loaded chat clear state from {:?}", path);
+                    Some(state)
                 }
-            }
+                Err(e) => {
+                    warn!("Failed to parse chat clear state: {}", e);
+                    None
+                }
+            },
             Err(e) => {
                 warn!("Failed to read chat clear state file: {}", e);
                 None
@@ -72,7 +70,10 @@ impl ChatClearStore {
         let key = format!("{}:{}", session_name, window_index);
         let mut state = self.state.write().await;
         state.cleared_at.insert(key, timestamp);
-        info!("Set clear timestamp for {}:{} to {}", session_name, window_index, timestamp);
+        info!(
+            "Set clear timestamp for {}:{} to {}",
+            session_name, window_index, timestamp
+        );
         self.save_to_file(&state).await;
     }
 

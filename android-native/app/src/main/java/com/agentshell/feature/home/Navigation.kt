@@ -36,7 +36,7 @@ import com.agentshell.feature.terminal.TerminalScreen
 object Routes {
     const val HOME = "home"
     const val TERMINAL = "terminal/{sessionName}?isSwipeNav={isSwipeNav}"
-    const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}&isSwipeNav={isSwipeNav}"
+    const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}&isSwipeNav={isSwipeNav}&cwd={cwd}"
     const val SETTINGS = "settings"
     const val DEBUG = "debug"
     const val ALERTS = "alerts"
@@ -55,7 +55,16 @@ object Routes {
     }
     fun splitScreen(layoutId: String? = null) = if (layoutId != null) "split_screen?layoutId=$layoutId" else "split_screen"
     fun terminal(sessionName: String, isSwipeNav: Boolean = false) = "terminal/$sessionName?isSwipeNav=$isSwipeNav"
-    fun chat(sessionName: String, windowIndex: Int, isAcp: Boolean = false, isSwipeNav: Boolean = false) = "chat/$sessionName/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav"
+    fun chat(
+        sessionName: String,
+        windowIndex: Int,
+        isAcp: Boolean = false,
+        isSwipeNav: Boolean = false,
+        cwd: String = "",
+    ): String {
+        val encodedCwd = android.net.Uri.encode(cwd, "")
+        return "chat/$sessionName/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav&cwd=$encodedCwd"
+    }
     fun fileBrowser(path: String = "/") = "file_browser?path=$path"
     fun cronEditor(jobId: String? = null) = if (jobId != null) "cron_editor?jobId=$jobId" else "cron_editor"
     fun dotfileEditor() = DOTFILE_EDITOR
@@ -74,7 +83,7 @@ fun AgentShellNavHost() {
             HomeScreen(
                 onNavigateToTerminal = { name -> navController.navigate(Routes.terminal(name)) },
                 onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
-                onNavigateToAcpChat = { id, _ -> navController.navigate(Routes.chat(id, 0, isAcp = true)) },
+                onNavigateToAcpChat = { id, cwd -> navController.navigate(Routes.chat(id, 0, isAcp = true, cwd = cwd)) },
                 onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
                 onNavigateToAlerts = { navController.navigate(Routes.ALERTS) },
                 onNavigateToHosts = { navController.navigate(Routes.HOST_SELECTION) },
@@ -83,7 +92,7 @@ fun AgentShellNavHost() {
                     SessionsScreen(
                         onNavigateToTerminal = { name -> navController.navigate(Routes.terminal(name)) },
                         onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
-                        onNavigateToAcpChat = { id, _ -> navController.navigate(Routes.chat(id, 0, isAcp = true)) },
+                        onNavigateToAcpChat = { id, cwd -> navController.navigate(Routes.chat(id, 0, isAcp = true, cwd = cwd)) },
                         onNavigateToHosts = { navController.navigate(Routes.HOST_SELECTION) },
                         onNavigateToGit = { name, path, isAcp -> navController.navigate(Routes.git(name, path, isAcp)) },
                     )
@@ -151,16 +160,19 @@ fun AgentShellNavHost() {
                 navArgument("windowIndex") { type = NavType.IntType; defaultValue = 0 },
                 navArgument("isAcp") { type = NavType.BoolType; defaultValue = false },
                 navArgument("isSwipeNav") { type = NavType.BoolType; defaultValue = false },
+                navArgument("cwd") { type = NavType.StringType; defaultValue = "" },
             ),
         ) { backStackEntry ->
             val sessionName = backStackEntry.arguments?.getString("sessionName") ?: ""
             val windowIndex = backStackEntry.arguments?.getInt("windowIndex") ?: 0
             val isAcp = backStackEntry.arguments?.getBoolean("isAcp") ?: false
             val isSwipeNav = backStackEntry.arguments?.getBoolean("isSwipeNav") ?: false
+            val cwd = backStackEntry.arguments?.getString("cwd") ?: ""
             ChatScreen(
                 sessionName = sessionName,
                 windowIndex = windowIndex,
                 isAcp = isAcp,
+                cwd = cwd,
                 isSwipeNavigation = isSwipeNav,
                 onNavigateBack = { navController.popBackStack() },
                 onSwitchToTerminal = { name ->

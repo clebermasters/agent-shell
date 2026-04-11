@@ -507,6 +507,7 @@ pub fn list_all_sessions(db_path: &Path) -> Result<Vec<crate::acp::session::Sess
                 cwd: directory,
                 title,
                 updated_at,
+                provider: Some("opencode".to_string()),
             }
         })
         .collect();

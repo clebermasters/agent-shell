@@ -126,6 +126,7 @@ class SessionsViewModel @Inject constructor(
                                 cwd = s["cwd"] as? String ?: "",
                                 title = s["title"] as? String ?: "",
                                 updatedAt = s["updatedAt"] as? String ?: "",
+                                provider = s["provider"] as? String,
                             )
                         }
                         _uiState.update { it.copy(acpSessions = sessions, isLoading = false) }
@@ -135,12 +136,18 @@ class SessionsViewModel @Inject constructor(
                         val sessionId = message["sessionId"] as? String
                         val cwd = message["cwd"] as? String
                         if (sessionId != null && cwd != null) {
+                            _uiState.update { it.copy(error = null) }
                             viewModelScope.launch {
                                 delay(300)
                                 requestSessions()
                             }
                             _newAcpSession.emit(NewAcpSessionEvent(sessionId, cwd))
                         }
+                    }
+
+                    "acp-error" -> {
+                        val error = message["message"] as? String ?: "Failed to create direct session"
+                        _uiState.update { it.copy(error = error, isLoading = false) }
                     }
 
                     "acp-session-deleted" -> {
@@ -377,9 +384,14 @@ class SessionsViewModel @Inject constructor(
         }
     }
 
-    fun createAcpSession(cwd: String) {
-        wsService.selectBackend("acp")
-        wsService.acpCreateSession(cwd)
+    fun createAcpSession(cwd: String, backend: String = "opencode") {
+        _uiState.update { it.copy(error = null) }
+        wsService.selectBackend(backend)
+        wsService.acpCreateSession(cwd, backend)
+    }
+
+    fun clearError() {
+        _uiState.update { it.copy(error = null) }
     }
 
     fun killSession(sessionName: String) {

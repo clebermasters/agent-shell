@@ -200,7 +200,9 @@ pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
 
     for line in data.lines().rev() {
         let trimmed = line.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let v: serde_json::Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(_) => continue,
@@ -213,10 +215,23 @@ pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
             Some(u) => u,
             None => continue,
         };
-        let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let cache_read = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let cache_create = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let model = msg.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+        let input = usage
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let cache_read = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let cache_create = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let model = msg
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .to_string();
         last_input = Some((input + cache_read + cache_create, model));
         break;
     }
@@ -232,9 +247,17 @@ pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
         let is_max = dirs::home_dir()
             .and_then(|h| std::fs::read_to_string(h.join(".claude/.credentials.json")).ok())
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| v["claudeAiOauth"]["subscriptionType"].as_str().map(|s| s == "max"))
+            .and_then(|v| {
+                v["claudeAiOauth"]["subscriptionType"]
+                    .as_str()
+                    .map(|s| s == "max")
+            })
             .unwrap_or(false);
-        if is_max && model.contains("opus") { 1_000_000 } else { 200_000 }
+        if is_max && model.contains("opus") {
+            1_000_000
+        } else {
+            200_000
+        }
     };
     // Friendly model name: "claude-opus-4-6" → "Opus 4.6"
     let friendly_model = model

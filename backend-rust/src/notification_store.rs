@@ -223,7 +223,10 @@ impl NotificationStore {
         Ok(file)
     }
 
-    pub fn list_files_for_notification(&self, notification_id: &str) -> Result<Vec<NotificationFile>> {
+    pub fn list_files_for_notification(
+        &self,
+        notification_id: &str,
+    ) -> Result<Vec<NotificationFile>> {
         let conn = Connection::open(&self.db_path).with_context(|| {
             format!(
                 "failed to open notifications db: {}",

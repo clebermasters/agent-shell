@@ -1,6 +1,8 @@
 package com.agentshell.feature.chat
 
 import android.app.Application
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -34,6 +36,7 @@ import com.agentshell.data.services.WhisperService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -68,8 +71,14 @@ data class AttachedFile(
     val sizeBytes: Long,
 )
 
+private data class PendingAcpChunk(
+    val sessionId: String,
+    val isThinking: Boolean,
+    val content: StringBuilder = StringBuilder(),
+)
+
 data class ChatUiState(
-    val messages: List<ChatMessage> = emptyList(),
+    val messages: SnapshotStateList<ChatMessage> = mutableStateListOf(),
     val isLoading: Boolean = true,
     val isLoadingMore: Boolean = false,
     val isStreaming: Boolean = false,
@@ -137,6 +146,84 @@ class ChatViewModel @Inject constructor(
     private val _cwdResult = MutableSharedFlow<String>(replay = 1)
 
     private var messageCollectionJob: Job? = null
+    private var pendingAcpChunk: PendingAcpChunk? = null
+    private var acpChunkFlushJob: Job? = null
+
+    private fun newMessageList(messages: List<ChatMessage> = emptyList()): SnapshotStateList<ChatMessage> =
+        mutableStateListOf<ChatMessage>().apply { addAll(messages) }
+
+    private fun replaceMessages(messages: List<ChatMessage>) {
+        val target = _uiState.value.messages
+        target.clear()
+        target.addAll(messages)
+    }
+
+    private fun prependMessages(messages: List<ChatMessage>) {
+        if (messages.isEmpty()) return
+        _uiState.value.messages.addAll(0, messages)
+    }
+
+    private fun rawAcpSessionId(sessionName: String): String = sessionName.removePrefix("acp_")
+
+    private fun directBackendForSession(sessionId: String): String =
+        if (rawAcpSessionId(sessionId).startsWith("codex:")) "codex" else "opencode"
+
+    private fun matchesAcpSession(messageSessionId: String, currentSessionName: String): Boolean {
+        val rawStateSessionId = rawAcpSessionId(currentSessionName)
+        return messageSessionId == currentSessionName ||
+            messageSessionId == rawStateSessionId ||
+            "acp_$messageSessionId" == currentSessionName
+    }
+
+    private fun clearPendingAcpChunk() {
+        acpChunkFlushJob?.cancel()
+        acpChunkFlushJob = null
+        pendingAcpChunk = null
+    }
+
+    private fun flushPendingAcpChunk() {
+        acpChunkFlushJob?.cancel()
+        acpChunkFlushJob = null
+        val pending = pendingAcpChunk ?: return
+        pendingAcpChunk = null
+        applyAcpMessageChunk(
+            sessionId = pending.sessionId,
+            content = pending.content.toString(),
+            isThinking = pending.isThinking,
+        )
+    }
+
+    private fun enqueueAcpChunk(sessionId: String, content: String, isThinking: Boolean) {
+        val pending = pendingAcpChunk
+        if (pending != null &&
+            (pending.sessionId != sessionId || pending.isThinking != isThinking)
+        ) {
+            flushPendingAcpChunk()
+        }
+
+        val current = pendingAcpChunk
+        if (current == null) {
+            pendingAcpChunk = PendingAcpChunk(
+                sessionId = sessionId,
+                isThinking = isThinking,
+                content = StringBuilder(content),
+            )
+        } else {
+            current.content.append(content)
+        }
+
+        if (acpChunkFlushJob?.isActive != true) {
+            acpChunkFlushJob = viewModelScope.launch {
+                delay(50)
+                flushPendingAcpChunk()
+            }
+        }
+    }
+
+    private fun acpToolMessageId(kind: String, toolCallId: String): String {
+        val normalized = toolCallId.ifBlank { UUID.randomUUID().toString() }
+        return "$kind:$normalized"
+    }
 
     // -------------------------------------------------------------------------
     // Initialisation / lifecycle
@@ -178,13 +265,14 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching a TMUX chat log. */
     fun watchChatLog(sessionName: String, windowIndex: Int) {
+        clearPendingAcpChunk()
         _uiState.update {
             it.copy(
                 sessionName = sessionName,
                 windowIndex = windowIndex,
                 isAcp = false,
                 isLoading = true,
-                messages = emptyList(),
+                messages = newMessageList(),
                 error = null,
             )
         }
@@ -194,6 +282,7 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching an ACP chat session. */
     fun startAcpChat(sessionName: String, cwd: String) {
+        clearPendingAcpChunk()
         val sessionKey = "acp_$sessionName"
         _uiState.update {
             it.copy(
@@ -201,13 +290,15 @@ class ChatViewModel @Inject constructor(
                 windowIndex = 0,
                 isAcp = true,
                 isLoading = true,
-                messages = emptyList(),
+                messages = newMessageList(),
                 error = null,
                 pendingPermission = null,
             )
         }
-        webSocketService.selectBackend("acp")
-        webSocketService.acpResumeSession(sessionName, cwd)
+        webSocketService.selectBackend(directBackendForSession(sessionName))
+        if (cwd.isNotBlank()) {
+            webSocketService.acpResumeSession(sessionName, cwd)
+        }
         webSocketService.watchAcpChatLog(sessionName, limit = 30)
     }
 
@@ -270,7 +361,7 @@ class ChatViewModel @Inject constructor(
                         // Optimistically add a user message for the file send
                         val prompt = trimmed.ifEmpty { "[File: ${file.filename}]" }
                         val userMsg = buildUserMessage(prompt)
-                        _uiState.update { it.copy(messages = it.messages + userMsg) }
+                        _uiState.value.messages.add(userMsg)
                     }
                 } finally {
                     _uiState.update { it.copy(attachedFile = null, isUploading = false, draftMessage = "") }
@@ -288,7 +379,7 @@ class ChatViewModel @Inject constructor(
         if (state.isAcp) {
             // ACP: optimistic local add (backend doesn't echo user messages back)
             val userMsg = buildUserMessage(trimmed)
-            _uiState.update { it.copy(messages = it.messages + userMsg) }
+            _uiState.value.messages.add(userMsg)
             val rawId = state.sessionName.removePrefix("acp_")
             webSocketService.acpSendPrompt(rawId, trimmed)
         } else {
@@ -312,10 +403,10 @@ class ChatViewModel @Inject constructor(
         val state = _uiState.value
         if (state.isLoadingMore || !state.hasMoreMessages || state.isLoading) return
         _uiState.update { it.copy(isLoadingMore = true) }
-        webSocketService.loadMoreChatHistory(
-            sessionName = state.sessionName,
-            windowIndex = state.windowIndex,
-            offset = state.messages.size,
+            webSocketService.loadMoreChatHistory(
+                sessionName = state.sessionName,
+                windowIndex = state.windowIndex,
+                offset = state.messages.size,
             limit = 50,
         )
     }
@@ -447,7 +538,10 @@ class ChatViewModel @Inject constructor(
                     "acp-tool-result"    -> handleAcpToolResult(message)
                     "acp-permission-request" -> handleAcpPermissionRequest(message)
                     "acp-prompt-done"    -> handleAcpPromptDone(message)
-                    "acp-error"          -> _uiState.update { it.copy(error = message["message"]?.toString()) }
+                    "acp-error"          -> {
+                        flushPendingAcpChunk()
+                        _uiState.update { it.copy(error = message["message"]?.toString()) }
+                    }
                     "acp-history-loaded" -> handleAcpHistoryLoaded(message)
                     else                 -> { /* unhandled type — ignore */ }
                 }
@@ -460,6 +554,7 @@ class ChatViewModel @Inject constructor(
     // -------------------------------------------------------------------------
 
     private fun handleChatHistory(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val sessionName = (message["sessionName"] ?: message["session-name"]) as? String ?: return
         val windowIndex = (message["windowIndex"] ?: message["window-index"])?.let {
             (it as? Number)?.toInt()
@@ -482,7 +577,6 @@ class ChatViewModel @Inject constructor(
 
         _uiState.update {
             it.copy(
-                messages = parsed,
                 isLoading = false,
                 error = null,
                 totalMessageCount = totalCount,
@@ -492,6 +586,7 @@ class ChatViewModel @Inject constructor(
                 modelName = model ?: it.modelName,
             )
         }
+        replaceMessages(parsed)
 
         when (tool) {
             "claude" -> systemRepository.requestClaudeUsage()
@@ -500,6 +595,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun handleChatHistoryChunk(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val sessionName = (message["sessionName"] ?: message["session-name"]) as? String ?: return
         val windowIndex = (message["windowIndex"] ?: message["window-index"])?.let {
             (it as? Number)?.toInt()
@@ -515,16 +611,12 @@ class ChatViewModel @Inject constructor(
         }
         val hasMore = message["hasMore"] as? Boolean ?: false
 
-        _uiState.update {
-            it.copy(
-                messages = newMessages + it.messages,
-                isLoadingMore = false,
-                hasMoreMessages = hasMore,
-            )
-        }
+        prependMessages(newMessages)
+        _uiState.update { it.copy(isLoadingMore = false, hasMoreMessages = hasMore) }
     }
 
     private fun handleChatEvent(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val sessionName = (message["sessionName"] ?: message["session-name"]) as? String ?: return
         val windowIndex = (message["windowIndex"] ?: message["window-index"])?.let {
             (it as? Number)?.toInt()
@@ -541,7 +633,7 @@ class ChatViewModel @Inject constructor(
         // Skip user messages from backend for live tmux events (already added locally).
         if (msg.messageType == ChatMessageType.USER && source != "webhook") return
 
-        val messages = _uiState.value.messages.toMutableList()
+        val messages = _uiState.value.messages
         if (messages.isNotEmpty() &&
             messages.last().messageType == ChatMessageType.ASSISTANT &&
             msg.messageType == ChatMessageType.ASSISTANT
@@ -554,10 +646,10 @@ class ChatViewModel @Inject constructor(
         } else {
             messages.add(msg)
         }
-        _uiState.update { it.copy(messages = messages) }
     }
 
     private fun handleChatFileMessage(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val sessionName = (message["sessionName"] ?: message["session-name"]) as? String ?: return
         val windowIndex = (message["windowIndex"] ?: message["window-index"])?.let {
             (it as? Number)?.toInt()
@@ -571,15 +663,17 @@ class ChatViewModel @Inject constructor(
         val msg = parseMessage(msgData)
 
         if (isDuplicateFileMessage(_uiState.value.messages, msg)) return
-        _uiState.update { it.copy(messages = it.messages + msg) }
+        _uiState.value.messages.add(msg)
     }
 
     private fun handleChatError(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val error = message["error"] as? String ?: "Unknown error"
         _uiState.update { it.copy(error = error, isLoading = false) }
     }
 
     private fun handleChatLogCleared(message: Map<String, Any?>) {
+        clearPendingAcpChunk()
         val sessionName = message["sessionName"] as? String ?: return
         val windowIndex = (message["windowIndex"] as? Number)?.toInt() ?: 0
         val success = message["success"] as? Boolean ?: false
@@ -615,13 +709,19 @@ class ChatViewModel @Inject constructor(
     private fun handleAcpMessageChunk(message: Map<String, Any?>) {
         val sessionId = message["sessionId"] as? String ?: return
         val state = _uiState.value
-        if (sessionId != state.sessionName) return
+        if (!matchesAcpSession(sessionId, state.sessionName)) return
 
         val content = message["content"] as? String ?: ""
         val isThinking = message["isThinking"] as? Boolean ?: false
         if (content.isEmpty()) return
 
-        val messages = state.messages.toMutableList()
+        enqueueAcpChunk(sessionId, content, isThinking)
+    }
+
+    private fun applyAcpMessageChunk(sessionId: String, content: String, isThinking: Boolean) {
+        val state = _uiState.value
+        if (!matchesAcpSession(sessionId, state.sessionName) || content.isEmpty()) return
+        val messages = state.messages
 
         if (isThinking) {
             // Merge consecutive thinking chunks into the same thinking block
@@ -668,13 +768,15 @@ class ChatViewModel @Inject constructor(
                 )
             }
         }
-
-        _uiState.update { it.copy(messages = messages, isStreaming = true) }
+        if (!state.isStreaming) {
+            _uiState.update { it.copy(isStreaming = true) }
+        }
     }
 
     private fun handleAcpToolCall(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val sessionId = message["sessionId"] as? String ?: return
-        if (sessionId != _uiState.value.sessionName) return
+        if (!matchesAcpSession(sessionId, _uiState.value.sessionName)) return
 
         val toolCallId = message["toolCallId"] as? String ?: ""
         val title = message["title"] as? String ?: "Unknown Tool"
@@ -691,36 +793,38 @@ class ChatViewModel @Inject constructor(
         } else null
 
         val chatMessage = ChatMessage(
-            id = toolCallId.ifEmpty { UUID.randomUUID().toString() },
+            id = acpToolMessageId("tool_call", toolCallId),
             type = "tool_call",
             blocks = listOf(
                 ChatBlock(type = "tool_call", toolName = title, summary = kind, input = inputMap)
             ),
             timestamp = System.currentTimeMillis(),
         )
-        _uiState.update { it.copy(messages = it.messages + chatMessage) }
+        _uiState.value.messages.add(chatMessage)
     }
 
     private fun handleAcpToolResult(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val sessionId = message["sessionId"] as? String ?: return
-        if (sessionId != _uiState.value.sessionName) return
+        if (!matchesAcpSession(sessionId, _uiState.value.sessionName)) return
 
         val toolCallId = message["toolCallId"] as? String ?: ""
         val status = message["status"] as? String ?: ""
         val output = message["output"] as? String ?: ""
 
         val chatMessage = ChatMessage(
-            id = toolCallId.ifEmpty { UUID.randomUUID().toString() },
+            id = acpToolMessageId("tool_result", toolCallId),
             type = "tool_result",
             blocks = listOf(
                 ChatBlock(type = "tool_result", toolName = "", content = output, summary = status)
             ),
             timestamp = System.currentTimeMillis(),
         )
-        _uiState.update { it.copy(messages = it.messages + chatMessage) }
+        _uiState.value.messages.add(chatMessage)
     }
 
     private fun handleAcpPermissionRequest(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val requestId = message["requestId"] as? String ?: ""
         val tool = message["tool"] as? String ?: "Unknown"
         val command = message["command"] as? String ?: ""
@@ -754,9 +858,10 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun handleAcpPromptDone(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val sessionId = message["sessionId"] as? String ?: return
         val state = _uiState.value
-        if (state.sessionName != "acp_$sessionId") return
+        if (!matchesAcpSession(sessionId, state.sessionName)) return
 
         val stopReason = message["stopReason"] as? String ?: ""
 
@@ -766,18 +871,22 @@ class ChatViewModel @Inject constructor(
             content = "Done (reason: $stopReason)",
             timestamp = System.currentTimeMillis(),
         )
-        _uiState.update {
-            it.copy(
-                messages = it.messages.map { m -> m.copy(isStreaming = false) } + doneMsg,
-                isStreaming = false,
-            )
+        val messages = _uiState.value.messages
+        for (index in messages.indices) {
+            val current = messages[index]
+            if (current.isStreaming) {
+                messages[index] = current.copy(isStreaming = false)
+            }
         }
+        messages.add(doneMsg)
+        _uiState.update { it.copy(isStreaming = false) }
     }
 
     private fun handleAcpHistoryLoaded(message: Map<String, Any?>) {
+        flushPendingAcpChunk()
         val sessionId = message["sessionId"] as? String ?: return
         val state = _uiState.value
-        if (state.sessionName != "acp_$sessionId") return
+        if (!matchesAcpSession(sessionId, state.sessionName)) return
 
         val messagesData = message["messages"] as? List<*> ?: emptyList<Any>()
         val parsed = messagesData.mapNotNull {
@@ -786,13 +895,8 @@ class ChatViewModel @Inject constructor(
         }
         val hasMore = message["hasMore"] as? Boolean ?: false
 
-        _uiState.update {
-            it.copy(
-                messages = parsed,
-                isLoading = false,
-                hasMoreMessages = hasMore,
-            )
-        }
+        replaceMessages(parsed)
+        _uiState.update { it.copy(isLoading = false, hasMoreMessages = hasMore) }
     }
 
     // -------------------------------------------------------------------------
@@ -920,6 +1024,7 @@ class ChatViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        clearPendingAcpChunk()
         super.onCleared()
         messageCollectionJob?.cancel()
     }

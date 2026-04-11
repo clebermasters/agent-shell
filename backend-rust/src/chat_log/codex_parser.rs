@@ -48,10 +48,7 @@ fn parse_event_msg(
     payload: &serde_json::Value,
     timestamp: Option<DateTime<Utc>>,
 ) -> Option<ChatMessage> {
-    let event_type = payload
-        .get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
+    let event_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
     match event_type {
         "user_message" => parse_user_message(payload, timestamp),
@@ -192,16 +189,14 @@ fn parse_response_item(
     payload: &serde_json::Value,
     timestamp: Option<DateTime<Utc>>,
 ) -> Option<ChatMessage> {
-    let item_type = payload
-        .get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
+    let item_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
     match item_type {
         "function_call" => parse_function_call(payload, timestamp),
         "function_call_output" => parse_function_call_output(payload, timestamp),
         "custom_tool_call" => parse_custom_tool_call(payload, timestamp),
         "web_search_call" => parse_web_search_call(payload, timestamp),
+        "reasoning" => parse_reasoning(payload, timestamp),
         _ => None,
     }
 }
@@ -301,6 +296,44 @@ fn parse_web_search_call(
     })
 }
 
+fn parse_reasoning(
+    payload: &serde_json::Value,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatMessage> {
+    let summary_text = payload
+        .get("summary")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.get("text")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(String::from)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|text| !text.is_empty());
+
+    let content_text = payload
+        .get("content")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(String::from);
+
+    let thinking = content_text.or(summary_text)?;
+
+    Some(ChatMessage {
+        role: "assistant".to_string(),
+        timestamp,
+        blocks: vec![ContentBlock::Thinking { content: thinking }],
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Context window extraction
 // ---------------------------------------------------------------------------
@@ -334,10 +367,7 @@ pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
                 let Some(payload) = v.get("payload") else {
                     continue;
                 };
-                let event_type = payload
-                    .get("type")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("");
+                let event_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
                 if event_type == "token_count" {
                     if let Some(info) = payload.get("info") {
@@ -345,8 +375,7 @@ pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
                             .get("last_token_usage")
                             .and_then(extract_total_tokens)
                             .or_else(|| {
-                                info.get("total_token_usage")
-                                    .and_then(extract_total_tokens)
+                                info.get("total_token_usage").and_then(extract_total_tokens)
                             })
                             .or(last_tokens);
                         context_window = info
@@ -399,7 +428,10 @@ fn extract_total_tokens(total_usage: &serde_json::Value) -> Option<u64> {
         .get("total_tokens")
         .and_then(|v| v.as_u64())
         .or_else(|| {
-            let input = total_usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let input = total_usage
+                .get("input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let cached_input = total_usage
                 .get("cached_input_tokens")
                 .and_then(|v| v.as_u64())
@@ -620,7 +652,11 @@ mod tests {
         let line = r#"{"timestamp":"2025-05-07T17:24:24.300Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"call_456","input":"*** Begin Patch\n*** End Patch\n"}}"#;
         let msg = parse_line(line).expect("should parse");
         match &msg.blocks[0] {
-            ContentBlock::ToolCall { name, summary, input } => {
+            ContentBlock::ToolCall {
+                name,
+                summary,
+                input,
+            } => {
                 assert_eq!(name, "apply_patch");
                 assert_eq!(summary, "apply_patch");
                 assert!(input.is_some());
@@ -634,7 +670,11 @@ mod tests {
         let line = r#"{"timestamp":"2025-05-07T17:24:24.400Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"search","query":"codex usage"}}}"#;
         let msg = parse_line(line).expect("should parse");
         match &msg.blocks[0] {
-            ContentBlock::ToolCall { name, summary, input } => {
+            ContentBlock::ToolCall {
+                name,
+                summary,
+                input,
+            } => {
                 assert_eq!(name, "web_search");
                 assert_eq!(summary, "codex usage");
                 assert!(input.is_some());
@@ -662,6 +702,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_reasoning_summary_as_thinking() {
+        let line = r#"{"timestamp":"2025-05-07T17:24:24.500Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"**Inspecting parser flow**"}],"content":null}}"#;
+        let msg = parse_line(line).expect("should parse");
+        match &msg.blocks[0] {
+            ContentBlock::Thinking { content } => {
+                assert_eq!(content, "**Inspecting parser flow**");
+            }
+            other => panic!("expected Thinking, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skip_reasoning_without_visible_content() {
+        let line = r#"{"timestamp":"2025-05-07T17:24:24.600Z","type":"response_item","payload":{"type":"reasoning","summary":[],"content":null,"encrypted_content":"opaque"}}"#;
+        assert!(parse_line(line).is_none());
+    }
+
+    #[test]
     fn skip_exec_command_function_call() {
         let line = r#"{"timestamp":"2025-05-07T17:24:24.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call_xyz"}}"#;
         assert!(
@@ -684,7 +742,8 @@ mod tests {
 
     #[test]
     fn skip_unknown_event() {
-        let line = r#"{"timestamp":"...","type":"event_msg","payload":{"type":"some_future_event"}}"#;
+        let line =
+            r#"{"timestamp":"...","type":"event_msg","payload":{"type":"some_future_event"}}"#;
         assert!(parse_line(line).is_none());
     }
 

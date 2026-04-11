@@ -34,6 +34,7 @@ pub(crate) struct PtySession {
 
 pub(crate) struct WsState {
     pub client_id: ClientId,
+    pub selected_backend: String,
     pub current_pty: Arc<Mutex<Option<PtySession>>>,
     pub current_session: Arc<Mutex<Option<String>>>,
     pub current_window: Arc<Mutex<Option<u32>>>,
@@ -148,7 +149,9 @@ mod tests {
         ChatMessage {
             role: role.to_string(),
             timestamp: Some(Utc::now() + chrono::Duration::seconds(ts_offset_secs)),
-            blocks: vec![ContentBlock::Text { text: format!("{} message", role) }],
+            blocks: vec![ContentBlock::Text {
+                text: format!("{} message", role),
+            }],
         }
     }
 
@@ -156,7 +159,9 @@ mod tests {
         ChatMessage {
             role: role.to_string(),
             timestamp: None,
-            blocks: vec![ContentBlock::Text { text: role.to_string() }],
+            blocks: vec![ContentBlock::Text {
+                text: role.to_string(),
+            }],
         }
     }
 
@@ -228,12 +233,16 @@ mod tests {
     #[test]
     fn test_merge_five_tool_same_timestamp() {
         let now = Utc::now();
-        let tool: Vec<ChatMessage> = (0..5).map(|i| {
-            let mut m = make_msg("user", 0);
-            m.timestamp = Some(now);
-            m.blocks = vec![ContentBlock::Text { text: format!("tool-{}", i) }];
-            m
-        }).collect();
+        let tool: Vec<ChatMessage> = (0..5)
+            .map(|i| {
+                let mut m = make_msg("user", 0);
+                m.timestamp = Some(now);
+                m.blocks = vec![ContentBlock::Text {
+                    text: format!("tool-{}", i),
+                }];
+                m
+            })
+            .collect();
         let result = merge_history_messages(tool, vec![]);
         assert_eq!(result.len(), 5);
         // Should maintain insertion order
@@ -248,7 +257,11 @@ mod tests {
     #[test]
     fn test_merge_interleaved_timestamps() {
         // Tool at t=0, t=20, t=40; persisted at t=10, t=30
-        let tool = vec![make_msg("user", 0), make_msg("user", 20), make_msg("user", 40)];
+        let tool = vec![
+            make_msg("user", 0),
+            make_msg("user", 20),
+            make_msg("user", 40),
+        ];
         let persisted = vec![make_msg("assistant", 10), make_msg("assistant", 30)];
         let result = merge_history_messages(tool, persisted);
         assert_eq!(result.len(), 5);
@@ -297,12 +310,13 @@ mod tests {
     #[test]
     fn test_merge_large_volume() {
         let tool: Vec<ChatMessage> = (0..100).map(|i| make_msg("user", i * 2)).collect();
-        let persisted: Vec<ChatMessage> = (0..100).map(|i| make_msg("assistant", i * 2 + 1)).collect();
+        let persisted: Vec<ChatMessage> =
+            (0..100).map(|i| make_msg("assistant", i * 2 + 1)).collect();
         let result = merge_history_messages(tool, persisted);
         assert_eq!(result.len(), 200);
         // Verify ordered by timestamp
         for i in 1..result.len() {
-            if let (Some(prev), Some(curr)) = (&result[i-1].timestamp, &result[i].timestamp) {
+            if let (Some(prev), Some(curr)) = (&result[i - 1].timestamp, &result[i].timestamp) {
                 assert!(prev <= curr);
             }
         }
@@ -336,7 +350,9 @@ mod tests {
     #[test]
     fn test_merge_preserves_block_content() {
         let mut tool_msg = make_msg("user", 0);
-        tool_msg.blocks = vec![ContentBlock::Text { text: "important data".to_string() }];
+        tool_msg.blocks = vec![ContentBlock::Text {
+            text: "important data".to_string(),
+        }];
         let result = merge_history_messages(vec![tool_msg], vec![]);
         match &result[0].blocks[0] {
             ContentBlock::Text { text } => assert_eq!(text, "important data"),
@@ -347,18 +363,26 @@ mod tests {
     #[test]
     fn test_merge_many_same_timestamp_ordering() {
         let now = Utc::now();
-        let tool: Vec<ChatMessage> = (0..5).map(|i| {
-            let mut m = make_msg("user", 0);
-            m.timestamp = Some(now);
-            m.blocks = vec![ContentBlock::Text { text: format!("t{}", i) }];
-            m
-        }).collect();
-        let persisted: Vec<ChatMessage> = (0..5).map(|i| {
-            let mut m = make_msg("assistant", 0);
-            m.timestamp = Some(now);
-            m.blocks = vec![ContentBlock::Text { text: format!("p{}", i) }];
-            m
-        }).collect();
+        let tool: Vec<ChatMessage> = (0..5)
+            .map(|i| {
+                let mut m = make_msg("user", 0);
+                m.timestamp = Some(now);
+                m.blocks = vec![ContentBlock::Text {
+                    text: format!("t{}", i),
+                }];
+                m
+            })
+            .collect();
+        let persisted: Vec<ChatMessage> = (0..5)
+            .map(|i| {
+                let mut m = make_msg("assistant", 0);
+                m.timestamp = Some(now);
+                m.blocks = vec![ContentBlock::Text {
+                    text: format!("p{}", i),
+                }];
+                m
+            })
+            .collect();
         let result = merge_history_messages(tool, persisted);
         assert_eq!(result.len(), 10);
         // First 5 should be tool messages (same timestamp, tool comes first)

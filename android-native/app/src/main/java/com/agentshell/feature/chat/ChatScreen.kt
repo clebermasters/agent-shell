@@ -772,7 +772,9 @@ private fun ChatUsageBanner(usage: AiUsage?, contextWindowUsage: Double? = null,
         usage?.provider?.takeIf { it.isNotBlank() }?.let {
             add(it.replaceFirstChar { ch -> ch.titlecase() })
         }
-        usage?.planType?.takeIf { it.isNotBlank() }?.let { add(it.replace('_', ' ')) }
+        usage?.planType
+            ?.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) }
+            ?.let { add(it.replace('_', ' ')) }
         usage?.limitName?.takeIf { it.isNotBlank() && !it.equals("codex", ignoreCase = true) }?.let { add(it) }
         modelName?.takeIf { it.isNotBlank() }?.let { add(it) }
     }

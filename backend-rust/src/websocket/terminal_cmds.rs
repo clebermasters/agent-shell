@@ -73,7 +73,10 @@ pub(crate) async fn handle_input_via_tmux(
         // If session:window failed (window doesn't exist), retry with session only
         let send_text = match &send_text {
             Ok(output) if !output.status.success() && idx.is_some() => {
-                warn!("InputViaTmux: target {} failed, retrying with session only ({})", target, session);
+                warn!(
+                    "InputViaTmux: target {} failed, retrying with session only ({})",
+                    target, session
+                );
                 tokio::process::Command::new("tmux")
                     .args(&["send-keys", "-t", session, "-l", text])
                     .output()
@@ -102,7 +105,10 @@ pub(crate) async fn handle_input_via_tmux(
 
         match (send_text, send_enter) {
             (Ok(t), Ok(e)) if t.status.success() && e.status.success() => {
-                info!("InputViaTmux: OK sent {:?} to target {}", text, effective_target);
+                info!(
+                    "InputViaTmux: OK sent {:?} to target {}",
+                    text, effective_target
+                );
             }
             (Ok(t), Ok(e)) => {
                 error!("InputViaTmux: tmux send-keys FAILED for {} — text_exit={}, enter_exit={}, text_stderr={:?}, enter_stderr={:?}",
@@ -297,9 +303,7 @@ pub(crate) async fn attach_to_session(
             match reader.read(&mut buffer) {
                 Ok(0) => {
                     info!("PTY EOF for client {}", client_id);
-                    if !pending_output.is_empty()
-                        && bootstrap_done_reader.load(Ordering::Relaxed)
-                    {
+                    if !pending_output.is_empty() && bootstrap_done_reader.load(Ordering::Relaxed) {
                         let output = ServerMessage::Output {
                             data: pending_output,
                         };
@@ -313,8 +317,7 @@ pub(crate) async fn attach_to_session(
                     consecutive_errors = 0;
                     let (text, _) = utf8_decoder.decode_chunk(&buffer[..n]);
                     if !text.is_empty() {
-                        let filtered =
-                            crate::terminal_buffer::filter_control_sequences(&text);
+                        let filtered = crate::terminal_buffer::filter_control_sequences(&text);
                         if !filtered.is_empty() {
                             pending_output.push_str(&filtered);
                             bytes_since_pause += filtered.len();
@@ -355,9 +358,7 @@ pub(crate) async fn attach_to_session(
                                 }
                             } else {
                                 // Bootstrap path: queue or overflow to direct
-                                match live_queue_tx_clone
-                                    .try_send(pending_output.clone())
-                                {
+                                match live_queue_tx_clone.try_send(pending_output.clone()) {
                                     Ok(_) => {
                                         // Also forward to kiro during bootstrap
                                         if let Ok(guard) = kiro_shared_tx_reader.lock() {
@@ -368,18 +369,13 @@ pub(crate) async fn attach_to_session(
                                     }
                                     Err(_) => {
                                         tracing::warn!("[history-bootstrap] queue overflow, switching to direct forward for client {}", client_id);
-                                        bootstrap_done_reader
-                                            .store(true, Ordering::Relaxed);
+                                        bootstrap_done_reader.store(true, Ordering::Relaxed);
                                         let output = ServerMessage::Output {
                                             data: pending_output.clone(),
                                         };
-                                        if let Ok(json) =
-                                            serde_json::to_string(&output)
-                                        {
+                                        if let Ok(json) = serde_json::to_string(&output) {
                                             if tx_clone
-                                                .send(BroadcastMessage::Text(
-                                                    Arc::new(json),
-                                                ))
+                                                .send(BroadcastMessage::Text(Arc::new(json)))
                                                 .is_err()
                                             {
                                                 error!(
@@ -403,9 +399,7 @@ pub(crate) async fn attach_to_session(
                             last_send = std::time::Instant::now();
 
                             if bytes_since_pause > 65536 {
-                                std::thread::sleep(std::time::Duration::from_millis(
-                                    5,
-                                ));
+                                std::thread::sleep(std::time::Duration::from_millis(5));
                                 bytes_since_pause = 0;
                             }
                         }
@@ -591,7 +585,10 @@ pub(crate) async fn attach_to_session(
 }
 
 pub(crate) async fn cleanup_session(state: &WsState, graceful: bool) {
-    info!("Cleaning up session for client: {} (graceful={})", state.client_id, graceful);
+    info!(
+        "Cleaning up session for client: {} (graceful={})",
+        state.client_id, graceful
+    );
 
     // Clean up PTY session
     let mut pty_guard = state.current_pty.lock().await;
@@ -602,7 +599,10 @@ pub(crate) async fn cleanup_session(state: &WsState, graceful: bool) {
             // Graceful shutdown: don't kill child process, let PTY EOF naturally.
             // The tmux attach-session process will exit on its own when the PTY closes.
             // The tmux session itself is unaffected (owned by tmux server daemon).
-            info!("Graceful cleanup: dropping PTY handles for session {}", pty.tmux_session);
+            info!(
+                "Graceful cleanup: dropping PTY handles for session {}",
+                pty.tmux_session
+            );
         } else {
             // Normal disconnect: kill the child process
             {
@@ -638,19 +638,20 @@ pub(crate) async fn cleanup_session(state: &WsState, graceful: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use tokio::sync::{mpsc, Mutex};
     use crate::websocket::{
         client_manager::ClientManager,
         types::{BroadcastMessage, WsState},
     };
     use crate::{
-        chat_clear_store::ChatClearStore,
-        chat_event_store::ChatEventStore,
+        chat_clear_store::ChatClearStore, chat_event_store::ChatEventStore,
         chat_file_storage::ChatFileStorage,
     };
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
 
-    fn make_ws_state(dir: &std::path::Path) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>) {
+    fn make_ws_state(
+        dir: &std::path::Path,
+    ) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>) {
         let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
         let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
@@ -670,6 +671,7 @@ mod tests {
             client_manager,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
             kiro_chat_output_tx: Arc::new(std::sync::Mutex::new(None)),
+            selected_backend: "acp".to_string(),
         };
         (ws_state, rx)
     }
@@ -738,7 +740,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let (ws_state, _rx) = make_ws_state(dir.path());
         // Set a chat_log_handle to verify it gets aborted
-        let handle = tokio::spawn(async { tokio::time::sleep(tokio::time::Duration::from_secs(60)).await });
+        let handle =
+            tokio::spawn(async { tokio::time::sleep(tokio::time::Duration::from_secs(60)).await });
         *ws_state.chat_log_handle.lock().await = Some(handle);
         cleanup_session(&ws_state, false).await;
         // After cleanup, handle should be taken (None)
@@ -750,7 +753,13 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let (ws_state, _rx) = make_ws_state(dir.path());
         // With a session but no window - should still handle gracefully
-        let result = handle_input_via_tmux(&ws_state, Some("AgentShell".to_string()), Some(0), "test".to_string()).await;
+        let result = handle_input_via_tmux(
+            &ws_state,
+            Some("AgentShell".to_string()),
+            Some(0),
+            "test".to_string(),
+        )
+        .await;
         // May succeed or fail depending on tmux state - just verify no panic
         assert!(result.is_ok());
     }

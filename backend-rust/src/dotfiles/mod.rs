@@ -266,9 +266,7 @@ impl DotFilesManager {
     fn validate_and_resolve_path(&self, path: &str) -> Result<PathBuf> {
         let home_dir = dirs::home_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-        let canonical_home = home_dir
-            .canonicalize()
-            .unwrap_or_else(|_| home_dir.clone());
+        let canonical_home = home_dir.canonicalize().unwrap_or_else(|_| home_dir.clone());
 
         // Resolve the path — absolute paths are re-rooted under home
         let file_path = if path.starts_with("~/") {
@@ -349,11 +347,16 @@ impl DotFilesManager {
             return Err(anyhow::anyhow!("File is not readable: {}", path));
         }
 
-        let bytes = fs::read(&file_path)
-            .with_context(|| format!("Failed to read file: {}", path))?;
+        let bytes =
+            fs::read(&file_path).with_context(|| format!("Failed to read file: {}", path))?;
         let mime = Self::detect_mime_type(&file_path);
 
-        info!("Read binary file: {} ({} bytes, {})", path, bytes.len(), mime);
+        info!(
+            "Read binary file: {} ({} bytes, {})",
+            path,
+            bytes.len(),
+            mime
+        );
         Ok((bytes, mime))
     }
 
@@ -463,19 +466,58 @@ mod tests {
     #[test]
     fn test_detect_mime_type() {
         use std::path::Path;
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("photo.jpg")), "image/jpeg");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("photo.jpeg")), "image/jpeg");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("img.png")), "image/png");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("anim.gif")), "image/gif");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("img.webp")), "image/webp");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("img.bmp")), "image/bmp");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.mp3")), "audio/mpeg");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.wav")), "audio/wav");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.ogg")), "audio/ogg");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.m4a")), "audio/aac");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.aac")), "audio/aac");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("audio.flac")), "audio/flac");
-        assert_eq!(DotFilesManager::detect_mime_type(Path::new("unknown.xyz")), "application/octet-stream");
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("photo.jpg")),
+            "image/jpeg"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("photo.jpeg")),
+            "image/jpeg"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("img.png")),
+            "image/png"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("anim.gif")),
+            "image/gif"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("img.webp")),
+            "image/webp"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("img.bmp")),
+            "image/bmp"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("audio.mp3")),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("audio.wav")),
+            "audio/wav"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("audio.ogg")),
+            "audio/ogg"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("audio.m4a")),
+            "audio/aac"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("audio.aac")),
+            "audio/aac"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("audio.flac")),
+            "audio/flac"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("unknown.xyz")),
+            "application/octet-stream"
+        );
     }
 
     #[test]
@@ -550,13 +592,13 @@ mod tests {
         // Write to a test file in home
         let test_path = ".agentshell_test_dotfile_xyz";
         let content = "# test content\nexport TEST=1\n";
-        
+
         let result = mgr.write_dotfile(test_path, content).await;
         if result.is_ok() {
             let read_result = mgr.read_dotfile(test_path).await;
             assert!(read_result.is_ok());
             assert_eq!(read_result.unwrap(), content);
-            
+
             // Cleanup
             let home = dirs::home_dir().unwrap();
             let _ = std::fs::remove_file(home.join(test_path));
@@ -580,8 +622,14 @@ mod tests {
     #[test]
     fn test_detect_mime_type_no_extension() {
         // File without extension
-        assert_eq!(DotFilesManager::detect_mime_type(std::path::Path::new("Makefile")), "application/octet-stream");
-        assert_eq!(DotFilesManager::detect_mime_type(std::path::Path::new("LICENSE")), "application/octet-stream");
+        assert_eq!(
+            DotFilesManager::detect_mime_type(std::path::Path::new("Makefile")),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(std::path::Path::new("LICENSE")),
+            "application/octet-stream"
+        );
     }
 
     #[tokio::test]
@@ -635,8 +683,14 @@ mod tests {
         let templates = mgr.get_templates();
         for t in &templates {
             assert!(!t.name.is_empty(), "Template name should not be empty");
-            assert!(!t.description.is_empty(), "Template description should not be empty");
-            assert!(!t.content.is_empty(), "Template content should not be empty");
+            assert!(
+                !t.description.is_empty(),
+                "Template description should not be empty"
+            );
+            assert!(
+                !t.content.is_empty(),
+                "Template content should not be empty"
+            );
         }
     }
 

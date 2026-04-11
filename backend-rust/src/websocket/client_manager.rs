@@ -126,7 +126,8 @@ mod tests {
         let mgr = ClientManager::new();
         let (tx, mut rx) = mpsc::unbounded_channel();
         mgr.add_client("c1".to_string(), tx).await;
-        mgr.broadcast_binary(bytes::Bytes::from("binary data")).await;
+        mgr.broadcast_binary(bytes::Bytes::from("binary data"))
+            .await;
         assert!(rx.try_recv().is_ok());
     }
 
@@ -136,7 +137,7 @@ mod tests {
         let (tx, rx) = mpsc::unbounded_channel();
         mgr.add_client("c1".to_string(), tx).await;
         drop(rx); // Drop the receiver — sending to a dead client
-        // Should not panic
+                  // Should not panic
         mgr.broadcast(ServerMessage::Pong).await;
     }
 }

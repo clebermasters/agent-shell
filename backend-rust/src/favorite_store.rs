@@ -64,9 +64,9 @@ impl FavoriteStore {
     }
 
     fn tag_ids_for(&self, conn: &Connection, favorite_id: &str) -> Vec<String> {
-        let mut stmt = match conn
-            .prepare("SELECT tag_id FROM favorite_tag_assignments WHERE favorite_id=?1 ORDER BY rowid")
-        {
+        let mut stmt = match conn.prepare(
+            "SELECT tag_id FROM favorite_tag_assignments WHERE favorite_id=?1 ORDER BY rowid",
+        ) {
             Ok(s) => s,
             Err(_) => return vec![],
         };
@@ -108,10 +108,21 @@ impl FavoriteStore {
                 ))
             })?
             .filter_map(|r| r.ok())
-            .map(|(id, name, path, sort_order, startup_command, startup_args, created_at)| {
-                let tag_ids = self.tag_ids_for(&conn, &id);
-                FavoriteEntry { id, name, path, sort_order, startup_command, startup_args, created_at, tag_ids }
-            })
+            .map(
+                |(id, name, path, sort_order, startup_command, startup_args, created_at)| {
+                    let tag_ids = self.tag_ids_for(&conn, &id);
+                    FavoriteEntry {
+                        id,
+                        name,
+                        path,
+                        sort_order,
+                        startup_command,
+                        startup_args,
+                        created_at,
+                        tag_ids,
+                    }
+                },
+            )
             .collect();
         Ok(rows)
     }
@@ -134,7 +145,16 @@ impl FavoriteStore {
             params![id, name, path, sort_order, startup_command, startup_args, created_at],
         )?;
         self.set_tags(&conn, &id, &tag_ids)?;
-        Ok(FavoriteEntry { id, name, path, sort_order, startup_command, startup_args, created_at, tag_ids })
+        Ok(FavoriteEntry {
+            id,
+            name,
+            path,
+            sort_order,
+            startup_command,
+            startup_args,
+            created_at,
+            tag_ids,
+        })
     }
 
     pub fn update(

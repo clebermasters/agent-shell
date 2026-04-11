@@ -1,9 +1,6 @@
 use crate::cron::CRON_MANAGER;
 use crate::types::CronJob;
-use axum::{
-    extract::Path,
-    Json,
-};
+use axum::{extract::Path, Json};
 use chrono::Utc;
 use serde::Deserialize;
 
@@ -54,17 +51,26 @@ pub async fn create_job(Json(req): Json<CreateJobRequest>) -> Json<CronJob> {
         llm_provider: Some(req.llm_provider),
         llm_model: Some(req.llm_model),
     };
-    let created = CRON_MANAGER.create_job(job).await.expect("Failed to create job");
+    let created = CRON_MANAGER
+        .create_job(job)
+        .await
+        .expect("Failed to create job");
     Json(created)
 }
 
 pub async fn get_job(Path(id): Path<String>) -> Json<CronJob> {
     let jobs = CRON_MANAGER.list_jobs().await;
-    let job = jobs.into_iter().find(|j| j.id == id).expect("Job not found");
+    let job = jobs
+        .into_iter()
+        .find(|j| j.id == id)
+        .expect("Job not found");
     Json(job)
 }
 
-pub async fn update_job(Path(id): Path<String>, Json(req): Json<CreateJobRequest>) -> Json<CronJob> {
+pub async fn update_job(
+    Path(id): Path<String>,
+    Json(req): Json<CreateJobRequest>,
+) -> Json<CronJob> {
     let escaped_prompt = req.prompt.replace('\'', "'\\''");
     let command = format!(
         "cd {} && skill-agent --streaming --llm-provider {} --llm-model {} agent '{}'",
@@ -90,12 +96,18 @@ pub async fn update_job(Path(id): Path<String>, Json(req): Json<CreateJobRequest
         llm_provider: Some(req.llm_provider),
         llm_model: Some(req.llm_model),
     };
-    let updated = CRON_MANAGER.update_job(id, job).await.expect("Failed to update job");
+    let updated = CRON_MANAGER
+        .update_job(id, job)
+        .await
+        .expect("Failed to update job");
     Json(updated)
 }
 
 pub async fn delete_job(Path(id): Path<String>) -> Json<String> {
-    CRON_MANAGER.delete_job(&id).await.expect("Failed to delete job");
+    CRON_MANAGER
+        .delete_job(&id)
+        .await
+        .expect("Failed to delete job");
     Json("deleted".to_string())
 }
 

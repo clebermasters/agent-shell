@@ -35,7 +35,7 @@ pub fn strip_ansi(text: &str) -> String {
             match chars.peek() {
                 Some('[') => {
                     chars.next(); // consume '['
-                    // CSI sequence — read until we hit a letter or @
+                                  // CSI sequence — read until we hit a letter or @
                     while let Some(&c) = chars.peek() {
                         chars.next();
                         if c.is_ascii_alphabetic() || c == '@' {
@@ -96,12 +96,16 @@ fn clean_kiro_output(text: &str) -> String {
         }
 
         // Skip spinner lines (⠋ Thinking..., etc.)
-        if trimmed.contains("Thinking...") || SPINNER_CHARS.iter().any(|c| trimmed.starts_with(*c)) {
+        if trimmed.contains("Thinking...") || SPINNER_CHARS.iter().any(|c| trimmed.starts_with(*c))
+        {
             continue;
         }
 
         // Skip tmux status bar lines (e.g., "[kiro] 0:kiro-cli*  ...")
-        if trimmed.starts_with('[') && (trimmed.contains("0:") || trimmed.contains("1:")) && trimmed.contains('*') {
+        if trimmed.starts_with('[')
+            && (trimmed.contains("0:") || trimmed.contains("1:"))
+            && trimmed.contains('*')
+        {
             continue;
         }
 
@@ -344,9 +348,7 @@ pub fn emit_response(text: &str, state: &mut KiroState) -> Vec<ChatMessage> {
         let mut blocks = Vec::new();
 
         if !thinking.is_empty() {
-            blocks.push(ContentBlock::Thinking {
-                content: thinking,
-            });
+            blocks.push(ContentBlock::Thinking { content: thinking });
         }
 
         if !regular.is_empty() && !tool_blocks.is_empty() {
@@ -448,7 +450,10 @@ pub fn fetch_history(session_id: &str) -> Result<Vec<ChatMessage>> {
     let history_path = home.join(".local/share/kiro-cli/history");
 
     if !history_path.exists() {
-        bail!("kiro-cli history file not found at {}", history_path.display());
+        bail!(
+            "kiro-cli history file not found at {}",
+            history_path.display()
+        );
     }
 
     let content = std::fs::read_to_string(&history_path)?;
@@ -488,7 +493,10 @@ fn parse_history_entries(content: &str, target_session: &str) -> Vec<ChatMessage
         }
 
         // Extract prompt/command
-        if let Some(prompt_line) = trimmed.lines().find(|l| l.trim_start().starts_with("prompt:")) {
+        if let Some(prompt_line) = trimmed
+            .lines()
+            .find(|l| l.trim_start().starts_with("prompt:"))
+        {
             let prompt = prompt_line
                 .split("prompt:")
                 .nth(1)
@@ -506,7 +514,10 @@ fn parse_history_entries(content: &str, target_session: &str) -> Vec<ChatMessage
         }
 
         // Extract response
-        if let Some(response_block) = trimmed.lines().find(|l| l.trim_start().starts_with("response:")) {
+        if let Some(response_block) = trimmed
+            .lines()
+            .find(|l| l.trim_start().starts_with("response:"))
+        {
             let response = response_block
                 .split("response:")
                 .nth(1)
@@ -546,7 +557,10 @@ pub fn find_session_id(cwd: &Path) -> Result<String> {
     let history_path = home.join(".local/share/kiro-cli/history");
 
     if !history_path.exists() {
-        bail!("kiro-cli history file not found at {}", history_path.display());
+        bail!(
+            "kiro-cli history file not found at {}",
+            history_path.display()
+        );
     }
 
     let content = std::fs::read_to_string(&history_path)?;
@@ -581,10 +595,7 @@ pub fn find_session_id(cwd: &Path) -> Result<String> {
         }
     }
 
-    bail!(
-        "no kiro-cli session found for cwd: {}",
-        cwd.display()
-    )
+    bail!("no kiro-cli session found for cwd: {}", cwd.display())
 }
 
 /// Check if the kiro-cli-chat process with given PID is still running.
@@ -821,7 +832,10 @@ mod tests {
     #[test]
     fn test_parse_pty_chunk_with_thinking() {
         let mut state = KiroState::new(1, "s".into(), PathBuf::new());
-        let result = emit_response("<think>Let me think about this</think>The answer is 42", &mut state);
+        let result = emit_response(
+            "<think>Let me think about this</think>The answer is 42",
+            &mut state,
+        );
         assert!(!result.is_empty());
 
         let msg = &result[0];

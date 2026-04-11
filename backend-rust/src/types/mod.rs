@@ -42,6 +42,13 @@ pub struct ProviderUsageWindow {
     pub window_duration_mins: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionOption {
+    pub id: String,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessInfo {
@@ -348,6 +355,8 @@ pub enum WebSocketMessage {
     // ACP session management
     AcpCreateSession {
         cwd: String,
+        #[serde(default)]
+        backend: Option<String>,
     },
     AcpResumeSession {
         #[serde(rename = "sessionId")]
@@ -1075,6 +1084,8 @@ pub enum ServerMessage {
         session_id: String,
         tool: String,
         command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<PermissionOption>,
     },
     AcpError {
         message: String,
@@ -1338,7 +1349,7 @@ pub struct GitStashEntry {
 #[serde(rename_all = "camelCase")]
 pub struct GitFileChange {
     pub path: String,
-    pub status: String,       // "M", "A", "D", "R", "C"
+    pub status: String, // "M", "A", "D", "R", "C"
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
 }

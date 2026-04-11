@@ -45,29 +45,27 @@ pub(crate) async fn handle(
             }
         }
 
-        WebSocketMessage::WriteDotfile { path, content } => {
-            match crate::dotfiles::DOTFILES_MANAGER
-                .write_dotfile(&path, &content)
-                .await
-            {
-                Ok(_) => {
-                    let response = ServerMessage::DotfileWritten {
-                        path,
-                        success: true,
-                        error: None,
-                    };
-                    send_message(tx, response).await?;
-                }
-                Err(e) => {
-                    let response = ServerMessage::DotfileWritten {
-                        path,
-                        success: false,
-                        error: Some(format!("{}", e)),
-                    };
-                    send_message(tx, response).await?;
-                }
+        WebSocketMessage::WriteDotfile { path, content } => match crate::dotfiles::DOTFILES_MANAGER
+            .write_dotfile(&path, &content)
+            .await
+        {
+            Ok(_) => {
+                let response = ServerMessage::DotfileWritten {
+                    path,
+                    success: true,
+                    error: None,
+                };
+                send_message(tx, response).await?;
             }
-        }
+            Err(e) => {
+                let response = ServerMessage::DotfileWritten {
+                    path,
+                    success: false,
+                    error: Some(format!("{}", e)),
+                };
+                send_message(tx, response).await?;
+            }
+        },
 
         WebSocketMessage::GetDotfileHistory { path } => {
             match crate::dotfiles::DOTFILES_MANAGER
@@ -118,11 +116,13 @@ pub(crate) async fn handle(
         }
 
         WebSocketMessage::ReadBinaryFile { path } => {
-            match crate::dotfiles::DOTFILES_MANAGER.read_binary_file(&path).await {
+            match crate::dotfiles::DOTFILES_MANAGER
+                .read_binary_file(&path)
+                .await
+            {
                 Ok((bytes, mime_type)) => {
                     use base64::Engine;
-                    let content_base64 =
-                        base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    let content_base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                     let response = ServerMessage::BinaryFileContent {
                         path,
                         content_base64,
@@ -154,9 +154,9 @@ pub(crate) async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
-    use crate::websocket::types::BroadcastMessage;
     use crate::types::WebSocketMessage;
+    use crate::websocket::types::BroadcastMessage;
+    use tokio::sync::mpsc;
 
     fn make_tx() -> (
         mpsc::UnboundedSender<BroadcastMessage>,
@@ -189,9 +189,13 @@ mod tests {
     #[tokio::test]
     async fn test_read_dotfile_nonexistent_returns_error() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::ReadDotfile {
-            path: ".nonexistent_file_xyz_abc".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::ReadDotfile {
+                path: ".nonexistent_file_xyz_abc".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -204,9 +208,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_dotfile_history() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::GetDotfileHistory {
-            path: ".bashrc".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::GetDotfileHistory {
+                path: ".bashrc".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         assert!(rx.try_recv().is_ok());
     }
@@ -222,10 +230,14 @@ mod tests {
     #[tokio::test]
     async fn test_write_dotfile_nonexistent_path() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::WriteDotfile {
-            path: "/nonexistent/dir/file.conf".to_string(),
-            content: "test content".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::WriteDotfile {
+                path: "/nonexistent/dir/file.conf".to_string(),
+                content: "test content".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -239,25 +251,35 @@ mod tests {
     #[tokio::test]
     async fn test_restore_dotfile_version_nonexistent() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::RestoreDotfileVersion {
-            path: ".nonexistent_file_xyz".to_string(),
-            timestamp: chrono::Utc::now(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::RestoreDotfileVersion {
+                path: ".nonexistent_file_xyz".to_string(),
+                timestamp: chrono::Utc::now(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
             BroadcastMessage::Text(s) => s.as_ref().clone(),
             _ => panic!("Expected text"),
         };
-        assert!(json.contains("error") || json.contains("Error") || json.contains("DotfileRestored"));
+        assert!(
+            json.contains("error") || json.contains("Error") || json.contains("DotfileRestored")
+        );
     }
 
     #[tokio::test]
     async fn test_read_binary_file_nonexistent() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::ReadBinaryFile {
-            path: "/nonexistent/binary/file.bin".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::ReadBinaryFile {
+                path: "/nonexistent/binary/file.bin".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -270,9 +292,13 @@ mod tests {
     #[tokio::test]
     async fn test_read_dotfile_success() {
         let (tx, mut rx) = make_tx();
-        let result = handle(WebSocketMessage::ReadDotfile {
-            path: ".bashrc".to_string(),
-        }, &tx).await;
+        let result = handle(
+            WebSocketMessage::ReadDotfile {
+                path: ".bashrc".to_string(),
+            },
+            &tx,
+        )
+        .await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {

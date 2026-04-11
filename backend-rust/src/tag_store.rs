@@ -92,7 +92,12 @@ impl TagStore {
             "INSERT INTO session_tags (id, name, color_hex, created_at) VALUES (?1, ?2, ?3, ?4)",
             params![id, name, color_hex, created_at],
         )?;
-        Ok(TagEntry { id, name, color_hex, created_at })
+        Ok(TagEntry {
+            id,
+            name,
+            color_hex,
+            created_at,
+        })
     }
 
     pub fn delete_tag(&self, id: &str) -> Result<bool> {
@@ -105,12 +110,13 @@ impl TagStore {
 
     pub fn list_assignments(&self) -> Result<Vec<TagAssignment>> {
         let conn = self.open()?;
-        let mut stmt = conn.prepare(
-            "SELECT session_name, tag_id FROM session_tag_assignments",
-        )?;
+        let mut stmt = conn.prepare("SELECT session_name, tag_id FROM session_tag_assignments")?;
         let rows = stmt
             .query_map([], |row| {
-                Ok(TagAssignment { session_name: row.get(0)?, tag_id: row.get(1)? })
+                Ok(TagAssignment {
+                    session_name: row.get(0)?,
+                    tag_id: row.get(1)?,
+                })
             })?
             .filter_map(|r| r.ok())
             .collect();
@@ -147,9 +153,8 @@ impl TagStore {
     /// Returns all tag IDs assigned to the given session.
     pub fn tag_ids_for_session(&self, session_name: &str) -> Result<Vec<String>> {
         let conn = self.open()?;
-        let mut stmt = conn.prepare(
-            "SELECT tag_id FROM session_tag_assignments WHERE session_name=?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT tag_id FROM session_tag_assignments WHERE session_name=?1")?;
         let rows = stmt
             .query_map(params![session_name], |row| row.get(0))?
             .filter_map(|r| r.ok())

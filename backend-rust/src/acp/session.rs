@@ -122,7 +122,6 @@ pub struct ModeInfo {
     pub description: String,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListSessionsResult {
     pub sessions: Vec<SessionInfo>,
@@ -138,6 +137,8 @@ pub struct SessionInfo {
     pub title: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,11 +208,19 @@ mod tests {
     fn test_initialize_result_roundtrip() {
         let original = InitializeResult {
             protocol_version: 1,
-            capabilities: Some(ServerCapabilities { tools: serde_json::json!({}) }),
-            server_info: Some(ServerInfo { name: "srv".into(), version: "1.0".into() }),
+            capabilities: Some(ServerCapabilities {
+                tools: serde_json::json!({}),
+            }),
+            server_info: Some(ServerInfo {
+                name: "srv".into(),
+                version: "1.0".into(),
+            }),
             auth_methods: vec![],
             agent_capabilities: None,
-            agent_info: AgentInfo { name: "a".into(), version: "1".into() },
+            agent_info: AgentInfo {
+                name: "a".into(),
+                version: "1".into(),
+            },
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: InitializeResult = serde_json::from_str(&json).unwrap();
@@ -335,4 +344,3 @@ mod tests {
         assert!(caps.session_capabilities.is_none());
     }
 }
-

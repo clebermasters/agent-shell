@@ -79,6 +79,12 @@ data class SessionsUiState(
 /** Emitted when a new ACP session is created so the UI can navigate to it. */
 data class NewAcpSessionEvent(val sessionId: String, val cwd: String)
 
+enum class FavoriteLaunchTarget {
+    TMUX,
+    ACP,
+    DIRECT,
+}
+
 @HiltViewModel
 class SessionsViewModel @Inject constructor(
     private val wsService: WebSocketService,
@@ -524,19 +530,34 @@ class SessionsViewModel @Inject constructor(
         wsService.removeTagFromSession(sessionName, tagId)
     }
 
-    fun createSessionFromFavorite(favorite: FavoriteSession) {
+    fun createSessionFromFavorite(
+        favorite: FavoriteSession,
+        launchTarget: FavoriteLaunchTarget = FavoriteLaunchTarget.TMUX,
+    ) {
         _uiState.update { it.copy(isLoading = true) }
-        wsService.createSession(
-            name = favorite.name,
-            startDirectory = favorite.path,
-            startupCommand = favorite.startupCommand,
-            startupArgs = favorite.startupArgs,
-        )
-        val tagIds = _uiState.value.favoriteTagMap[favorite.id] ?: emptyList()
-        tagIds.forEach { tagId -> wsService.assignTagToSession(favorite.name, tagId) }
-        viewModelScope.launch {
-            delay(500)
-            requestSessions()
+        when (launchTarget) {
+            FavoriteLaunchTarget.TMUX -> {
+                wsService.createSession(
+                    name = favorite.name,
+                    startDirectory = favorite.path,
+                    startupCommand = favorite.startupCommand,
+                    startupArgs = favorite.startupArgs,
+                )
+                val tagIds = _uiState.value.favoriteTagMap[favorite.id] ?: emptyList()
+                tagIds.forEach { tagId -> wsService.assignTagToSession(favorite.name, tagId) }
+                viewModelScope.launch {
+                    delay(500)
+                    requestSessions()
+                }
+            }
+
+            FavoriteLaunchTarget.ACP -> {
+                wsService.acpCreateSession(favorite.path, backend = "opencode")
+            }
+
+            FavoriteLaunchTarget.DIRECT -> {
+                wsService.acpCreateSession(favorite.path, backend = "codex")
+            }
         }
     }
 }

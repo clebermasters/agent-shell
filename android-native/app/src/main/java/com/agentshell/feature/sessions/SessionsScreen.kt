@@ -330,9 +330,9 @@ fun SessionsScreen(
                         favorites = uiState.favorites,
                         tags = uiState.tags,
                         favoriteTagMap = uiState.favoriteTagMap,
-                        onLaunch = { favorite ->
-                            viewModel.createSessionFromFavorite(favorite)
-                            selectedTabIndex = 0
+                        onLaunch = { favorite, launchTarget ->
+                            viewModel.createSessionFromFavorite(favorite, launchTarget)
+                            selectedTabIndex = if (launchTarget == FavoriteLaunchTarget.TMUX) 0 else 1
                         },
                         onEdit = { favorite -> favoriteToEdit = favorite },
                         onDelete = { favorite -> viewModel.deleteFavorite(favorite) },
@@ -421,7 +421,7 @@ private fun FavoriteSessionsList(
     favorites: List<FavoriteSession>,
     tags: List<SessionTag> = emptyList(),
     favoriteTagMap: Map<String, List<String>> = emptyMap(),
-    onLaunch: (FavoriteSession) -> Unit,
+    onLaunch: (FavoriteSession, FavoriteLaunchTarget) -> Unit,
     onEdit: (FavoriteSession) -> Unit,
     onDelete: (FavoriteSession) -> Unit,
 ) {
@@ -444,7 +444,7 @@ private fun FavoriteSessionsList(
             FavoriteSessionCard(
                 favorite = favorite,
                 assignedTags = assignedTags,
-                onLaunch = { onLaunch(favorite) },
+                onLaunch = { launchTarget -> onLaunch(favorite, launchTarget) },
                 onEdit = { onEdit(favorite) },
                 onDelete = { onDelete(favorite) },
             )
@@ -457,7 +457,7 @@ private fun FavoriteSessionsList(
 private fun FavoriteSessionCard(
     favorite: FavoriteSession,
     assignedTags: List<SessionTag> = emptyList(),
-    onLaunch: () -> Unit,
+    onLaunch: (FavoriteLaunchTarget) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -468,7 +468,7 @@ private fun FavoriteSessionCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 3.dp)
-            .combinedClickable(onClick = onLaunch, onLongClick = { showMenu = true }),
+            .combinedClickable(onClick = { onLaunch(FavoriteLaunchTarget.TMUX) }, onLongClick = { showMenu = true }),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -526,13 +526,33 @@ private fun FavoriteSessionCard(
             }
 
             FilledTonalButton(
-                onClick = onLaunch,
+                onClick = { onLaunch(FavoriteLaunchTarget.TMUX) },
                 modifier = Modifier.height(30.dp),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
             ) {
                 Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("Launch", fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(4.dp))
+            OutlinedButton(
+                onClick = { onLaunch(FavoriteLaunchTarget.ACP) },
+                modifier = Modifier.height(30.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) {
+                Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("ACP", fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(4.dp))
+            OutlinedButton(
+                onClick = { onLaunch(FavoriteLaunchTarget.DIRECT) },
+                modifier = Modifier.height(30.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) {
+                Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Direct", fontSize = 12.sp)
             }
             Spacer(Modifier.width(4.dp))
             Box {

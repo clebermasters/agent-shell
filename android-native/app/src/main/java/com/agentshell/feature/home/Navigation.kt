@@ -1,5 +1,6 @@
 package com.agentshell.feature.home
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
@@ -50,11 +51,13 @@ object Routes {
     const val LOGIN = "login"
 
     fun git(sessionName: String, path: String = "", isAcp: Boolean = false): String {
-        val encodedPath = android.net.Uri.encode(path, "")
-        return "git/$sessionName?path=$encodedPath&isAcp=$isAcp"
+        val encodedPath = Uri.encode(path, "")
+        val encodedSession = encodeRouteParam(sessionName)
+        return "git/$encodedSession?path=$encodedPath&isAcp=$isAcp"
     }
     fun splitScreen(layoutId: String? = null) = if (layoutId != null) "split_screen?layoutId=$layoutId" else "split_screen"
-    fun terminal(sessionName: String, isSwipeNav: Boolean = false) = "terminal/$sessionName?isSwipeNav=$isSwipeNav"
+    fun terminal(sessionName: String, isSwipeNav: Boolean = false) =
+        "terminal/${encodeRouteParam(sessionName)}?isSwipeNav=$isSwipeNav"
     fun chat(
         sessionName: String,
         windowIndex: Int,
@@ -62,12 +65,15 @@ object Routes {
         isSwipeNav: Boolean = false,
         cwd: String = "",
     ): String {
-        val encodedCwd = android.net.Uri.encode(cwd, "")
-        return "chat/$sessionName/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav&cwd=$encodedCwd"
+        val encodedSession = encodeRouteParam(sessionName)
+        val encodedCwd = Uri.encode(cwd, "")
+        return "chat/$encodedSession/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav&cwd=$encodedCwd"
     }
     fun fileBrowser(path: String = "/") = "file_browser?path=$path"
     fun cronEditor(jobId: String? = null) = if (jobId != null) "cron_editor?jobId=$jobId" else "cron_editor"
     fun dotfileEditor() = DOTFILE_EDITOR
+
+    private fun encodeRouteParam(value: String): String = Uri.encode(value, "")
 }
 
 @Composable
@@ -132,7 +138,7 @@ fun AgentShellNavHost() {
                 navArgument("isSwipeNav") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStackEntry ->
-            val sessionName = backStackEntry.arguments?.getString("sessionName") ?: ""
+            val sessionName = Uri.decode(backStackEntry.arguments?.getString("sessionName") ?: "")
             val isSwipeNav = backStackEntry.arguments?.getBoolean("isSwipeNav") ?: false
             TerminalScreen(
                 sessionName = sessionName,
@@ -163,11 +169,11 @@ fun AgentShellNavHost() {
                 navArgument("cwd") { type = NavType.StringType; defaultValue = "" },
             ),
         ) { backStackEntry ->
-            val sessionName = backStackEntry.arguments?.getString("sessionName") ?: ""
+            val sessionName = Uri.decode(backStackEntry.arguments?.getString("sessionName") ?: "")
             val windowIndex = backStackEntry.arguments?.getInt("windowIndex") ?: 0
             val isAcp = backStackEntry.arguments?.getBoolean("isAcp") ?: false
             val isSwipeNav = backStackEntry.arguments?.getBoolean("isSwipeNav") ?: false
-            val cwd = backStackEntry.arguments?.getString("cwd") ?: ""
+            val cwd = Uri.decode(backStackEntry.arguments?.getString("cwd") ?: "")
             ChatScreen(
                 sessionName = sessionName,
                 windowIndex = windowIndex,
@@ -299,7 +305,7 @@ fun AgentShellNavHost() {
                 navArgument("isAcp") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { backStackEntry ->
-            val sessionName = backStackEntry.arguments?.getString("sessionName") ?: ""
+            val sessionName = Uri.decode(backStackEntry.arguments?.getString("sessionName") ?: "")
             val rawPath = backStackEntry.arguments?.getString("path") ?: ""
             val path = rawPath.takeIf { it.isNotEmpty() && it != "/" }
             val isAcp = backStackEntry.arguments?.getBoolean("isAcp") ?: false

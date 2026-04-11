@@ -16,6 +16,8 @@ use crate::types::PermissionOption;
 type RequestCallback = Box<dyn FnOnce(Result<sj::Value, String>) + Send + 'static>;
 
 const CODEX_PROVIDER: &str = "codex";
+const CODEX_YOLO_APPROVAL_POLICY: &str = "never";
+const CODEX_YOLO_SANDBOX: &str = "danger-full-access";
 
 pub struct CodexAppClient {
     child: Arc<Mutex<Option<Child>>>,
@@ -201,11 +203,7 @@ impl CodexAppClient {
         let response = self
             .send_request_typed::<ThreadStartResponse>(
                 "thread/start",
-                json!({
-                    "cwd": cwd.trim_end_matches('/'),
-                    "persistFullHistory": true,
-                    "config": codex_thread_config(),
-                }),
+                codex_thread_start_params(cwd),
             )
             .await?;
 
@@ -238,12 +236,7 @@ impl CodexAppClient {
         let response = self
             .send_request_typed::<ThreadResumeResponse>(
                 "thread/resume",
-                json!({
-                    "threadId": raw_id,
-                    "cwd": cwd.trim_end_matches('/'),
-                    "persistFullHistory": true,
-                    "config": codex_thread_config(),
-                }),
+                codex_thread_resume_params(&raw_id, cwd),
             )
             .await?;
 
@@ -268,12 +261,7 @@ impl CodexAppClient {
         let response = self
             .send_request_typed::<ThreadForkResponse>(
                 "thread/fork",
-                json!({
-                    "threadId": raw_id,
-                    "cwd": cwd.trim_end_matches('/'),
-                    "persistFullHistory": true,
-                    "config": codex_thread_config(),
-                }),
+                codex_thread_fork_params(&raw_id, cwd),
             )
             .await?;
 
@@ -291,19 +279,8 @@ impl CodexAppClient {
 
     pub async fn send_prompt(&self, session_id: &str, message: &str) -> Result<sj::Value, String> {
         let raw_id = decode_external_session_id(session_id).1;
-        self.send_request_value(
-            "turn/start",
-            json!({
-                "threadId": raw_id,
-                "input": [
-                    {
-                        "type": "text",
-                        "text": message,
-                    }
-                ]
-            }),
-        )
-        .await
+        self.send_request_value("turn/start", codex_turn_start_params(&raw_id, message))
+            .await
     }
 
     pub async fn read_thread_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>, String> {
@@ -616,6 +593,63 @@ fn codex_thread_config() -> sj::Value {
             }
         }
     })
+}
+
+fn codex_thread_start_params(cwd: &str) -> sj::Value {
+    json!({
+        "cwd": normalize_cwd(cwd),
+        "persistFullHistory": true,
+        "approvalPolicy": CODEX_YOLO_APPROVAL_POLICY,
+        "sandbox": CODEX_YOLO_SANDBOX,
+        "config": codex_thread_config(),
+    })
+}
+
+fn codex_thread_resume_params(thread_id: &str, cwd: &str) -> sj::Value {
+    json!({
+        "threadId": thread_id,
+        "cwd": normalize_cwd(cwd),
+        "persistFullHistory": true,
+        "approvalPolicy": CODEX_YOLO_APPROVAL_POLICY,
+        "sandbox": CODEX_YOLO_SANDBOX,
+        "config": codex_thread_config(),
+    })
+}
+
+fn codex_thread_fork_params(thread_id: &str, cwd: &str) -> sj::Value {
+    json!({
+        "threadId": thread_id,
+        "cwd": normalize_cwd(cwd),
+        "persistFullHistory": true,
+        "approvalPolicy": CODEX_YOLO_APPROVAL_POLICY,
+        "sandbox": CODEX_YOLO_SANDBOX,
+        "config": codex_thread_config(),
+    })
+}
+
+fn codex_turn_start_params(thread_id: &str, message: &str) -> sj::Value {
+    json!({
+        "threadId": thread_id,
+        "approvalPolicy": CODEX_YOLO_APPROVAL_POLICY,
+        "sandboxPolicy": {
+            "type": "dangerFullAccess",
+        },
+        "input": [
+            {
+                "type": "text",
+                "text": message,
+            }
+        ]
+    })
+}
+
+fn normalize_cwd(cwd: &str) -> &str {
+    let normalized = cwd.trim_end_matches('/');
+    if normalized.is_empty() {
+        "/"
+    } else {
+        normalized
+    }
 }
 
 fn spawn_stderr_drain_task(stderr: ChildStderr, process_name: &'static str) {
@@ -1600,4 +1634,104 @@ struct PermissionsRequestApprovalParams {
     thread_id: String,
     reason: Option<String>,
     permissions: sj::Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_thread_start_params_enable_yolo_mode() {
+        let params = codex_thread_start_params("/tmp/project/");
+
+        assert_eq!(
+            params.get("cwd").and_then(sj::Value::as_str),
+            Some("/tmp/project")
+        );
+        assert_eq!(
+            params.get("approvalPolicy").and_then(sj::Value::as_str),
+            Some(CODEX_YOLO_APPROVAL_POLICY)
+        );
+        assert_eq!(
+            params.get("sandbox").and_then(sj::Value::as_str),
+            Some(CODEX_YOLO_SANDBOX)
+        );
+        assert_eq!(
+            params
+                .get("persistFullHistory")
+                .and_then(sj::Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn codex_thread_resume_params_enable_yolo_mode() {
+        let params = codex_thread_resume_params("thread_123", "/tmp/project/");
+
+        assert_eq!(
+            params.get("threadId").and_then(sj::Value::as_str),
+            Some("thread_123")
+        );
+        assert_eq!(
+            params.get("approvalPolicy").and_then(sj::Value::as_str),
+            Some(CODEX_YOLO_APPROVAL_POLICY)
+        );
+        assert_eq!(
+            params.get("sandbox").and_then(sj::Value::as_str),
+            Some(CODEX_YOLO_SANDBOX)
+        );
+    }
+
+    #[test]
+    fn codex_thread_fork_params_enable_yolo_mode() {
+        let params = codex_thread_fork_params("thread_456", "/tmp/project/");
+
+        assert_eq!(
+            params.get("threadId").and_then(sj::Value::as_str),
+            Some("thread_456")
+        );
+        assert_eq!(
+            params.get("approvalPolicy").and_then(sj::Value::as_str),
+            Some(CODEX_YOLO_APPROVAL_POLICY)
+        );
+        assert_eq!(
+            params.get("sandbox").and_then(sj::Value::as_str),
+            Some(CODEX_YOLO_SANDBOX)
+        );
+    }
+
+    #[test]
+    fn codex_turn_start_params_enable_yolo_mode() {
+        let params = codex_turn_start_params("thread_789", "Run the tests");
+
+        assert_eq!(
+            params.get("threadId").and_then(sj::Value::as_str),
+            Some("thread_789")
+        );
+        assert_eq!(
+            params.get("approvalPolicy").and_then(sj::Value::as_str),
+            Some(CODEX_YOLO_APPROVAL_POLICY)
+        );
+        assert_eq!(
+            params
+                .get("sandboxPolicy")
+                .and_then(|policy| policy.get("type"))
+                .and_then(sj::Value::as_str),
+            Some("dangerFullAccess")
+        );
+        assert_eq!(
+            params
+                .get("input")
+                .and_then(sj::Value::as_array)
+                .and_then(|input| input.first())
+                .and_then(|value| value.get("text"))
+                .and_then(sj::Value::as_str),
+            Some("Run the tests")
+        );
+    }
+
+    #[test]
+    fn normalize_cwd_preserves_root_directory() {
+        assert_eq!(normalize_cwd("/"), "/");
+    }
 }

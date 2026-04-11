@@ -11,450 +11,282 @@
   <img src="https://img.shields.io/badge/OpenCode-FF6B6B?style=flat" alt="OpenCode ACP">
 </p>
 
-AgentShell is a **high-performance, Rust-powered terminal session manager** that gives you complete control over your development agents—anywhere, anytime.
+AgentShell is a high-performance terminal and AI session platform for Android.
+The **maintained and feature-complete client is the native Android app** (`android-native/`), backed by a Rust server.
 
-Built with Rust for maximum speed and reliability, AgentShell lets you manage TMUX sessions and AI-powered development workflows from your Android device or web browser. The native Android app (Kotlin/Jetpack Compose) provides a modern, high-performance experience with split-screen multi-panel layouts, real-time system monitoring, and Claude usage tracking. Whether you're monitoring autonomous coding agents, controlling remote development sessions via Claude Code or OpenCode, or simply need mobile access to your terminal workflows, AgentShell delivers a seamless, real-time experience.
+- Native Android: Kotlin + Jetpack Compose (`android-native/`)
+- Backend: Rust + Axum + WebSocket (`backend-rust/`)
+- Flutter client: kept for history only, **deprecated** (`flutter/`)
 
-**Control your AI agents. Control your development. From anywhere.**
+## What’s new since the original docs
 
-> 🚀 **Remote Claude Code**: Run Claude Code in a TMUX session and control it remotely from your phone or browser — send prompts, view output, and supervise your AI coding agent in real-time.
+- Direct Chat support for both:
+  - **OpenCode ACP** (shared ACP transport)
+  - **Codex app-server** (provider-aware integration)
+- Enhanced session UX for favorites and tags:
+  - Favorites CRUD
+  - Tag CRUD and session-tag assignment
+  - Session filtering by tags and grouping in session lists
+- Better launch controls:
+  - Direct sessions list can be grouped and managed by provider/context
+  - Direct session launch targets include dedicated paths for ACP, TMUX, and Codex
+- Rich usage visibility:
+  - Claude usage bars (5h and 7d) and Codex usage in chat sessions
+- File attachment support in chat for both tmux and direct sessions
+- ACP history persistence and resume/load flow improvements
+- Expanded websocket command coverage (`acp-*`, file browser, git, notifications, cron, dotfiles)
 
-> 🚀 **OpenCode via ACP + TMUX**: Full OpenCode support — either through the native ACP (Agent Control Protocol) integration for structured AI sessions, or by running OpenCode directly in a TMUX session for classic terminal control.
+## Core Feature Set
 
-## Features
+### Terminal and Sessions (tmux)
+- List/create/kill/rename tmux sessions
+- List/create/select/kill windows
+- Real-time terminal I/O over WebSocket
+- Terminal streaming optimizations for large output
+- Cursor-safe line buffering and reconnection handling
 
-### Core
-- **Remote Claude Code**: Run Claude Code in a TMUX session and control it from anywhere — send input, read output, and supervise your AI coding agent remotely
-- **Remote OpenCode**: Control OpenCode via native ACP integration or directly through a TMUX session
-- **Agent Control**: Monitor and control AI coding agents running in TMUX sessions
-- **TMUX Session Management**: Create, attach, rename, and kill TMUX sessions and windows
-- **Real-time Communication**: WebSocket-based architecture for live terminal I/O
-- **Chat Support**: Full chat experience with text, images, audio, and file sharing
-- **File Browser**: Browse, rename, copy, move, and delete files on the server
-- **Cron Job Manager**: Create, edit, toggle, and test cron jobs from your phone
+### AI Sessions
+- **Claude Code**: run Claude inside tmux and control it like any terminal session
+- **OpenCode ACP**: direct chat sessions with permission-based tool calls
+- **Codex direct mode**: app-server based sessions via the same ACP transport shape
+- Kiro session detection and parsing in tmux chat logs
+- Context-window updates and tool call timeline tracking
 
-### Native Android App (Kotlin/Jetpack Compose)
-- **Split-Screen Multi-Panel**: View multiple terminal and chat sessions side-by-side with configurable panel layouts — drag to resize, save layouts for quick switching
-- **Real-Time Claude Usage**: Live Claude Max subscription usage display (5-hour and 7-day utilization with reset countdowns) on the main screen and inside Claude chat sessions, with color-coded indicators (green/amber/red)
-- **System Alerts**: Real-time CPU, RAM, and disk monitoring with warning banners when resources exceed 90%
-- **Swipe Navigation**: Swipe between recent terminal and chat sessions for fast context switching
-- **Terminal Accessory Bar**: Scrollable bar with CTRL, ALT, ESC, TAB, arrow keys, and F1-F12
-- **Voice Input**: Record audio messages with speech-to-text transcription
-- **Image & File Upload**: Attach and send images/files to AI agents running in tmux sessions
-- **Session Persistence**: Remembers active session and tab across app restarts
-- **Notification System**: Receive alerts from the server with support for images, audio, markdown, and HTML
+### Session Management
+- tmux sessions + favorite sessions in local app store
+- Provider-aware direct sessions:
+  - OpenCode thread IDs are prefixed as `opencode:<id>`
+  - Codex thread IDs are prefixed as `codex:<id>`
+- Delete, fork, resume, and list direct sessions
+- Session-level tags with color and filter support
 
-### Backend (Rust)
-- **Performance Optimized**: Handles large terminal outputs with buffering and flow control
-- **AI Tool Detection**: Auto-detects Claude Code, OpenCode, and Codex running in tmux sessions and parses their chat logs
-- **Network Accessible**: Access via local network, Tailscale, or Cloudflare-proxied domains
-- **Dotfile Management**: Version-controlled dotfile editing with history and rollback
-
-## AI Agent Integrations
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                          AgentShell Workflows                                   │
-│                                                                                 │
-│  ╔═══════════════════════════════════════════════════════════════════════════╗   │
-│  ║  TMUX Mode — Claude Code, OpenCode, or any CLI tool                     ║   │
-│  ║                                                                         ║   │
-│  ║  ┌──────────┐  WebSocket  ┌─────────────┐  TMUX API  ┌──────────────┐  ║   │
-│  ║  │ 📱 Phone │────────────►│  AgentShell │───────────►│ TMUX Session │  ║   │
-│  ║  │ 🌐 Web   │◄────────────│  (Backend)  │◄───────────│              │  ║   │
-│  ║  └──────────┘  terminal   └─────────────┘  send-keys  │ Claude Code │  ║   │
-│  ║                I/O stream                  capture-pane│ OpenCode    │  ║   │
-│  ║                                                        │ vim, htop…  │  ║   │
-│  ║  Flow:                                                 └──────────────┘  ║   │
-│  ║  1. Start any CLI in a TMUX session on your server                      ║   │
-│  ║  2. Open AgentShell → attach to session                                 ║   │
-│  ║  3. Full terminal control: type, scroll, resize                         ║   │
-│  ╚═════════════════════════════════════════════════════════════════════════╝   │
-│                                                                                 │
-│  ╔═══════════════════════════════════════════════════════════════════════════╗   │
-│  ║  ACP Mode — OpenCode with structured AI session control                 ║   │
-│  ║                                                                         ║   │
-│  ║  ┌──────────┐  WebSocket  ┌─────────────┐   ACP    ┌────────────────┐  ║   │
-│  ║  │ 📱 Phone │────────────►│  AgentShell │─────────►│ OpenCode Agent │  ║   │
-│  ║  │ 🌐 Web   │◄────────────│  (Backend)  │◄─────────│   Service      │  ║   │
-│  ║  └──────────┘  chat UI    └─────────────┘  events   └────────────────┘  ║   │
-│  ║                messages,                   tool calls,                    ║   │
-│  ║                permissions                 streaming                     ║   │
-│  ║                                                                         ║   │
-│  ║  Flow:                                                                  ║   │
-│  ║  1. Create an ACP session in AgentShell (Chat interface)                ║   │
-│  ║  2. Send prompts → agent thinks → streams responses                     ║   │
-│  ║  3. Agent requests tool use → you approve/deny → agent executes         ║   │
-│  ║  4. Full history persisted in SQLite for later review                   ║   │
-│  ╚═════════════════════════════════════════════════════════════════════════╝   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Claude Code (via TMUX)
-
-AgentShell lets you run **Claude Code** inside a TMUX session and control it remotely from your Android device or web browser. No special protocol needed — just launch Claude Code in a session and attach from anywhere:
-
-```bash
-# On your server: start Claude Code in a named TMUX session
-tmux new-session -s claude -d "claude"
-```
-
-Then open AgentShell, attach to the `claude` session, and you have full keyboard control — send prompts, approve actions, view streaming output, all from your phone or browser.
-
-### OpenCode (ACP + TMUX)
-
-AgentShell supports OpenCode in two ways:
-
-- **Native ACP integration** (recommended): Structured AI sessions with real-time streaming, tool call visibility, and permission control — managed through the Chat interface.
-- **TMUX mode**: Run `opencode` directly in a TMUX session for classic terminal interaction, same as any other CLI tool.
-
-#### What is ACP?
-
-ACP (Agent Control Protocol) is a protocol that allows AI agents to interact with your development environment through AgentShell. When you connect OpenCode to AgentShell via ACP, you get:
-
-- **AI-Powered Sessions**: Create and control development sessions powered by AI agents
-- **Real-time Interaction**: Watch as the AI agent executes commands, makes edits, and interacts with your codebase
-- **Tool Execution**: AI agents can run terminal commands, read/write files, and perform complex development tasks
-- **Permission Control**: Approve or deny tool execution requests from AI agents
-- **Session Persistence**: Resume AI-powered sessions anytime
-
-#### Getting Started with ACP
-
-1. **Start AgentShell backend**:
-   ```bash
-   cd backend-rust
-   cargo run --release
-   ```
-
-2. **Connect OpenCode**: In your OpenCode configuration, set the AgentShell WebSocket URL:
-   ```
-   ws://localhost:4010/ws
-   ```
-
-3. **Start a new ACP session**: Create a new session with your desired working directory.
-
-4. **Watch the AI in action**: OpenCode will connect and begin interacting with your development environment in real-time!
-
-#### ACP Features
-
-- **Session Management**: Create, resume, fork, and list ACP sessions
-- **Message Streaming**: Real-time streaming of AI thoughts and responses
-- **Tool Calls**: AI agents can execute shell commands, read files, write files, and more
-- **Permission System**: Review and approve/deny tool execution requests
-- **Event History**: All session events are persisted for later review
-
-## Android App (Native Kotlin)
-
-AgentShell includes a native **Android application** built with Kotlin and Jetpack Compose. This is the primary client for controlling your development agents from your phone.
-
-### Building from Source
-
-**Local build** (requires JDK 17):
-```bash
-cd android-native
-JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew assembleDebug
-# APK: app/build/outputs/apk/debug/app-debug.apk
-```
-
-**Docker build** (reads `.env` for server list and auth token):
-```bash
-cd android-native
-./build.sh debug             # Debug APK
-./build.sh release           # Release APK
-./build.sh release --install # Build + install via USB
-```
-
-> A legacy Flutter app exists in `flutter/` for web and cross-platform builds.
-
-## Prerequisites
-
-- Rust (latest stable version) - Install from [rustup.rs](https://rustup.rs/)
-- cargo (comes with Rust)
-- TMUX installed on your system
-- Modern web browser with WebSocket support (for WebUI)
-
-## Quick Start
-
-### Backend Only
-
-Run the Rust backend:
-
-```bash
-cd backend-rust
-cargo run --release
-```
-
-The backend runs on `http://localhost:4010` with WebSocket at `/ws`.
-
-### Backend + WebUI
-
-If you want a simple web interface, you can serve static files from the backend or use a separate frontend.
-
-## Network Access
-
-The application accepts connections from any network interface:
-- **Local access**: `http://localhost:4010`
-- **Network access**: `http://[YOUR-IP]:4010` (e.g., `http://192.168.1.100:4010`)
-- **Tailscale access**: `http://[TAILSCALE-IP]:4010` (e.g., `http://100.x.x.x:4010`)
-
-## WebSocket Protocol
-
-All communication with the backend happens through WebSocket connections.
-
-Connect to `/ws` endpoint for terminal session management.
-
-**Client → Server Messages:**
-```javascript
-// Session Management
-{ type: 'list-sessions' }
-{ type: 'create-session', name: string }
-{ type: 'attach-session', sessionName: string, cols: number, rows: number }
-{ type: 'kill-session', sessionName: string }
-{ type: 'rename-session', sessionName: string, newName: string }
-
-// Terminal I/O
-{ type: 'input', data: string }
-{ type: 'resize', cols: number, rows: number }
-
-// Window Management
-{ type: 'list-windows', sessionName: string }
-{ type: 'create-window', sessionName: string, windowName?: string }
-{ type: 'select-window', sessionName: string, windowIndex: number }
-{ type: 'kill-window', sessionName: string, windowIndex: number }
-{ type: 'rename-window', sessionName: string, windowIndex: number, newName: string }
-```
-
-**Server → Client Messages:**
-```javascript
-// Session Updates
-{ type: 'sessions-list', sessions: Session[] }
-{ type: 'session-created', session: Session }
-{ type: 'session-killed', sessionName: string }
-{ type: 'session-renamed', oldName: string, newName: string }
-{ type: 'attached', sessionName: string }
-{ type: 'disconnected' }
-
-// Terminal Output
-{ type: 'output', data: string }
-
-// Window Updates
-{ type: 'windows-list', windows: Window[] }
-{ type: 'window-created', window: Window }
-{ type: 'window-selected', windowIndex: number }
-{ type: 'window-killed', windowIndex: number }
-{ type: 'window-renamed', windowIndex: number, newName: string }
-
-// Real-time Updates (from monitor)
-{ type: 'tmux-update', event: 'session-added' | 'session-removed' | 'window-added' | 'window-removed' }
-```
+### Mobile App Features
+- Multi-panel UI, split terminal/chat workflows, quick pane switching
+- Real-time system usage (`CPU`, `memory`, `disk`) and process list
+- System alerts and notifications with persistent storage
+- Audio transcription and playback pipeline
+- File browser with copy/cut/paste/delete/move/rename and search/sort
+- Cron job manager with schedule + test execution
+- Dotfile editor and history
+- In-chat file attachments for AI workflows
 
 ## Architecture
 
-### Backend (Rust + Axum)
+```text
+Android (WebSocket + HTTPS)        Backend (Rust + Axum)
+----------------------------      -----------------------------
+tmux session control --------------> tmux integration + chat log watcher
+ACP/Codex direct chat --------------> chat/event backplane + providers
+notifications / file browser --------> filesystem + notification services
+system stats -----------------------> OS process + disk monitoring
+favorites/tags ---------------------> SQLite persistence
+```
 
-- **Web Framework**: Axum for high-performance async HTTP/WebSocket handling
-- **Async Runtime**: Tokio for concurrent operations
-- **Terminal Interface**: portable-pty for cross-platform PTY support
-- **Database**: SQLite (rusqlite) for chat history and notifications
-- **AI Tool Detection**: Process scanning via `/proc` to detect Claude Code, OpenCode, Codex
-- **Session Management**: `tmux send-keys` + `capture-pane` for multi-client isolation
+Backend flow is split across:
+- `backend-rust/src/websocket/*` for websocket command handlers
+- `backend-rust/src/*` for terminal and system subsystems
+- `backend-rust/src/codex_app/` for Codex app-server orchestration
+- `backend-rust/src/favorite_store.rs` and `backend-rust/src/tag_store.rs` for favorites/tags
 
-### Android App (Kotlin/Compose)
+For implementation details on Codex routing and transport reuse, use:
+- [CODEX_APP_SERVER_INTEGRATION.md](CODEX_APP_SERVER_INTEGRATION.md)
 
-- **UI**: Jetpack Compose with Material3
-- **DI**: Hilt
-- **State**: ViewModel + StateFlow
-- **Network**: OkHttp WebSocket with exponential backoff reconnection
-- **Storage**: Room + DataStore
+## AI Integration Details
+
+### 1) Claude Code (tmux mode)
+Run Claude Code manually inside a tmux session and attach from the app:
+```bash
+tmux new-session -s claude -d "claude"
+```
+From the app, attach to `claude` as a normal tmux session and interact in real time.
+
+### 2) OpenCode (ACP mode)
+Uses shared ACP-style direct chat commands:
+- `select-backend acp`
+- `acp-create-session`
+- `acp-send-prompt`
+- `acp-permission-request` -> `acp-respond-permission`
+- `watch-acp-chat-log`, `acp-load-history`, `acp-clear-history`
+
+### 3) Codex (app-server mode)
+Also uses the same direct-chat websocket message family (`acp-*`) with provider-specific routing on backend.
+- Create/list/resume calls include `backend=codex` where required.
+- Session IDs returned are prefixed `codex:<thread_id>`.
+- Resume/load flow uses Codex thread APIs under the hood (`thread/start`, `thread/resume`, `thread/read`).
+
+If you want the full flow and edge cases, read:
+- [CODEX_APP_SERVER_INTEGRATION.md](CODEX_APP_SERVER_INTEGRATION.md)
+
+## Prerequisites
+
+- Linux server/macOS for backend
+- Rust (latest stable) and Cargo
+- `tmux` installed
+- `docker` + Android SDK platform-tools (for Android build/install)
+- Optional: `curl`, `git`, `openssl` (for HTTPS and diagnostics)
+
+## Backend Setup
+
+### Required env (runtime)
+`AUTH_TOKEN` is required at startup. The server exits if it is missing or empty.
+
+| Variable | Required | Meaning |
+|----------|----------|---------|
+| `AUTH_TOKEN` | required | Shared token for all HTTP and WebSocket requests |
+| `AGENTSHELL_HTTP_PORT` | optional | HTTP listen port (default: `4010`) |
+| `AGENTSHELL_HTTPS_PORT` | optional | HTTPS listen port (default: `4443`) |
+| `ALLOWED_ORIGIN` | optional | Extra CORS origin (default includes localhost variants) |
+| `OPENAI_API_KEY` | optional | Used by backend features that call OpenAI-capable tooling |
+| `RUST_LOG` | optional | Tracing level |
+
+Example:
+```bash
+cd backend-rust
+export AUTH_TOKEN="your-strong-secret"
+export AGENTSHELL_HTTP_PORT=4010
+cargo run --release
+```
+
+### Install service
+`install.sh` builds and installs the release binary into `/opt/agentshell` and creates a systemd service.
+```bash
+sudo ./install.sh
+```
+
+## Android Native Build
+
+All Android builds now come from `android-native/build.sh`.
+
+```bash
+cd android-native
+./build.sh release               # release APK
+./build.sh debug                 # debug APK
+./build.sh release --install      # build + install over USB
+./build.sh release --install --wireless # build + wireless install
+./build.sh release --install --force # force install on work-profile devices
+```
+
+Build config is populated from `.env` at repo root (`SERVER_LIST`, `AUTH_TOKEN`, `SHOW_THINKING`, `SHOW_TOOL_CALLS`, `OPENAI_API_KEY`) and injected into Android `BuildConfig`.
+
+If you already have an APK and want install only:
+```bash
+./scripts/install-android.sh agentshell-native-release.apk
+./scripts/install-android.sh agentshell-native-release.apk --wireless --launch
+```
+
+## Endpoints
+
+### WebSocket
+- `ws://<host>:<port>/ws?token=<AUTH_TOKEN>`
+- Header auth alternative: `X-Auth-Token: <AUTH_TOKEN>`
+- Also accepts direct secure WebSocket at HTTPS port when configured.
+
+### REST endpoints (all protected by auth middleware)
+- `GET /api/clients`
+- `GET /api/chat/files/:id`
+- `GET /api/notifications`
+- `POST /api/notifications`
+- `POST /api/tmux/input`
+- `GET|POST|PUT|DELETE /api/cron/jobs` and `/api/cron/jobs/:id` variants
+- `GET /api/notifications/files/:id`
+
+## WebSocket Message Surface
+
+The full source-of-truth definitions are in:
+- `backend-rust/src/types/mod.rs`
+- `backend-rust/src/websocket/types.rs` (internal helpers)
+- `backend-rust/src/websocket/*.rs` (handlers)
+
+Current high-level message families:
+- Terminal sessions:
+  - `list-sessions`, `create-session`, `attach-session`, `kill-session`, `list-windows`, `select-window`, `input`, `resize`
+- Chat logs:
+  - `watch-chat-log`, `watch-acp-chat-log`, `load-more-chat-history`, `clear-chat-log`
+- ACP/direct sessions:
+  - `select-backend`, `acp-create-session`, `acp-resume-session`, `acp-fork-session`, `acp-list-sessions`, `acp-send-prompt`, `acp-load-history`, `acp-clear-history`, `acp-delete-session`
+- Attachments:
+  - `send-file-to-chat`, `send-file-to-acp-chat`
+- Favorites/tags:
+  - `get-favorites`, `add-favorite`, `update-favorite`, `delete-favorite`
+  - `get-tags`, `add-tag`, `assign-tag-to-session`, `remove-tag-from-session`
+- System / resources:
+  - `get-stats`, `get-claude-usage`, `get-codex-usage`
+- File operations and git workflows:
+  - `list-files`, `read-binary-file`, `delete-files`, `rename-file`, `copy-files`, `move-files`
+  - `git-status`, `git-diff`, `git-log`, `git-branches`, `git-commit`, `git-push`, etc.
+- Notifications:
+  - `get/create/mark/read/delete` notification commands are available through HTTP routes as shown above.
+
+On the server side, common response types include:
+- `sessions-list`, `chat-event`, `chat-history`, `acp-message-chunk`, `acp-tool-call`, `acp-permission-request`, `acp-history-loaded`, `acp-prompt-done`, `acp-error`, `favorites-list`, `tags-list`, `context-window-update`, `stats`, `claude-usage`, `codex-usage`, and more.
+
+## Android App Notes
+
+- Android sends `X-Auth-Token` and uses a server-provided token in HTTP/WebSocket flows.
+- The app can host multiple panels, watch multiple sessions, and restore open chats.
+- Direct session creation is provider-aware (`codex` or `opencode`) and opens into the shared ACP chat renderer.
+- Session tiles now support tags and provider/path grouping so long lists stay manageable.
+- File upload supports image/audio/doc attachments in chat.
+
+## Legacy Flutter Client
+
+- The Flutter app is maintained only for historical purposes.
+- Use native Android for active development and feature updates:
+  - [flutter/README.md](flutter/README.md)
+
+## Debug, Logs and Verification
+
+- Backend logs: check `backend.log` in project root or systemd `journalctl -u agentshell`.
+- Start backend with debug logs:
+```bash
+cd backend-rust
+RUST_LOG=debug AUTH_TOKEN=... cargo run --release
+```
+
+Useful verification scripts:
+- `scripts/test_codex_direct_session.py` — end-to-end Codex direct session create/list/resume/load check.
+- `scripts/test_enter_key.py` — terminal key event and input checks.
+- `scripts/test-ws.sh`, `scripts/test-ws.py` — WebSocket smoke checks.
+
+## Security
+
+- The backend always enforces `AUTH_TOKEN`:
+  - Missing token -> `401`
+  - Invalid token -> `401`
+- Constant-time token comparison is used to reduce timing leakage.
+- WebSocket auth methods:
+  - `?token=<AUTH_TOKEN>` query parameter
+  - `X-Auth-Token: <AUTH_TOKEN>` header
+- HTTPS is optional by default; when `certs/cert.pem` and `certs/key.pem` exist, port from `AGENTSHELL_HTTPS_PORT` is also available.
 
 ## Troubleshooting
 
-### Common Issues
-
-**Keyboard input not working**
-- Click anywhere in the terminal area to ensure it has focus
-
-**Session not responding**
-- Refresh the connection and re-select the session from the list
-
-**Window switching fails**
-- Ensure you're attached to the session first
-
-**Terminal freezes with large output**
-- The system includes output buffering and flow control
-- Check server logs for debug information
-
-### Debug Mode
-
-Enable detailed logging:
-
-```bash
-cd backend-rust
-RUST_LOG=debug cargo run --release
-```
-
-## Performance Considerations
-
-- **Output Buffering**: Server buffers PTY output to prevent WebSocket overflow
-- **Flow Control**: PTY pauses when WebSocket buffer is full
-- **Client Batching**: Terminal writes are batched for smooth rendering
-- **Session Isolation**: Alternative session manager available for better multi-client support
+- Build failures:
+  - Ensure Docker is available for Android builds.
+  - Ensure `codex` and `opencode` binaries are on `PATH` for their respective direct backends.
+- Connection failures:
+  - Confirm backend URL and port, and always include a valid token.
+  - If using CORS in web contexts, set `ALLOWED_ORIGIN`.
+- Authentication errors:
+  - Confirm `AUTH_TOKEN` is set before backend start; server exits early if missing.
+- App install issues:
+  - Use `scripts/install-android.sh` with `--wireless` for ADB over Wi-Fi.
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing-feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a topic branch
+3. Run tests/build checks where applicable
+4. Open a PR with concise notes about protocol and behavior changes
 
-## Configuration
+## References
 
-AgentShell reads configuration from a `.env` file in the project root. Create one before building:
-
-```bash
-cp .env.example .env   # if available, or create manually
-```
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `AUTH_TOKEN` | Shared secret that protects all API and WebSocket endpoints. When set, every request must include this token or it will be rejected with HTTP 401. On **web**, this token is also the password entered on the login page — it is never baked into the JS bundle. If empty or not set, the backend remains fully open (no authentication). | Recommended |
-| `SERVER_LIST` | Comma-separated list of backend servers for the Flutter app. Format: `host:port,LABEL\|host:port,LABEL`. Example: `192.168.0.10:4010,HOME\|myserver.com:443,CLOUD` | Yes |
-| `OPENAI_API_KEY` | OpenAI API key used by AI-powered features. | Optional |
-| `SHOW_THINKING` | Show AI thinking/reasoning in chat UI (`true`/`false`). Default: `true`. | Optional |
-| `SHOW_TOOL_CALLS` | Show AI tool call details in chat UI (`true`/`false`). Default: `true`. | Optional |
-
-These values are baked into the Flutter app at build time via `BuildConfig`. The backend reads `AUTH_TOKEN` from the process environment at runtime (set automatically by the systemd service when using `install.sh`).
-
-### Example `.env`
-
-```env
-SERVER_LIST=192.168.0.10:4010,HOME|myserver.com:443,CLOUD
-AUTH_TOKEN=your-secret-token-here
-OPENAI_API_KEY=sk-...
-SHOW_THINKING=false
-SHOW_TOOL_CALLS=false
-```
-
-## Security
-
-> **⚠️ IMPORTANT: If you are exposing AgentShell to the public internet (e.g., via Cloudflare, reverse proxy, or port forwarding) without a VPN, you MUST set `AUTH_TOKEN` in your `.env` before building and deploying.** Without it, anyone who discovers your server URL will have full access to your terminal sessions, can execute commands, read files, and control your AI agents. Set a strong, unique token and rebuild all clients (Android, Web, Linux) after adding it.
-
-AgentShell supports token-based authentication to protect all API and WebSocket endpoints.
-
-### How it works
-
-```
-                        ┌──────────────────────────────────────────────┐
-                        │              Rust Backend                    │
-                        │                                              │
-┌───────────┐  ?token=  │  ┌──────────────┐    ┌───────────────────┐   │
-│  Android  │──────────►│  │              │ ✅ │  /ws              │   │
-│  (Flutter)│  ws/wss   │  │              │───►│  /api/clients     │   │
-└───────────┘           │  │  Auth        │    │  /api/chat/files  │   │
-                        │  │  Middleware   │    │  /api/tmux/input  │   │
-┌───────────┐  ?token=  │  │              │    └───────────────────┘   │
-│    Web    │──────────►│  │  Validates   │                            │
-│  (Flutter)│  wss      │  │  AUTH_TOKEN  │    ┌───────────────────┐   │
-└───────────┘           │  │              │ ❌ │  HTTP 401         │   │
-                        │  │              │───►│  Unauthorized     │   │
-┌───────────┐  ?token=  │  │              │    └───────────────────┘   │
-│   Linux   │──────────►│  │              │                            │
-│  (Flutter)│  ws       │  └──────────────┘    ┌───────────────────┐   │
-└───────────┘           │                      │  Static files     │   │
-                        │         No auth ────►│  (index.html, js) │   │
-                        │                      └───────────────────┘   │
-                        └──────────────────────────────────────────────┘
-```
-
-1. Set `AUTH_TOKEN` in your `.env` file
-2. Build the Flutter apps (Android, Web, Linux) — the token is embedded at build time
-3. Run `sudo ./install.sh` to deploy the backend — the token is passed to the systemd service
-4. All requests without a valid token are rejected with HTTP 401
-
-The token can be provided via:
-- **Query parameter**: `?token=your-token` (used by Flutter clients for WebSocket connections)
-- **Header**: `X-Auth-Token: your-token` (alternative for HTTP API calls)
-
-Static files (the web frontend) are served without authentication.
-
-### Web Login Page
-
-When accessing AgentShell from a **browser**, the Flutter web app always shows a login screen before granting access — regardless of how the app was built.
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  Browser (Web)                      │
-│                                                     │
-│  Open URL                                           │
-│      │                                              │
-│      ▼                                              │
-│  web_auth_token in localStorage?                    │
-│      │                                              │
-│      ├── No ──► LoginScreen                         │
-│      │              │                               │
-│      │          Enter password                      │
-│      │              │                               │
-│      │          Validate: GET /api/clients?token=   │
-│      │              │                               │
-│      │          200 OK ──► save to localStorage     │
-│      │              │              │                │
-│      │           401/err       HomeScreen           │
-│      │              │                               │
-│      │          Show error                          │
-│      │                                              │
-│      └── Yes ──► HomeScreen (skip login)            │
-└─────────────────────────────────────────────────────┘
-```
-
-**The password is your `AUTH_TOKEN`.** The web app validates the entered password against the backend's `/api/clients` endpoint. On success, the token is stored in the browser's `localStorage` so the user does not need to log in again on subsequent visits.
-
-**To configure:**
-
-1. Set `AUTH_TOKEN` in your `.env` file:
-   ```env
-   AUTH_TOKEN=your-strong-secret-here
-   ```
-2. Rebuild and redeploy the web app:
-   ```bash
-   cd flutter && ./build.sh web
-   ./scripts/deploy-web.sh
-   ```
-3. Open the web app in your browser — you will be prompted for the password.
-
-> **Note:** Unlike Android/Linux builds (where the token is embedded in the binary), the web build intentionally **does not** bake `AUTH_TOKEN` into the compiled JavaScript. This prevents the secret from being visible in browser developer tools or the page source. Instead, the user enters it at login time and the browser stores it locally.
-
-**Session persistence:** The token is kept in `localStorage` indefinitely. To end a session, use the **Log Out** button in **Settings** — this clears the stored token and returns to the login screen.
-
-**Android and Linux** apps bypass the login screen entirely and connect directly using the token embedded at build time.
-
-### Backwards compatibility
-
-If `AUTH_TOKEN` is not set, the backend remains fully open — no authentication is required. This preserves the original behavior for local/trusted network setups.
-
-### Security details
-
-- Token comparison uses **constant-time equality** to prevent timing attacks
-- Tokens are **never logged** — only the request path (without query string) appears in logs
-- The token is embedded in the app binary at build time, not transmitted in plain text headers (WebSocket API does not support custom headers)
-
-### Exposing to the Internet
-
-For a complete guide on exposing AgentShell to the public internet using **Cloudflare** and **Nginx** as a reverse proxy, see **[docs/deployment.md](docs/deployment.md)**. It covers:
-
-- Nginx reverse proxy configuration with WebSocket support
-- Cloudflare DNS, TLS, and WebSocket settings
-- S3 + Cloudflare deployment for the Flutter web app
-- Building all clients with the auth token
-- Verification steps and troubleshooting
+- [CODEX_APP_SERVER_INTEGRATION.md](CODEX_APP_SERVER_INTEGRATION.md)
+- [backend-rust/src/types/mod.rs](backend-rust/src/types/mod.rs)
+- [android-native/app/src/main/java/com/agentshell/feature/sessions/SessionsViewModel.kt](android-native/app/src/main/java/com/agentshell/feature/sessions/SessionsViewModel.kt)
+- [backend-rust/src/websocket/acp_cmds.rs](backend-rust/src/websocket/acp_cmds.rs)
+- [backend-rust/src/codex_app/client.rs](backend-rust/src/codex_app/client.rs)
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Backend powered by [Rust](https://www.rust-lang.org/) and [Axum](https://github.com/tokio-rs/axum)
-- Native Android app built with [Kotlin](https://kotlinlang.org/) and [Jetpack Compose](https://developer.android.com/jetpack/compose)
-- Real-time communication via [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket)
-- Claude usage API integration inspired by [claude-usage](https://github.com/LightspeedDMS/claude-usage)
+This project is licensed under the MIT License. See `LICENSE`.

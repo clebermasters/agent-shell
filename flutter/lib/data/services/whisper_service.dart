@@ -20,7 +20,7 @@ class WhisperService {
           audioFilePath,
           filename: 'audio.m4a',
         ),
-        'model': 'whisper-1',
+        'model': 'gpt-4o-mini-transcribe',
         'language': 'en',
       });
 

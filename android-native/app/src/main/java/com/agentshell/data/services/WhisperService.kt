@@ -24,7 +24,7 @@ class WhisperService @Inject constructor() {
 
     private companion object {
         const val WHISPER_URL = "https://api.openai.com/v1/audio/transcriptions"
-        const val WHISPER_MODEL = "whisper-1"
+        const val WHISPER_MODEL = "gpt-4o-mini-transcribe"
     }
 
     // Dedicated OkHttp client with longer timeouts for audio uploads

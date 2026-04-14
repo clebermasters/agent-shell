@@ -45,10 +45,7 @@ private val scheduleDescriptions = mapOf(
 )
 
 private val llmProviders = listOf(
-    "openai" to "OpenAI",
-    "minimax" to "MiniMax",
-    "bedrock" to "Bedrock",
-    "ollama" to "Ollama",
+    "openai" to "OpenAI Compatible",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,7 +65,7 @@ fun CronJobEditorScreen(
     var tmuxSession by remember { mutableStateOf(existingJob?.tmuxSession ?: "") }
     var workdir by remember { mutableStateOf(existingJob?.workdir ?: "") }
     var prompt by remember { mutableStateOf(existingJob?.prompt ?: "") }
-    var llmModel by remember { mutableStateOf(existingJob?.llmModel ?: "") }
+    var llmModel by remember { mutableStateOf(existingJob?.llmModel ?: "gpt-5.4") }
     var llmProvider by remember { mutableStateOf(existingJob?.llmProvider ?: "openai") }
     var logOutput by remember { mutableStateOf(existingJob?.logOutput ?: false) }
     var showAdvanced by remember { mutableStateOf(false) }
@@ -79,7 +76,9 @@ fun CronJobEditorScreen(
         )
     }
 
-    val isValid = name.isNotBlank() && schedule.isNotBlank() && command.isNotBlank()
+    val hasAiJob = showAiOptions && workdir.isNotBlank() && prompt.isNotBlank()
+    val hasCommand = command.isNotBlank()
+    val isValid = name.isNotBlank() && schedule.isNotBlank() && (hasCommand || hasAiJob)
     val scheduleDesc = scheduleDescriptions[schedule] ?: "Custom schedule"
 
     fun save() {
@@ -267,7 +266,7 @@ fun CronJobEditorScreen(
                     value = llmModel,
                     onValueChange = { llmModel = it },
                     label = { Text("LLM Model") },
-                    placeholder = { Text("claude-sonnet-4-6") },
+                    placeholder = { Text("gpt-5.4") },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

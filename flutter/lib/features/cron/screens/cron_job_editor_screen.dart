@@ -42,10 +42,7 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
   ];
 
   static const llmProviders = [
-    {'label': 'OpenAI', 'value': 'openai'},
-    {'label': 'MiniMax', 'value': 'minimax'},
-    {'label': 'Bedrock', 'value': 'bedrock'},
-    {'label': 'Ollama', 'value': 'ollama'},
+    {'label': 'OpenAI Compatible', 'value': 'openai'},
   ];
 
   static final scheduleDescriptions = {
@@ -77,16 +74,21 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
     );
     _workdirController = TextEditingController(text: widget.job?.workdir ?? '');
     _promptController = TextEditingController(text: widget.job?.prompt ?? '');
-    _llmModelController = TextEditingController(text: widget.job?.llmModel ?? '');
+    _llmModelController = TextEditingController(
+      text: widget.job?.llmModel ?? 'gpt-5.4',
+    );
     _llmProvider = widget.job?.llmProvider ?? 'openai';
     _logOutput = widget.job?.logOutput ?? false;
-    _showAiOptions = widget.job?.prompt != null && widget.job!.prompt!.isNotEmpty;
+    _showAiOptions =
+        widget.job?.prompt != null && widget.job!.prompt!.isNotEmpty;
     final env = widget.job?.environment ?? {};
     _envEntries = env.entries
-        .map((e) => MapEntry(
-              TextEditingController(text: e.key),
-              TextEditingController(text: e.value),
-            ))
+        .map(
+          (e) => MapEntry(
+            TextEditingController(text: e.key),
+            TextEditingController(text: e.value),
+          ),
+        )
         .toList();
   }
 
@@ -112,9 +114,14 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
   }
 
   bool get isValid {
+    final hasAiJob =
+        _showAiOptions &&
+        _workdirController.text.trim().isNotEmpty &&
+        _promptController.text.trim().isNotEmpty;
+    final hasCommand = _commandController.text.trim().isNotEmpty;
     return _nameController.text.trim().isNotEmpty &&
         _scheduleController.text.trim().isNotEmpty &&
-        _commandController.text.trim().isNotEmpty;
+        (hasCommand || hasAiJob);
   }
 
   void _save() {
@@ -176,10 +183,12 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
 
   void _addEnvEntry({String key = '', String value = ''}) {
     setState(() {
-      _envEntries.add(MapEntry(
-        TextEditingController(text: key),
-        TextEditingController(text: value),
-      ));
+      _envEntries.add(
+        MapEntry(
+          TextEditingController(text: key),
+          TextEditingController(text: value),
+        ),
+      );
     });
   }
 
@@ -367,7 +376,7 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
                 controller: _llmModelController,
                 decoration: const InputDecoration(
                   labelText: 'LLM Model',
-                  hintText: 'claude-sonnet-4-6',
+                  hintText: 'gpt-5.4',
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -464,7 +473,10 @@ class _CronJobEditorScreenState extends ConsumerState<CronJobEditorScreen> {
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                        icon: const Icon(
+                          Icons.remove_circle_outline,
+                          color: Colors.red,
+                        ),
                         onPressed: () => _removeEnvEntry(i),
                       ),
                     ],

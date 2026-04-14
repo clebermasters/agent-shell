@@ -1,5 +1,7 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::process::Command;
 use tokio::sync::RwLock;
@@ -12,7 +14,33 @@ pub struct CronManager {
     jobs: RwLock<HashMap<String, CronJob>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CronJobMetadata {
+    #[serde(default = "default_metadata_version")]
+    version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workdir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    llm_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    llm_model: Option<String>,
+}
+
+const fn default_metadata_version() -> u8 {
+    1
+}
+
 impl CronManager {
+    const DEFAULT_OPENAI_WRAPPER_URL: &'static str = "http://127.0.0.1:8017";
+    const DEFAULT_OPENAI_WRAPPER_API_KEY: &'static str = "local-wrapper";
+    const DEFAULT_CODEX_MODEL: &'static str = "gpt-5.4";
+    const METADATA_PREFIX: &'static str = "# AgentShell-Meta:";
+
     pub fn new() -> Self {
         Self {
             jobs: RwLock::new(HashMap::new()),
@@ -37,6 +65,8 @@ impl CronManager {
         if job.id.is_empty() {
             job.id = Uuid::new_v4().to_string();
         }
+
+        self.normalize_job(&mut job)?;
 
         // Check for duplicate names
         {
@@ -72,6 +102,8 @@ impl CronManager {
     }
 
     pub async fn update_job(&self, id: String, mut job: CronJob) -> Result<CronJob> {
+        self.normalize_job(&mut job)?;
+
         // Check for duplicate names (excluding self)
         {
             let jobs = self.jobs.read().await;
@@ -163,6 +195,186 @@ impl CronManager {
 
     // Private helper methods
 
+    fn trim_optional(value: &mut Option<String>) {
+        if let Some(raw) = value.take() {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                *value = Some(trimmed.to_string());
+            }
+        }
+    }
+
+    fn normalize_prompt(value: &mut Option<String>) {
+        if let Some(raw) = value.take() {
+            let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+            let trimmed = normalized.trim();
+            if !trimmed.is_empty() {
+                *value = Some(trimmed.to_string());
+            }
+        }
+    }
+
+    fn ensure_single_line(field: &str, value: &str) -> Result<()> {
+        if value.contains('\0') {
+            return Err(anyhow!("{field} cannot contain NUL bytes"));
+        }
+        if value.contains('\n') || value.contains('\r') {
+            return Err(anyhow!("{field} must be a single line"));
+        }
+        Ok(())
+    }
+
+    fn clear_ai_fields(job: &mut CronJob) {
+        job.workdir = None;
+        job.prompt = None;
+        job.llm_provider = None;
+        job.llm_model = None;
+    }
+
+    fn env_or_default(key: &str, default: &str) -> String {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default.to_string())
+    }
+
+    fn shell_single_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    fn normalize_ai_model(requested_model: Option<&str>) -> String {
+        let trimmed = requested_model.unwrap_or("").trim();
+        if trimmed.starts_with("gpt-") || trimmed.contains("codex") {
+            trimmed.to_string()
+        } else {
+            Self::env_or_default("AGENTSHELL_CODEX_MODEL", Self::DEFAULT_CODEX_MODEL)
+        }
+    }
+
+    fn build_ai_command(
+        workdir: &str,
+        prompt: &str,
+        requested_model: Option<&str>,
+    ) -> Result<String> {
+        Self::ensure_single_line("working directory", workdir)?;
+
+        let wrapper_url = Self::env_or_default(
+            "AGENTSHELL_OPENAI_WRAPPER_URL",
+            Self::DEFAULT_OPENAI_WRAPPER_URL,
+        );
+        let wrapper_api_key = Self::env_or_default(
+            "AGENTSHELL_OPENAI_WRAPPER_API_KEY",
+            Self::DEFAULT_OPENAI_WRAPPER_API_KEY,
+        );
+        let model = Self::normalize_ai_model(requested_model);
+        let prompt_b64 = URL_SAFE_NO_PAD.encode(prompt.as_bytes());
+
+        Self::ensure_single_line("wrapper URL", &wrapper_url)?;
+        Self::ensure_single_line("wrapper API key", &wrapper_api_key)?;
+        Self::ensure_single_line("LLM model", &model)?;
+
+        Ok(format!(
+            "cd {} && AGENTSHELL_CRON_PROMPT_B64={} OPENAI_BASE_URL={} OPENAI_API_KEY={} skill-agent --streaming --llm-provider openai --llm-model {} agent \"$(printf '%s' \"$AGENTSHELL_CRON_PROMPT_B64\" | base64 -d)\"",
+            Self::shell_single_quote(workdir),
+            Self::shell_single_quote(&prompt_b64),
+            Self::shell_single_quote(&wrapper_url),
+            Self::shell_single_quote(&wrapper_api_key),
+            Self::shell_single_quote(&model),
+        ))
+    }
+
+    fn normalize_job(&self, job: &mut CronJob) -> Result<()> {
+        job.name = job.name.trim().to_string();
+        job.schedule = job.schedule.trim().to_string();
+        job.command = job.command.trim().to_string();
+        Self::trim_optional(&mut job.workdir);
+        Self::normalize_prompt(&mut job.prompt);
+        Self::trim_optional(&mut job.llm_provider);
+        Self::trim_optional(&mut job.llm_model);
+
+        let has_command = !job.command.is_empty();
+        let has_workdir = job.workdir.is_some();
+        let has_prompt = job.prompt.is_some();
+
+        if has_workdir && has_prompt {
+            let model = Self::normalize_ai_model(job.llm_model.as_deref());
+            let workdir = job.workdir.as_deref().unwrap_or_default();
+            let prompt = job.prompt.as_deref().unwrap_or_default();
+            job.command = Self::build_ai_command(workdir, prompt, Some(&model))?;
+            job.llm_provider = Some("openai".to_string());
+            job.llm_model = Some(model);
+            return Ok(());
+        }
+
+        if has_command {
+            Self::ensure_single_line("command", &job.command)?;
+            Self::clear_ai_fields(job);
+            return Ok(());
+        }
+
+        if has_workdir || has_prompt {
+            return Err(anyhow!(
+                "AI jobs require both a working directory and a prompt"
+            ));
+        }
+
+        Err(anyhow!(
+            "Cron job requires either a command or AI configuration"
+        ))
+    }
+
+    fn metadata_for_job(job: &CronJob) -> Option<CronJobMetadata> {
+        let workdir = job.workdir.clone();
+        let prompt = job.prompt.clone();
+        let llm_provider = job.llm_provider.clone();
+        let llm_model = job.llm_model.clone();
+        if workdir.is_none() && prompt.is_none() && llm_provider.is_none() && llm_model.is_none() {
+            return None;
+        }
+
+        Some(CronJobMetadata {
+            version: default_metadata_version(),
+            kind: Some("ai".to_string()),
+            workdir,
+            prompt,
+            llm_provider,
+            llm_model,
+        })
+    }
+
+    fn metadata_comment(job: &CronJob) -> String {
+        let Some(metadata) = Self::metadata_for_job(job) else {
+            return String::new();
+        };
+        let encoded = serde_json::to_vec(&metadata)
+            .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
+            .expect("cron metadata serialization should not fail");
+        format!("{}{}\n", Self::METADATA_PREFIX, encoded)
+    }
+
+    fn parse_metadata_comment(line: &str) -> Option<CronJobMetadata> {
+        let encoded = line.strip_prefix(Self::METADATA_PREFIX)?.trim();
+        let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
+        serde_json::from_slice::<CronJobMetadata>(&bytes).ok()
+    }
+
+    fn format_job_entry(job: &CronJob, leading_newline: bool) -> String {
+        let prefix = if leading_newline { "\n" } else { "" };
+        let metadata = Self::metadata_comment(job);
+        if job.enabled {
+            format!(
+                "{prefix}# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n{}{} {}\n# AgentShell-Job-End:{}\n",
+                job.id, job.name, job.enabled, metadata, job.schedule, job.command, job.id
+            )
+        } else {
+            format!(
+                "{prefix}# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n{}# {} {}\n# AgentShell-Job-End:{}\n",
+                job.id, job.name, job.enabled, metadata, job.schedule, job.command, job.id
+            )
+        }
+    }
+
     async fn load_from_crontab(&self) -> Result<()> {
         let output = Command::new("crontab").arg("-l").output().await?;
 
@@ -186,6 +398,10 @@ impl CronManager {
                     let job_id = job_id.trim();
                     let mut job_name = String::new();
                     let mut enabled = true;
+                    let mut workdir = None;
+                    let mut prompt = None;
+                    let mut llm_provider = None;
+                    let mut llm_model = None;
 
                     i += 1;
                     while i < lines.len() && !lines[i].starts_with("# AgentShell-Job-End") {
@@ -196,9 +412,54 @@ impl CronManager {
                                 .unwrap_or("")
                                 .trim()
                                 .to_string();
+                        } else if let Some(metadata) = Self::parse_metadata_comment(lines[i]) {
+                            if metadata.workdir.is_some() {
+                                workdir = metadata.workdir;
+                            }
+                            if metadata.prompt.is_some() {
+                                prompt = metadata.prompt;
+                            }
+                            if metadata.llm_provider.is_some() {
+                                llm_provider = metadata.llm_provider;
+                            }
+                            if metadata.llm_model.is_some() {
+                                llm_model = metadata.llm_model;
+                            }
                         } else if lines[i].starts_with("# Enabled:") {
                             enabled = lines[i].strip_prefix("# Enabled:").unwrap_or("true").trim()
                                 == "true";
+                        } else if lines[i].starts_with("# Workdir:") {
+                            workdir = Some(
+                                lines[i]
+                                    .strip_prefix("# Workdir:")
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                            );
+                        } else if lines[i].starts_with("# Prompt:") {
+                            prompt = Some(
+                                lines[i]
+                                    .strip_prefix("# Prompt:")
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                            );
+                        } else if lines[i].starts_with("# LLM-Provider:") {
+                            llm_provider = Some(
+                                lines[i]
+                                    .strip_prefix("# LLM-Provider:")
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                            );
+                        } else if lines[i].starts_with("# LLM-Model:") {
+                            llm_model = Some(
+                                lines[i]
+                                    .strip_prefix("# LLM-Model:")
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                            );
                         } else if !lines[i].trim().is_empty() {
                             let line = if lines[i].starts_with("# ") && !enabled {
                                 lines[i].strip_prefix("# ").unwrap_or(lines[i])
@@ -228,10 +489,10 @@ impl CronManager {
                                     log_output: None,
                                     email_to: None,
                                     tmux_session: None,
-                                    workdir: None,
-                                    prompt: None,
-                                    llm_provider: None,
-                                    llm_model: None,
+                                    workdir: workdir.clone(),
+                                    prompt: prompt.clone(),
+                                    llm_provider: llm_provider.clone(),
+                                    llm_model: llm_model.clone(),
                                 };
                                 jobs.insert(job_id.to_string(), job);
                             }
@@ -354,17 +615,8 @@ impl CronManager {
             let mut sorted: Vec<&CronJob> = jobs.values().collect();
             sorted.sort_by(|a, b| a.created_at.cmp(&b.created_at));
             for job in sorted {
-                if job.enabled {
-                    new_crontab.push_str(&format!(
-                        "# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n{} {}\n# AgentShell-Job-End:{}\n\n",
-                        job.id, job.name, job.enabled, job.schedule, job.command, job.id
-                    ));
-                } else {
-                    new_crontab.push_str(&format!(
-                        "# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n# {} {}\n# AgentShell-Job-End:{}\n\n",
-                        job.id, job.name, job.enabled, job.schedule, job.command, job.id
-                    ));
-                }
+                new_crontab.push_str(&Self::format_job_entry(job, false));
+                new_crontab.push('\n');
             }
             drop(jobs); // Release write lock before I/O
             self.write_crontab(&new_crontab).await?;
@@ -386,19 +638,7 @@ impl CronManager {
         };
 
         // Add job with AgentShell markers
-        let job_entry = if job.enabled {
-            // Active job - include the cron line
-            format!(
-                "\n# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n{} {}\n# AgentShell-Job-End:{}\n",
-                job.id, job.name, job.enabled, job.schedule, job.command, job.id
-            )
-        } else {
-            // Disabled job - comment out the cron line
-            format!(
-                "\n# AgentShell-Job-Start:{}\n# Name:{}\n# Enabled:{}\n# {} {}\n# AgentShell-Job-End:{}\n",
-                job.id, job.name, job.enabled, job.schedule, job.command, job.id
-            )
-        };
+        let job_entry = Self::format_job_entry(job, true);
 
         crontab_content.push_str(&job_entry);
 
@@ -918,6 +1158,153 @@ mod tests {
         let mgr = make_manager();
         let result = mgr.test_command("   \t  ").await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_normalize_job_rewrites_ai_job_to_single_line_codex_wrapper_command() {
+        let mgr = make_manager();
+        let mut job = crate::types::CronJob {
+            id: "job-1".to_string(),
+            name: "ai-job".to_string(),
+            schedule: "0 * * * *".to_string(),
+            command: "legacy command".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+            workdir: Some("/tmp/project".to_string()),
+            prompt: Some("say hello\nfrom cron".to_string()),
+            llm_provider: Some("anthropic".to_string()),
+            llm_model: Some("claude-sonnet-4-6".to_string()),
+        };
+
+        mgr.normalize_job(&mut job).unwrap();
+
+        assert_eq!(job.llm_provider.as_deref(), Some("openai"));
+        assert_eq!(job.llm_model.as_deref(), Some("gpt-5.4"));
+        assert!(job.command.contains("AGENTSHELL_CRON_PROMPT_B64="));
+        assert!(job.command.contains("base64 -d"));
+        assert!(job
+            .command
+            .contains("OPENAI_BASE_URL='http://127.0.0.1:8017'"));
+        assert!(job.command.contains("OPENAI_API_KEY='local-wrapper'"));
+        assert!(job
+            .command
+            .contains("skill-agent --streaming --llm-provider openai"));
+        assert!(job.command.contains("cd '/tmp/project'"));
+        assert!(job
+            .command
+            .contains("agent \"$(printf '%s' \"$AGENTSHELL_CRON_PROMPT_B64\" | base64 -d)\""));
+        assert!(!job.command.contains("say hello\nfrom cron"));
+    }
+
+    #[test]
+    fn test_format_job_entry_encodes_metadata_and_round_trips() {
+        let job = crate::types::CronJob {
+            id: "job-1".to_string(),
+            name: "ai-job".to_string(),
+            schedule: "0 * * * *".to_string(),
+            command: "echo hi".to_string(),
+            enabled: false,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+            workdir: Some("/tmp/project".to_string()),
+            prompt: Some("say hello\nfrom cron".to_string()),
+            llm_provider: Some("openai".to_string()),
+            llm_model: Some("gpt-5.4".to_string()),
+        };
+
+        let entry = CronManager::format_job_entry(&job, false);
+        let metadata_line = entry
+            .lines()
+            .find(|line| line.starts_with(CronManager::METADATA_PREFIX))
+            .expect("metadata line should be present");
+        let metadata =
+            CronManager::parse_metadata_comment(metadata_line).expect("metadata should decode");
+
+        assert!(entry.contains(CronManager::METADATA_PREFIX));
+        assert!(!entry.contains("# Workdir:"));
+        assert!(!entry.contains("# Prompt:"));
+        assert!(entry.contains("# 0 * * * * echo hi"));
+        assert_eq!(metadata.workdir.as_deref(), Some("/tmp/project"));
+        assert_eq!(metadata.prompt.as_deref(), Some("say hello\nfrom cron"));
+        assert_eq!(metadata.llm_provider.as_deref(), Some("openai"));
+        assert_eq!(metadata.llm_model.as_deref(), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn test_normalize_job_preserves_manual_command_and_discards_partial_ai_metadata() {
+        let mgr = make_manager();
+        let mut job = crate::types::CronJob {
+            id: "job-1".to_string(),
+            name: "manual-job".to_string(),
+            schedule: "0 * * * *".to_string(),
+            command: "echo hi".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+            workdir: Some("/tmp/project".to_string()),
+            prompt: None,
+            llm_provider: Some("openai".to_string()),
+            llm_model: Some("gpt-5.4".to_string()),
+        };
+
+        mgr.normalize_job(&mut job).unwrap();
+
+        assert_eq!(job.command, "echo hi");
+        assert!(job.workdir.is_none());
+        assert!(job.prompt.is_none());
+        assert!(job.llm_provider.is_none());
+        assert!(job.llm_model.is_none());
+    }
+
+    #[test]
+    fn test_normalize_job_rejects_multiline_manual_command() {
+        let mgr = make_manager();
+        let mut job = crate::types::CronJob {
+            id: "job-1".to_string(),
+            name: "manual-job".to_string(),
+            schedule: "0 * * * *".to_string(),
+            command: "echo hi\necho bad".to_string(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at: None,
+            updated_at: None,
+            environment: None,
+            log_output: None,
+            email_to: None,
+            tmux_session: None,
+            workdir: None,
+            prompt: None,
+            llm_provider: None,
+            llm_model: None,
+        };
+
+        let result = mgr.normalize_job(&mut job);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("single line"));
     }
 
     #[test]

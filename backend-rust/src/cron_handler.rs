@@ -3,22 +3,62 @@ use crate::types::CronJob;
 use axum::{extract::Path, Json};
 use chrono::Utc;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateJobRequest {
     pub name: String,
-    pub workdir: String,
-    pub prompt: String,
-    pub llm_provider: String,
-    pub llm_model: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    #[serde(default)]
+    pub llm_model: Option<String>,
     pub schedule: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub environment: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub log_output: Option<bool>,
+    #[serde(default)]
+    pub email_to: Option<String>,
+    #[serde(default)]
+    pub tmux_session: Option<String>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+impl CreateJobRequest {
+    fn into_job(self, id: String, created_at: Option<chrono::DateTime<Utc>>) -> CronJob {
+        CronJob {
+            id,
+            name: self.name,
+            schedule: self.schedule,
+            command: self.command.unwrap_or_default(),
+            enabled: self.enabled,
+            last_run: None,
+            next_run: None,
+            output: None,
+            created_at,
+            updated_at: Some(Utc::now()),
+            environment: self.environment,
+            log_output: self.log_output.or(Some(true)),
+            email_to: self.email_to,
+            tmux_session: self.tmux_session,
+            workdir: self.workdir,
+            prompt: self.prompt,
+            llm_provider: self.llm_provider,
+            llm_model: self.llm_model,
+        }
+    }
 }
 
 pub async fn list_jobs() -> Json<Vec<CronJob>> {
@@ -26,31 +66,7 @@ pub async fn list_jobs() -> Json<Vec<CronJob>> {
 }
 
 pub async fn create_job(Json(req): Json<CreateJobRequest>) -> Json<CronJob> {
-    let escaped_prompt = req.prompt.replace('\'', "'\\''");
-    let command = format!(
-        "cd {} && skill-agent --streaming --llm-provider {} --llm-model {} agent '{}'",
-        req.workdir, req.llm_provider, req.llm_model, escaped_prompt
-    );
-    let job = CronJob {
-        id: String::new(),
-        name: req.name,
-        schedule: req.schedule,
-        command,
-        enabled: req.enabled,
-        last_run: None,
-        next_run: None,
-        output: None,
-        created_at: Some(Utc::now()),
-        updated_at: Some(Utc::now()),
-        environment: None,
-        log_output: Some(true),
-        email_to: None,
-        tmux_session: None,
-        workdir: Some(req.workdir),
-        prompt: Some(req.prompt),
-        llm_provider: Some(req.llm_provider),
-        llm_model: Some(req.llm_model),
-    };
+    let job = req.into_job(String::new(), Some(Utc::now()));
     let created = CRON_MANAGER
         .create_job(job)
         .await
@@ -71,31 +87,7 @@ pub async fn update_job(
     Path(id): Path<String>,
     Json(req): Json<CreateJobRequest>,
 ) -> Json<CronJob> {
-    let escaped_prompt = req.prompt.replace('\'', "'\\''");
-    let command = format!(
-        "cd {} && skill-agent --streaming --llm-provider {} --llm-model {} agent '{}'",
-        req.workdir, req.llm_provider, req.llm_model, escaped_prompt
-    );
-    let job = CronJob {
-        id: id.clone(),
-        name: req.name,
-        schedule: req.schedule,
-        command,
-        enabled: req.enabled,
-        last_run: None,
-        next_run: None,
-        output: None,
-        created_at: None,
-        updated_at: Some(Utc::now()),
-        environment: None,
-        log_output: Some(true),
-        email_to: None,
-        tmux_session: None,
-        workdir: Some(req.workdir),
-        prompt: Some(req.prompt),
-        llm_provider: Some(req.llm_provider),
-        llm_model: Some(req.llm_model),
-    };
+    let job = req.into_job(id.clone(), None);
     let updated = CRON_MANAGER
         .update_job(id, job)
         .await

@@ -80,7 +80,9 @@ impl TmuxMonitor {
             !sessions_equal_ignoring_tool(&previous_state.sessions, &current_sessions);
         let window_pane_changed = previous_state.window_pane_counts != current_window_pane_counts;
 
-        let has_unknown_tools = current_sessions.iter().any(|session| session.tool.is_none());
+        let has_unknown_tools = current_sessions
+            .iter()
+            .any(|session| session.tool.is_none());
 
         if sessions_changed || window_pane_changed || has_unknown_tools {
             debug!(

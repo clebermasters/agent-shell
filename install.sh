@@ -56,9 +56,15 @@ build_service_path() {
     ' <<< "$(IFS=:; echo "${path_list[*]}")" | sed 's/:$//'
 }
 
-# Read AUTH_TOKEN from .env if not already set
-if [ -z "$AUTH_TOKEN" ] && [ -f "$ENV_FILE" ]; then
-    AUTH_TOKEN=$(grep -E '^AUTH_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | xargs)
+# Read runtime settings from .env if not already set
+if [ -f "$ENV_FILE" ]; then
+    if [ -z "$AUTH_TOKEN" ]; then
+        AUTH_TOKEN=$(grep -E '^AUTH_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | xargs)
+    fi
+
+    if [ -z "$ALLOWED_ORIGIN" ]; then
+        ALLOWED_ORIGIN=$(grep -E '^ALLOWED_ORIGIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | xargs)
+    fi
 fi
 
 echo "=== AgentShell Installer ==="
@@ -84,6 +90,11 @@ if [ -n "$AUTH_TOKEN" ]; then
     echo "AUTH_TOKEN: set (${#AUTH_TOKEN} chars)"
 else
     echo "AUTH_TOKEN: NOT SET — backend will be open to all connections"
+fi
+if [ -n "$ALLOWED_ORIGIN" ]; then
+    echo "ALLOWED_ORIGIN: $ALLOWED_ORIGIN"
+else
+    echo "ALLOWED_ORIGIN: not set (only localhost origins will be allowed)"
 fi
 echo ""
 
@@ -125,6 +136,7 @@ WorkingDirectory=$INSTALL_DIR/backend
 ExecStart=$INSTALL_DIR/backend/agentshell-backend
 Environment="RUST_LOG=info"
 Environment="AUTH_TOKEN=$AUTH_TOKEN"
+Environment="ALLOWED_ORIGIN=$ALLOWED_ORIGIN"
 Environment="PATH=$SERVICE_PATH"
 Restart=always
 RestartSec=5

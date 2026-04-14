@@ -834,8 +834,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
     return '$a\n$b';
   }
 
-  String _rawAcpSessionId(String sessionName) =>
-      sessionName.startsWith('acp_') ? sessionName.substring(4) : sessionName;
+  String _rawAcpSessionId(String? sessionName) {
+    if (sessionName == null) return '';
+    return sessionName.startsWith('acp_') ? sessionName.substring(4) : sessionName;
+  }
 
   bool _matchesAcpSession(String messageSessionId) {
     final rawStateSessionId = _rawAcpSessionId(state.sessionName);

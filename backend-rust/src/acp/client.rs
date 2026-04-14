@@ -317,8 +317,14 @@ impl AcpClient {
             );
         }
 
-        let request_json = serde_json::to_string(&request)
-            .map_err(|e| format!("Failed to serialize request: {}", e))?;
+        let request_json = match serde_json::to_string(&request) {
+            Ok(json) => json,
+            Err(e) => {
+                let mut pending_guard = pending.lock().await;
+                pending_guard.remove(&id);
+                return Err(format!("Failed to serialize request: {}", e));
+            }
+        };
 
         let t_lock = std::time::Instant::now();
         let mut stdin_guard = stdin.lock().await;
@@ -331,14 +337,26 @@ impl AcpClient {
             );
         }
         if let Some(ref mut stdin) = *stdin_guard {
-            stdin
+            if let Err(e) = stdin
                 .write_all(format!("{}\n", request_json).as_bytes())
                 .await
-                .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| format!("Failed to flush stdin: {}", e))?;
+            {
+                drop(stdin_guard);
+                let mut pending_guard = pending.lock().await;
+                pending_guard.remove(&id);
+                return Err(format!("Failed to write to stdin: {}", e));
+            }
+            if let Err(e) = stdin.flush().await {
+                drop(stdin_guard);
+                let mut pending_guard = pending.lock().await;
+                pending_guard.remove(&id);
+                return Err(format!("Failed to flush stdin: {}", e));
+            }
+        } else {
+            drop(stdin_guard);
+            let mut pending_guard = pending.lock().await;
+            pending_guard.remove(&id);
+            return Err("ACP stdin unavailable".to_string());
         }
         drop(stdin_guard);
 
@@ -354,6 +372,8 @@ impl AcpClient {
             }
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(120)) => {
                 tracing::warn!("[TIMING] ACP '{}' TIMEOUT after 120s", method);
+                let mut pending_guard = pending.lock().await;
+                pending_guard.remove(&id);
                 Err("Request timeout".to_string())
             }
         }

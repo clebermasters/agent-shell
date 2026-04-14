@@ -229,6 +229,70 @@ impl ChatEventStore {
         Ok(events.into_iter().map(|event| event.message).collect())
     }
 
+    pub fn list_messages_page(
+        &self,
+        session_name: &str,
+        window_index: u32,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<ChatMessage>, bool)> {
+        let conn = Connection::open(&self.db_path)
+            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+
+        let total: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM chat_events
+            WHERE session_name = ?1 AND window_index = ?2
+            "#,
+            params![session_name, i64::from(window_index)],
+            |row| row.get(0),
+        )?;
+
+        let total = usize::try_from(total).unwrap_or(0);
+        let end = total.saturating_sub(offset);
+        let start = end.saturating_sub(limit);
+        let page_len = end.saturating_sub(start);
+        let has_more = start > 0;
+
+        if page_len == 0 {
+            return Ok((Vec::new(), has_more));
+        }
+
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT message_json, timestamp_millis
+            FROM chat_events
+            WHERE session_name = ?1 AND window_index = ?2
+            ORDER BY timestamp_millis ASC, rowid ASC
+            LIMIT ?3 OFFSET ?4
+            "#,
+        )?;
+
+        let rows = stmt.query_map(
+            params![
+                session_name,
+                i64::from(window_index),
+                i64::try_from(page_len).unwrap_or(i64::MAX),
+                i64::try_from(start).unwrap_or(i64::MAX)
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+
+        let mut messages = Vec::with_capacity(page_len);
+        for row in rows {
+            let (message_json, timestamp_millis) = row?;
+            let mut message: ChatMessage = serde_json::from_str(&message_json)?;
+            if message.timestamp.is_none() {
+                message.timestamp = Utc.timestamp_millis_opt(timestamp_millis).single();
+            }
+            messages.push(message);
+        }
+
+        Ok((messages, has_more))
+    }
+
     pub fn clear_messages(&self, session_name: &str, window_index: u32) -> Result<()> {
         let conn = Connection::open(&self.db_path)
             .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;

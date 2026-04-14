@@ -6,7 +6,7 @@ use super::types::{send_message, BroadcastMessage, WsState};
 use crate::{tmux, types::*, AppState};
 
 pub(crate) async fn handle_list_sessions(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
     info!("Listing tmux sessions...");
     let sessions = tmux::list_sessions().await.unwrap_or_default();
@@ -16,7 +16,7 @@ pub(crate) async fn handle_list_sessions(
 }
 
 pub(crate) async fn handle_create_session(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     name: Option<String>,
     start_directory: Option<String>,
     startup_command: Option<String>,
@@ -68,7 +68,7 @@ pub(crate) async fn handle_create_session(
 }
 
 pub(crate) async fn handle_kill_session(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     app_state: Arc<AppState>,
     session_name: String,
 ) -> anyhow::Result<()> {
@@ -97,7 +97,7 @@ pub(crate) async fn handle_kill_session(
 }
 
 pub(crate) async fn handle_rename_session(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: String,
     new_name: String,
 ) -> anyhow::Result<()> {
@@ -129,7 +129,7 @@ pub(crate) async fn handle_rename_session(
 }
 
 pub(crate) async fn handle_list_windows(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: String,
 ) -> anyhow::Result<()> {
     debug!("Listing windows for session: {}", session_name);
@@ -197,7 +197,7 @@ pub(crate) async fn handle_select_window(
 }
 
 pub(crate) async fn handle_create_window(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: String,
     window_name: Option<String>,
 ) -> anyhow::Result<()> {
@@ -221,7 +221,7 @@ pub(crate) async fn handle_create_window(
 }
 
 pub(crate) async fn handle_kill_window(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: String,
     window_index: String,
 ) -> anyhow::Result<()> {
@@ -245,7 +245,7 @@ pub(crate) async fn handle_kill_window(
 }
 
 pub(crate) async fn handle_rename_window(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: String,
     window_index: String,
     new_name: String,
@@ -289,14 +289,14 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn make_tx() -> (
-        mpsc::UnboundedSender<BroadcastMessage>,
-        mpsc::UnboundedReceiver<BroadcastMessage>,
+        mpsc::Sender<BroadcastMessage>,
+        mpsc::Receiver<BroadcastMessage>,
     ) {
-        mpsc::unbounded_channel()
+        mpsc::channel(256)
     }
 
     fn make_app_state(dir: &std::path::Path) -> Arc<AppState> {
-        let (broadcast_tx, _) = mpsc::unbounded_channel();
+        let (broadcast_tx, _) = mpsc::channel(256);
         let client_manager = Arc::new(crate::websocket::client_manager::ClientManager::new());
         Arc::new(AppState {
             enable_audio_logs: false,

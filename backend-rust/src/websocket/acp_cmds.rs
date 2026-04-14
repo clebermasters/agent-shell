@@ -347,7 +347,7 @@ pub(crate) async fn ensure_acp_client(app_state: &Arc<AppState>) -> Result<(), S
                         }
                         _ => continue,
                     };
-                    if let Err(e) = broadcast_tx.send(msg) {
+                    if let Err(e) = broadcast_tx.send(msg).await {
                         tracing::error!("Failed to broadcast ACP message: {}", e);
                     }
                 }
@@ -376,13 +376,13 @@ pub(crate) async fn ensure_acp_client(app_state: &Arc<AppState>) -> Result<(), S
                         command: command.to_string(),
                         options: Vec::new(),
                     };
-                    if let Err(e) = broadcast_tx.send(msg) {
+                    if let Err(e) = broadcast_tx.send(msg).await {
                         tracing::error!("Failed to broadcast ACP permission request: {}", e);
                     }
                 }
                 crate::acp::AcpEvent::Error { message } => {
                     let msg = ServerMessage::AcpError { message };
-                    if let Err(e) = broadcast_tx.send(msg) {
+                    if let Err(e) = broadcast_tx.send(msg).await {
                         tracing::error!("Failed to broadcast ACP error: {}", e);
                     }
                 }
@@ -514,7 +514,7 @@ pub(crate) async fn ensure_codex_client(app_state: &Arc<AppState>) -> Result<(),
                             }
                         }
                     };
-                    if let Err(e) = broadcast_tx.send(msg) {
+                    if let Err(e) = broadcast_tx.send(msg).await {
                         tracing::error!("Failed to broadcast Codex app-server message: {}", e);
                     }
                 }
@@ -532,7 +532,7 @@ pub(crate) async fn ensure_codex_client(app_state: &Arc<AppState>) -> Result<(),
                         command,
                         options,
                     };
-                    if let Err(e) = broadcast_tx.send(msg) {
+                    if let Err(e) = broadcast_tx.send(msg).await {
                         tracing::error!("Failed to broadcast Codex permission request: {}", e);
                     }
                 }
@@ -546,13 +546,13 @@ pub(crate) async fn ensure_codex_client(app_state: &Arc<AppState>) -> Result<(),
                         stop_reason,
                         total_tokens,
                     };
-                    if let Err(e) = broadcast_tx.send(msg) {
+                    if let Err(e) = broadcast_tx.send(msg).await {
                         tracing::error!("Failed to broadcast Codex prompt completion: {}", e);
                     }
                 }
                 crate::codex_app::CodexEvent::Error { message } => {
                     let msg = ServerMessage::AcpError { message };
-                    if let Err(e) = broadcast_tx.send(msg) {
+                    if let Err(e) = broadcast_tx.send(msg).await {
                         tracing::error!("Failed to broadcast Codex error: {}", e);
                     }
                 }
@@ -1200,8 +1200,19 @@ pub(crate) async fn handle(
 
             let messages = match provider {
                 DirectSessionProvider::Opencode => {
-                    match app_state.chat_event_store.list_messages(&session_key, 0) {
-                        Ok(msgs) => msgs,
+                    match app_state
+                        .chat_event_store
+                        .list_messages_page(&session_key, 0, offset, limit)
+                    {
+                        Ok((msgs, has_more)) => {
+                            let response = ServerMessage::AcpHistoryLoaded {
+                                session_id,
+                                messages: msgs,
+                                has_more,
+                            };
+                            send_message(&state.message_tx, response).await?;
+                            return Ok(());
+                        }
                         Err(e) => {
                             error!("Failed to load ACP history: {}", e);
                             let response = ServerMessage::AcpError {
@@ -1336,11 +1347,11 @@ mod tests {
         dir: &std::path::Path,
     ) -> (
         WsState,
-        mpsc::UnboundedReceiver<BroadcastMessage>,
+        mpsc::Receiver<BroadcastMessage>,
         Arc<crate::AppState>,
     ) {
-        let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
-        let (broadcast_tx, _) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel::<BroadcastMessage>(256);
+        let (broadcast_tx, _) = mpsc::channel(256);
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
         let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
         let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
@@ -1387,11 +1398,11 @@ mod tests {
         dir: &std::path::Path,
     ) -> (
         WsState,
-        mpsc::UnboundedReceiver<BroadcastMessage>,
+        mpsc::Receiver<BroadcastMessage>,
         Arc<crate::AppState>,
     ) {
-        let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
-        let (broadcast_tx, _) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel::<BroadcastMessage>(256);
+        let (broadcast_tx, _) = mpsc::channel(256);
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
         let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
         let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));

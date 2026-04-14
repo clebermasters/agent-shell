@@ -11,13 +11,13 @@ use super::types::{send_message, BroadcastMessage, WsState};
 use crate::{audio, types::*};
 
 pub(crate) async fn handle_ping(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
     send_message(tx, ServerMessage::Pong).await
 }
 
 pub(crate) async fn handle_get_stats(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
     let stats = tokio::task::spawn_blocking(|| {
         let mut sys = sysinfo::System::new_with_specifics(
@@ -126,9 +126,9 @@ fn get_codex_usage_cache() -> &'static tokio::sync::Mutex<Option<String>> {
 }
 
 pub(crate) async fn handle_get_claude_usage(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
-    let send_cached = |tx: &mpsc::UnboundedSender<BroadcastMessage>| {
+    let send_cached = |tx: &mpsc::Sender<BroadcastMessage>| {
         let cache = get_claude_usage_cache().try_lock().ok();
         if let Some(ref guard) = cache {
             if let Some(ref json) = **guard {
@@ -139,7 +139,7 @@ pub(crate) async fn handle_get_claude_usage(
         false
     };
 
-    let usage_error = |tx: &mpsc::UnboundedSender<BroadcastMessage>, reason: String| {
+    let usage_error = |tx: &mpsc::Sender<BroadcastMessage>, reason: String| {
         let msg = ServerMessage::ClaudeUsage {
             five_hour: None,
             seven_day: None,
@@ -252,9 +252,9 @@ pub(crate) async fn handle_get_claude_usage(
 }
 
 pub(crate) async fn handle_get_codex_usage(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
-    let send_cached = |tx: &mpsc::UnboundedSender<BroadcastMessage>| {
+    let send_cached = |tx: &mpsc::Sender<BroadcastMessage>| {
         let cache = get_codex_usage_cache().try_lock().ok();
         if let Some(ref guard) = cache {
             if let Some(ref json) = **guard {
@@ -265,7 +265,7 @@ pub(crate) async fn handle_get_codex_usage(
         false
     };
 
-    let usage_error = |tx: &mpsc::UnboundedSender<BroadcastMessage>, reason: String| {
+    let usage_error = |tx: &mpsc::Sender<BroadcastMessage>, reason: String| {
         let msg = ServerMessage::CodexUsage {
             primary: None,
             secondary: None,
@@ -766,10 +766,10 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn make_tx() -> (
-        mpsc::UnboundedSender<BroadcastMessage>,
-        mpsc::UnboundedReceiver<BroadcastMessage>,
+        mpsc::Sender<BroadcastMessage>,
+        mpsc::Receiver<BroadcastMessage>,
     ) {
-        mpsc::unbounded_channel()
+        mpsc::channel(256)
     }
 
     #[tokio::test]

@@ -1,13 +1,14 @@
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path as AxumPath, Query, State},
     http::StatusCode,
     Json,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
+use tokio::{fs, task};
 use uuid::Uuid;
 
 use crate::notification::{CreateNotificationRequest, Notification, NotificationFile};
@@ -66,6 +67,48 @@ pub struct MarkReadResponse {
     success: bool,
 }
 
+fn validate_attachment_filename(filename: &str) -> Result<String, StatusCode> {
+    let trimmed = filename.trim();
+    if trimmed.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let mut components = path.components();
+    let component = components.next().ok_or(StatusCode::BAD_REQUEST)?;
+    if components.next().is_some() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    match component {
+        Component::Normal(name) => {
+            let name = name.to_string_lossy().trim().to_string();
+            if name.is_empty() || name == "." || name == ".." {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            Ok(name)
+        }
+        _ => Err(StatusCode::BAD_REQUEST),
+    }
+}
+
+fn sanitize_storage_name(filename: &str) -> String {
+    filename
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 pub async fn list_notifications(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListQuery>,
@@ -111,29 +154,38 @@ pub async fn create_notification(
 ) -> Result<(StatusCode, Json<CreateResponse>), StatusCode> {
     let id = Uuid::new_v4().to_string();
     let timestamp_millis = chrono::Utc::now().timestamp_millis();
-    let base_dir = state.notification_store.base_dir();
+    let base_dir = state.notification_store.base_dir().clone();
+    let file_dir = base_dir.join("notifications").join(&id);
+
+    fs::create_dir_all(&file_dir)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut files = Vec::new();
     for file_req in &req.files {
         let file_id = Uuid::new_v4().to_string();
-        let file_dir = PathBuf::from(&base_dir).join("notifications").join(&id);
-
-        std::fs::create_dir_all(&file_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        let file_path = file_dir.join(&file_req.filename);
+        let display_filename = validate_attachment_filename(&file_req.filename)?;
         let decoded = STANDARD
             .decode(&file_req.data)
             .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-        std::fs::write(&file_path, &decoded).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let safe_filename = sanitize_storage_name(&display_filename);
+        let stored_relative_path = PathBuf::from("notifications")
+            .join(&id)
+            .join(format!("{}_{}", file_id, safe_filename));
+        let full_path = base_dir.join(&stored_relative_path);
+
+        fs::write(&full_path, &decoded)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let notification_file = NotificationFile {
             id: file_id,
             notification_id: id.clone(),
-            filename: file_req.filename.clone(),
+            filename: display_filename,
             mime_type: file_req.mime_type.clone(),
             size: decoded.len() as i64,
-            stored_path: file_path.to_string_lossy().to_string(),
+            stored_path: stored_relative_path.to_string_lossy().to_string(),
         };
         files.push(notification_file);
     }
@@ -176,7 +228,7 @@ pub async fn create_notification(
 
 pub async fn mark_read(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    AxumPath(id): AxumPath<String>,
 ) -> Json<MarkReadResponse> {
     let _ = state.notification_store.mark_read(&id);
     Json(MarkReadResponse { success: true })
@@ -189,13 +241,21 @@ pub struct DeleteResponse {
 
 pub async fn delete_notification(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    AxumPath(id): AxumPath<String>,
 ) -> Json<DeleteResponse> {
-    let success = state.notification_store.delete(&id).is_ok();
+    let store = state.notification_store.clone();
+    let success = task::spawn_blocking(move || store.delete(&id))
+        .await
+        .map(|result| result.is_ok())
+        .unwrap_or(false);
     Json(DeleteResponse { success })
 }
 
 pub async fn delete_all_notifications(State(state): State<Arc<AppState>>) -> Json<DeleteResponse> {
-    let success = state.notification_store.delete_all().is_ok();
+    let store = state.notification_store.clone();
+    let success = task::spawn_blocking(move || store.delete_all())
+        .await
+        .map(|result| result.is_ok())
+        .unwrap_or(false);
     Json(DeleteResponse { success })
 }

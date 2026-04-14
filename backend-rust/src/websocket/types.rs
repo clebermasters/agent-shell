@@ -38,8 +38,8 @@ pub(crate) struct WsState {
     pub current_pty: Arc<Mutex<Option<PtySession>>>,
     pub current_session: Arc<Mutex<Option<String>>>,
     pub current_window: Arc<Mutex<Option<u32>>>,
-    pub audio_tx: Option<mpsc::UnboundedSender<BroadcastMessage>>,
-    pub message_tx: mpsc::UnboundedSender<BroadcastMessage>,
+    pub audio_tx: Option<mpsc::Sender<BroadcastMessage>>,
+    pub message_tx: mpsc::Sender<BroadcastMessage>,
     pub chat_log_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
@@ -131,11 +131,11 @@ pub(crate) fn merge_history_messages(
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 pub(crate) async fn send_message(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     msg: crate::types::ServerMessage,
 ) -> anyhow::Result<()> {
     let json = serde_json::to_string(&msg)?;
-    tx.send(BroadcastMessage::Text(Arc::new(json)))?;
+    tx.send(BroadcastMessage::Text(Arc::new(json))).await?;
     Ok(())
 }
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_message_success() {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<BroadcastMessage>();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<BroadcastMessage>(256);
         let result = send_message(&tx, crate::types::ServerMessage::Pong).await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();

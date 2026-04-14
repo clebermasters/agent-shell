@@ -6,7 +6,7 @@ use crate::types::*;
 
 pub(crate) async fn handle(
     msg: WebSocketMessage,
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
     match msg {
         WebSocketMessage::ListDotfiles => {
@@ -159,10 +159,10 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn make_tx() -> (
-        mpsc::UnboundedSender<BroadcastMessage>,
-        mpsc::UnboundedReceiver<BroadcastMessage>,
+        mpsc::Sender<BroadcastMessage>,
+        mpsc::Receiver<BroadcastMessage>,
     ) {
-        mpsc::unbounded_channel()
+        mpsc::channel(256)
     }
 
     #[tokio::test]

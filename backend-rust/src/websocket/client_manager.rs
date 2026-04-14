@@ -7,7 +7,7 @@ use crate::types::ServerMessage;
 
 /// Manages all connected WebSocket clients and handles broadcasting.
 pub struct ClientManager {
-    clients: Arc<RwLock<HashMap<ClientId, mpsc::UnboundedSender<BroadcastMessage>>>>,
+    clients: Arc<RwLock<HashMap<ClientId, mpsc::Sender<BroadcastMessage>>>>,
 }
 
 impl ClientManager {
@@ -20,7 +20,7 @@ impl ClientManager {
     pub async fn add_client(
         &self,
         client_id: ClientId,
-        tx: mpsc::UnboundedSender<BroadcastMessage>,
+        tx: mpsc::Sender<BroadcastMessage>,
     ) {
         let mut clients = self.clients.write().await;
         clients.insert(client_id, tx);
@@ -44,7 +44,7 @@ impl ClientManager {
             let msg = BroadcastMessage::Text(Arc::new(serialized));
             let clients = self.clients.read().await;
             for (client_id, tx) in clients.iter() {
-                if let Err(e) = tx.send(msg.clone()) {
+                if let Err(e) = tx.send(msg.clone()).await {
                     error!("Failed to send to client {}: {}", client_id, e);
                 }
             }
@@ -55,7 +55,7 @@ impl ClientManager {
         let msg = BroadcastMessage::Binary(data);
         let clients = self.clients.read().await;
         for (client_id, tx) in clients.iter() {
-            if let Err(e) = tx.send(msg.clone()) {
+            if let Err(e) = tx.send(msg.clone()).await {
                 error!("Failed to send binary to client {}: {}", client_id, e);
             }
         }
@@ -75,7 +75,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_client() {
         let mgr = ClientManager::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(256);
         mgr.add_client("client1".to_string(), tx).await;
         assert_eq!(mgr.client_count().await, 1);
     }
@@ -83,7 +83,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_client() {
         let mgr = ClientManager::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(256);
         mgr.add_client("client1".to_string(), tx).await;
         mgr.remove_client("client1").await;
         assert_eq!(mgr.client_count().await, 0);
@@ -100,7 +100,7 @@ mod tests {
     async fn test_multiple_clients() {
         let mgr = ClientManager::new();
         for i in 0..5 {
-            let (tx, _rx) = mpsc::unbounded_channel();
+            let (tx, _rx) = mpsc::channel(256);
             mgr.add_client(format!("client{}", i), tx).await;
         }
         assert_eq!(mgr.client_count().await, 5);
@@ -109,8 +109,8 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast_sends_to_all_clients() {
         let mgr = ClientManager::new();
-        let (tx1, mut rx1) = mpsc::unbounded_channel();
-        let (tx2, mut rx2) = mpsc::unbounded_channel();
+        let (tx1, mut rx1) = mpsc::channel(256);
+        let (tx2, mut rx2) = mpsc::channel(256);
         mgr.add_client("c1".to_string(), tx1).await;
         mgr.add_client("c2".to_string(), tx2).await;
 
@@ -124,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast_binary() {
         let mgr = ClientManager::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(256);
         mgr.add_client("c1".to_string(), tx).await;
         mgr.broadcast_binary(bytes::Bytes::from("binary data"))
             .await;
@@ -134,7 +134,7 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast_dead_client_does_not_panic() {
         let mgr = ClientManager::new();
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(256);
         mgr.add_client("c1".to_string(), tx).await;
         drop(rx); // Drop the receiver — sending to a dead client
                   // Should not panic

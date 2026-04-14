@@ -7,7 +7,7 @@ use crate::{types::ServerMessage, AppState};
 use super::types::{send_message, BroadcastMessage};
 
 pub async fn handle_get_favorites(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     app_state: Arc<AppState>,
 ) -> Result<()> {
     let favorites = app_state.favorite_store.list().unwrap_or_default();
@@ -15,7 +15,7 @@ pub async fn handle_get_favorites(
 }
 
 pub async fn handle_add_favorite(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     app_state: Arc<AppState>,
     name: String,
     path: String,
@@ -39,7 +39,7 @@ pub async fn handle_add_favorite(
 }
 
 pub async fn handle_update_favorite(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     app_state: Arc<AppState>,
     id: String,
     name: String,
@@ -66,7 +66,7 @@ pub async fn handle_update_favorite(
 }
 
 pub async fn handle_delete_favorite(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     app_state: Arc<AppState>,
     id: String,
 ) -> Result<()> {
@@ -75,7 +75,7 @@ pub async fn handle_delete_favorite(
 }
 
 pub async fn handle_set_favorite_tags(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     app_state: Arc<AppState>,
     favorite_id: String,
     tag_ids: Vec<String>,

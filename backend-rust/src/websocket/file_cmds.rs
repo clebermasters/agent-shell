@@ -18,7 +18,7 @@ fn validate_path(path: &str) -> Result<(), String> {
 
 pub(crate) async fn handle(
     msg: WebSocketMessage,
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
     match msg {
         WebSocketMessage::ListFiles { path } => match list_files(&path) {
@@ -471,10 +471,10 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn make_tx() -> (
-        mpsc::UnboundedSender<BroadcastMessage>,
-        mpsc::UnboundedReceiver<BroadcastMessage>,
+        mpsc::Sender<BroadcastMessage>,
+        mpsc::Receiver<BroadcastMessage>,
     ) {
-        mpsc::unbounded_channel()
+        mpsc::channel(256)
     }
 
     #[test]

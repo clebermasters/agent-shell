@@ -1353,8 +1353,8 @@ mod tests {
 
     fn make_ws_state(
         dir: &std::path::Path,
-    ) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>) {
-        let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
+    ) -> (WsState, mpsc::Receiver<BroadcastMessage>) {
+        let (tx, rx) = mpsc::channel::<BroadcastMessage>(256);
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
         let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
         let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
@@ -2195,7 +2195,7 @@ mod tests {
     }
 
     fn make_app_state(dir: &std::path::Path) -> Arc<crate::AppState> {
-        let (broadcast_tx, _) = mpsc::unbounded_channel();
+        let (broadcast_tx, _) = mpsc::channel(256);
         let client_manager = Arc::new(ClientManager::new());
         let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());

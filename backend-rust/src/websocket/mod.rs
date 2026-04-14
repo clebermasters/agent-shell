@@ -47,7 +47,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
 
     // Create channel for server messages
-    let (tx, mut rx) = mpsc::unbounded_channel::<BroadcastMessage>();
+    let (tx, mut rx) = mpsc::channel::<BroadcastMessage>(256);
 
     // Register client with the manager
     state

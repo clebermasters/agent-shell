@@ -539,13 +539,19 @@ impl CodexAppClient {
             );
         }
 
-        self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        }))
-        .await?;
+        if let Err(err) = self
+            .write_value(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params,
+            }))
+            .await
+        {
+            let mut pending = self.pending.lock().await;
+            pending.remove(&id);
+            return Err(err);
+        }
 
         tokio::select! {
             result = rx => {
@@ -556,6 +562,8 @@ impl CodexAppClient {
                 }
             }
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(120)) => {
+                let mut pending = self.pending.lock().await;
+                pending.remove(&id);
                 Err(format!("Codex request timed out: {method}"))
             }
         }

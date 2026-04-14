@@ -66,7 +66,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 pub struct AppState {
     pub enable_audio_logs: bool,
-    pub broadcast_tx: mpsc::UnboundedSender<ServerMessage>,
+    pub broadcast_tx: mpsc::Sender<ServerMessage>,
     pub client_manager: Arc<websocket::ClientManager>,
     pub chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
     }
 
     // Create broadcast channel for tmux updates
-    let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel::<ServerMessage>();
+    let (broadcast_tx, mut broadcast_rx) = mpsc::channel::<ServerMessage>(256);
 
     // Create client manager
     let client_manager = Arc::new(websocket::ClientManager::new());
@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
                 let storage = app_state.chat_file_storage.clone();
                 move |axum::extract::Path(id): axum::extract::Path<String>| async move {
                     if let Some(path) = storage.get_path(&id) {
-                        if let Ok(data) = std::fs::read(&path) {
+                        if let Ok(data) = tokio::fs::read(&path).await {
                             let mime = storage
                                 .get_mime_type(&id)
                                 .unwrap_or_else(|| "application/octet-stream".to_string());
@@ -212,15 +212,17 @@ async fn main() -> Result<()> {
                 let notification_store = app_state.notification_store.clone();
                 move |axum::extract::Path(id): axum::extract::Path<String>| async move {
                     if let Ok(Some(file)) = notification_store.get_file(&id) {
-                        if let Ok(data) = std::fs::read(&file.stored_path) {
-                            let headers = [
-                                (axum::http::header::CONTENT_TYPE, file.mime_type.clone()),
-                                (
-                                    axum::http::header::CACHE_CONTROL,
-                                    "public, max-age=3600".to_string(),
-                                ),
-                            ];
-                            return Ok((headers, data));
+                        if let Ok(path) = notification_store.resolve_file_path(&file.stored_path) {
+                            if let Ok(data) = tokio::fs::read(path).await {
+                                let headers = [
+                                    (axum::http::header::CONTENT_TYPE, file.mime_type.clone()),
+                                    (
+                                        axum::http::header::CACHE_CONTROL,
+                                        "public, max-age=3600".to_string(),
+                                    ),
+                                ];
+                                return Ok((headers, data));
+                            }
                         }
                     }
                     Err(axum::http::StatusCode::NOT_FOUND)
@@ -399,7 +401,7 @@ fn read_port_from_env(name: &str, default: u16) -> u16 {
 
 async fn shutdown_signal(
     shutdown_token: CancellationToken,
-    broadcast_tx: mpsc::UnboundedSender<ServerMessage>,
+    broadcast_tx: mpsc::Sender<ServerMessage>,
 ) {
     let ctrl_c = async {
         signal::ctrl_c()
@@ -429,9 +431,11 @@ async fn shutdown_signal(
 
     // Notify all clients that the server is shutting down
     info!("Notifying clients of graceful shutdown...");
-    let _ = broadcast_tx.send(ServerMessage::ServerShuttingDown {
-        reconnect_delay_ms: 2000,
-    });
+    let _ = broadcast_tx
+        .send(ServerMessage::ServerShuttingDown {
+            reconnect_delay_ms: 2000,
+        })
+        .await;
 
     // Give clients time to receive the notification
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;

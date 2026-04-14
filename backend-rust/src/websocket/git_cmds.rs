@@ -34,7 +34,7 @@ fn is_git_repo(cwd: &str) -> bool {
 
 pub(crate) async fn handle(
     msg: WebSocketMessage,
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
 ) -> anyhow::Result<()> {
     match msg {
         WebSocketMessage::GitStatus { session_name, path } => {
@@ -236,7 +236,7 @@ pub(crate) async fn handle(
 // git status
 // ---------------------------------------------------------------------------
 async fn handle_git_status(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
 ) -> anyhow::Result<()> {
@@ -411,7 +411,7 @@ async fn enrich_with_numstat(cwd: &str, changes: &mut [GitFileChange], staged: b
 // git diff
 // ---------------------------------------------------------------------------
 async fn handle_git_diff(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     file_path: Option<String>,
@@ -482,7 +482,7 @@ async fn handle_git_diff(
 // git log
 // ---------------------------------------------------------------------------
 async fn handle_git_log(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     limit: Option<usize>,
@@ -567,7 +567,7 @@ async fn handle_git_log(
 // git branches
 // ---------------------------------------------------------------------------
 async fn handle_git_branches(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
 ) -> anyhow::Result<()> {
@@ -663,7 +663,7 @@ fn parse_track_info(info: &str) -> (Option<i32>, Option<i32>) {
 // git checkout
 // ---------------------------------------------------------------------------
 async fn handle_git_checkout(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     branch: String,
@@ -689,7 +689,7 @@ async fn handle_git_checkout(
 // git create-branch
 // ---------------------------------------------------------------------------
 async fn handle_git_create_branch(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     branch: String,
@@ -724,7 +724,7 @@ async fn handle_git_create_branch(
 // git delete-branch
 // ---------------------------------------------------------------------------
 async fn handle_git_delete_branch(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     branch: String,
@@ -750,7 +750,7 @@ async fn handle_git_delete_branch(
 // git stage
 // ---------------------------------------------------------------------------
 async fn handle_git_stage(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     files: Vec<String>,
@@ -779,7 +779,7 @@ async fn handle_git_stage(
 // git unstage
 // ---------------------------------------------------------------------------
 async fn handle_git_unstage(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     files: Vec<String>,
@@ -808,7 +808,7 @@ async fn handle_git_unstage(
 // git commit
 // ---------------------------------------------------------------------------
 async fn handle_git_commit(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     message: String,
@@ -834,7 +834,7 @@ async fn handle_git_commit(
 // git push
 // ---------------------------------------------------------------------------
 async fn handle_git_push(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     remote: Option<String>,
@@ -869,7 +869,7 @@ async fn handle_git_push(
 // git pull
 // ---------------------------------------------------------------------------
 async fn handle_git_pull(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
 ) -> anyhow::Result<()> {
@@ -894,7 +894,7 @@ async fn handle_git_pull(
 // git stash
 // ---------------------------------------------------------------------------
 async fn handle_git_stash(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     action: String,
@@ -973,7 +973,7 @@ async fn handle_git_stash(
 // git search
 // ---------------------------------------------------------------------------
 async fn handle_git_search(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     query: String,
@@ -1031,7 +1031,7 @@ async fn handle_git_search(
 // git file-history
 // ---------------------------------------------------------------------------
 async fn handle_git_file_history(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     file_path: String,
@@ -1095,7 +1095,7 @@ async fn handle_git_file_history(
 // git cherry-pick
 // ---------------------------------------------------------------------------
 async fn handle_git_cherry_pick(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     commit_hash: String,
@@ -1119,7 +1119,7 @@ async fn handle_git_cherry_pick(
 // git revert
 // ---------------------------------------------------------------------------
 async fn handle_git_revert(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     commit_hash: String,
@@ -1143,7 +1143,7 @@ async fn handle_git_revert(
 // git merge
 // ---------------------------------------------------------------------------
 async fn handle_git_merge(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     branch: String,
@@ -1167,7 +1167,7 @@ async fn handle_git_merge(
 // git blame
 // ---------------------------------------------------------------------------
 async fn handle_git_blame(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     file_path: String,
@@ -1241,7 +1241,7 @@ fn parse_blame_porcelain(output: &str) -> Vec<GitBlameLine> {
 // git compare branches
 // ---------------------------------------------------------------------------
 async fn handle_git_compare(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     base_branch: String,
@@ -1319,7 +1319,7 @@ async fn handle_git_compare(
 // git repo-info
 // ---------------------------------------------------------------------------
 async fn handle_git_repo_info(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
 ) -> anyhow::Result<()> {
@@ -1464,7 +1464,7 @@ async fn handle_git_repo_info(
 // git amend
 // ---------------------------------------------------------------------------
 async fn handle_git_amend(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     message: Option<String>,
@@ -1497,7 +1497,7 @@ async fn handle_git_amend(
 // git tags
 // ---------------------------------------------------------------------------
 async fn handle_git_list_tags(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
 ) -> anyhow::Result<()> {
@@ -1551,7 +1551,7 @@ async fn handle_git_list_tags(
 }
 
 async fn handle_git_create_tag(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     name: String,
@@ -1587,7 +1587,7 @@ async fn handle_git_create_tag(
 }
 
 async fn handle_git_delete_tag(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     name: String,
@@ -1611,7 +1611,7 @@ async fn handle_git_delete_tag(
 // git resolve-conflict
 // ---------------------------------------------------------------------------
 async fn handle_git_resolve_conflict(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     file_path: String,
@@ -1697,7 +1697,7 @@ fn parse_log_output(stdout: &str) -> Vec<GitCommitInfo> {
 // git commit-files (files changed in a specific commit)
 // ---------------------------------------------------------------------------
 async fn handle_git_commit_files(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     commit_hash: String,
@@ -1796,7 +1796,7 @@ async fn handle_git_commit_files(
 // git commit-diff (diff for a specific file in a specific commit)
 // ---------------------------------------------------------------------------
 async fn handle_git_commit_diff(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     session_name: Option<String>,
     path: Option<String>,
     commit_hash: String,
@@ -1863,7 +1863,7 @@ async fn handle_git_commit_diff(
 // ---------------------------------------------------------------------------
 
 async fn send_operation_result(
-    tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    tx: &mpsc::Sender<BroadcastMessage>,
     operation: &str,
     output: Result<std::process::Output, std::io::Error>,
 ) -> anyhow::Result<()> {

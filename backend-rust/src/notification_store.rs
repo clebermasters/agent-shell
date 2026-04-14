@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, path::{Path, PathBuf}, time::Duration};
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -261,6 +261,34 @@ impl NotificationStore {
         &self.base_dir
     }
 
+    pub fn resolve_file_path(&self, stored_path: &str) -> Result<PathBuf> {
+        let notifications_root = self.base_dir.join("notifications");
+        let canonical_root = notifications_root
+            .canonicalize()
+            .unwrap_or_else(|_| notifications_root.clone());
+
+        let relative_path = Path::new(stored_path);
+        if relative_path.is_absolute() {
+            return Err(anyhow::anyhow!("absolute notification paths are not allowed"));
+        }
+
+        let full_path = self.base_dir.join(relative_path);
+        let canonical_path = if full_path.exists() {
+            full_path.canonicalize()?
+        } else if let Some(parent) = full_path.parent() {
+            let canonical_parent = parent.canonicalize()?;
+            canonical_parent.join(full_path.file_name().unwrap_or_default())
+        } else {
+            return Err(anyhow::anyhow!("invalid notification path"));
+        };
+
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(anyhow::anyhow!("notification path escapes storage root"));
+        }
+
+        Ok(canonical_path)
+    }
+
     pub fn delete(&self, id: &str) -> Result<()> {
         let conn = Connection::open(&self.db_path).with_context(|| {
             format!(
@@ -273,7 +301,9 @@ impl NotificationStore {
         // Delete attached files from disk
         let files = self.list_files_for_notification(id).unwrap_or_default();
         for file in &files {
-            let _ = fs::remove_file(&file.stored_path);
+            if let Ok(path) = self.resolve_file_path(&file.stored_path) {
+                let _ = fs::remove_file(path);
+            }
         }
         // Remove the notification directory if it exists
         let notif_dir = self.base_dir.join("notifications").join(id);

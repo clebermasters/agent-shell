@@ -19,11 +19,11 @@ struct SessionState {
 
 pub struct TmuxMonitor {
     state: Arc<RwLock<SessionState>>,
-    broadcast_tx: mpsc::UnboundedSender<ServerMessage>,
+    broadcast_tx: mpsc::Sender<ServerMessage>,
 }
 
 impl TmuxMonitor {
-    pub fn new(broadcast_tx: mpsc::UnboundedSender<ServerMessage>) -> Self {
+    pub fn new(broadcast_tx: mpsc::Sender<ServerMessage>) -> Self {
         Self {
             state: Arc::new(RwLock::new(SessionState {
                 sessions: Vec::new(),
@@ -102,7 +102,7 @@ impl TmuxMonitor {
                 sessions: current_sessions,
             };
 
-            if let Err(e) = self.broadcast_tx.send(message) {
+            if let Err(e) = self.broadcast_tx.send(message).await {
                 error!("Failed to broadcast session update: {}", e);
             }
 
@@ -180,14 +180,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_tmux_monitor_new() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(256);
         let _monitor = TmuxMonitor::new(tx);
         // Just ensure construction doesn't panic
     }
 
     #[tokio::test]
     async fn test_check_for_changes_with_running_tmux() {
-        let (tx, mut rx) = mpsc::unbounded_channel::<crate::types::ServerMessage>();
+        let (tx, mut rx) = mpsc::channel::<crate::types::ServerMessage>(256);
         let monitor = TmuxMonitor::new(tx);
         // Run check_for_changes once — should succeed since tmux is running
         monitor.check_for_changes().await;
@@ -249,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_monitor_starts_with_empty_state() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(256);
         let monitor = TmuxMonitor::new(tx);
         let state = monitor.state.read().await;
         assert!(state.sessions.is_empty());

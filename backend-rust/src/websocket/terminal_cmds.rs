@@ -340,7 +340,7 @@ pub(crate) async fn attach_to_session(
                                 };
                                 if let Ok(json) = serde_json::to_string(&output) {
                                     if tx_clone
-                                        .send(BroadcastMessage::Text(Arc::new(json)))
+                                        .blocking_send(BroadcastMessage::Text(Arc::new(json)))
                                         .is_err()
                                     {
                                         error!(
@@ -375,7 +375,7 @@ pub(crate) async fn attach_to_session(
                                         };
                                         if let Ok(json) = serde_json::to_string(&output) {
                                             if tx_clone
-                                                .send(BroadcastMessage::Text(Arc::new(json)))
+                                                .blocking_send(BroadcastMessage::Text(Arc::new(json)))
                                                 .is_err()
                                             {
                                                 error!(
@@ -562,6 +562,7 @@ pub(crate) async fn attach_to_session(
             if let Ok(json) = serde_json::to_string(&output) {
                 if tx_bootstrap
                     .send(BroadcastMessage::Text(Arc::new(json)))
+                    .await
                     .is_err()
                 {
                     break;
@@ -651,8 +652,8 @@ mod tests {
 
     fn make_ws_state(
         dir: &std::path::Path,
-    ) -> (WsState, mpsc::UnboundedReceiver<BroadcastMessage>) {
-        let (tx, rx) = mpsc::unbounded_channel::<BroadcastMessage>();
+    ) -> (WsState, mpsc::Receiver<BroadcastMessage>) {
+        let (tx, rx) = mpsc::channel::<BroadcastMessage>(256);
         let chat_event_store = Arc::new(ChatEventStore::new(dir.to_path_buf()).unwrap());
         let chat_clear_store = Arc::new(ChatClearStore::new(&dir.to_path_buf()));
         let chat_file_storage = Arc::new(ChatFileStorage::new(dir.to_path_buf()));

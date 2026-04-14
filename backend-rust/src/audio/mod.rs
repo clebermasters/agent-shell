@@ -10,7 +10,7 @@ use tracing::error;
 
 use crate::{types::ServerMessage, websocket::BroadcastMessage};
 
-type AudioClient = mpsc::UnboundedSender<BroadcastMessage>;
+type AudioClient = mpsc::Sender<BroadcastMessage>;
 
 lazy_static::lazy_static! {
     static ref AUDIO_STATE: Arc<Mutex<AudioState>> = Arc::new(Mutex::new(AudioState::default()));
@@ -23,7 +23,7 @@ struct AudioState {
     clients: Vec<AudioClient>,
 }
 
-pub async fn start_streaming(client_tx: mpsc::UnboundedSender<BroadcastMessage>) -> Result<()> {
+pub async fn start_streaming(client_tx: mpsc::Sender<BroadcastMessage>) -> Result<()> {
     let mut state = AUDIO_STATE.lock().await;
 
     // Add client
@@ -48,7 +48,7 @@ pub async fn start_streaming(client_tx: mpsc::UnboundedSender<BroadcastMessage>)
 }
 
 pub async fn stop_streaming_for_client(
-    client_tx: &mpsc::UnboundedSender<BroadcastMessage>,
+    client_tx: &mpsc::Sender<BroadcastMessage>,
 ) -> Result<()> {
     let mut state = AUDIO_STATE.lock().await;
 

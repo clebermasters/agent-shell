@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::process::Command;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 use uuid::Uuid;
 
@@ -12,6 +12,7 @@ use crate::types::CronJob;
 
 pub struct CronManager {
     jobs: RwLock<HashMap<String, CronJob>>,
+    mutation_lock: Mutex<()>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -44,6 +45,7 @@ impl CronManager {
     pub fn new() -> Self {
         Self {
             jobs: RwLock::new(HashMap::new()),
+            mutation_lock: Mutex::new(()),
         }
     }
 
@@ -90,8 +92,8 @@ impl CronManager {
         // Calculate next run time
         job.next_run = self.calculate_next_run(&job.schedule).unwrap_or(None);
 
-        // Add to crontab
-        self.add_to_crontab(&job).await?;
+        let _mutation_guard = self.mutation_lock.lock().await;
+        self.upsert_in_crontab(&job).await?;
 
         // Store in memory
         let mut jobs = self.jobs.write().await;
@@ -113,6 +115,9 @@ impl CronManager {
                     job.name
                 ));
             }
+            if !jobs.contains_key(&id) {
+                return Err(anyhow!("Job not found: {}", id));
+            }
         }
 
         // Validate cron expression
@@ -125,11 +130,8 @@ impl CronManager {
         // Calculate next run time
         job.next_run = self.calculate_next_run(&job.schedule).unwrap_or(None);
 
-        // Remove old entry from crontab
-        self.remove_from_crontab(&id).await?;
-
-        // Always add to crontab (enabled status is stored in comments)
-        self.add_to_crontab(&job).await?;
+        let _mutation_guard = self.mutation_lock.lock().await;
+        self.upsert_in_crontab(&job).await?;
 
         // Update in memory
         let mut jobs = self.jobs.write().await;
@@ -140,7 +142,7 @@ impl CronManager {
     }
 
     pub async fn delete_job(&self, id: &str) -> Result<()> {
-        // Remove from crontab
+        let _mutation_guard = self.mutation_lock.lock().await;
         self.remove_from_crontab(id).await?;
 
         // Remove from memory
@@ -153,21 +155,25 @@ impl CronManager {
     }
 
     pub async fn toggle_job(&self, id: &str, enabled: bool) -> Result<CronJob> {
-        // Update in-memory state and get a snapshot — then release the lock before doing I/O.
-        let job = {
-            let mut jobs = self.jobs.write().await;
-            let job = jobs
-                .get_mut(id)
-                .ok_or_else(|| anyhow::anyhow!("Job not found: {}", id))?;
-            job.enabled = enabled;
-            job.updated_at = Some(Utc::now());
-            job.clone()
+        let mut job = {
+            let jobs = self.jobs.read().await;
+            jobs.get(id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Job not found: {}", id))?
+        };
+        job.enabled = enabled;
+        job.updated_at = Some(Utc::now());
+        job.next_run = if enabled {
+            self.calculate_next_run(&job.schedule).unwrap_or(None)
+        } else {
+            None
         };
 
-        // Crontab I/O runs without holding the jobs lock, avoiding blocking the runtime
-        // while other tasks wait for lock access.
-        self.remove_from_crontab(id).await?;
-        self.add_to_crontab(&job).await?;
+        let _mutation_guard = self.mutation_lock.lock().await;
+        self.upsert_in_crontab(&job).await?;
+
+        let mut jobs = self.jobs.write().await;
+        jobs.insert(id.to_string(), job.clone());
 
         info!(
             "Toggled cron job: {} ({}) - enabled: {}",
@@ -608,19 +614,10 @@ impl CronManager {
 
         let job_count = jobs.len();
 
-        // If bare entries were found, rewrite the entire crontab with AgentShell markers
-        // so future toggle/delete/update operations work correctly.
         if bare_entries_found {
-            let mut new_crontab = String::new();
-            let mut sorted: Vec<&CronJob> = jobs.values().collect();
-            sorted.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-            for job in sorted {
-                new_crontab.push_str(&Self::format_job_entry(job, false));
-                new_crontab.push('\n');
-            }
-            drop(jobs); // Release write lock before I/O
-            self.write_crontab(&new_crontab).await?;
-            info!("Migrated {} cron entries to AgentShell format", job_count);
+            info!(
+                "Loaded bare cron entries into memory without rewriting the user crontab"
+            );
         }
 
         info!("Loaded {} cron jobs from crontab", job_count);
@@ -628,44 +625,45 @@ impl CronManager {
     }
 
     async fn add_to_crontab(&self, job: &CronJob) -> Result<()> {
-        // Get current crontab
-        let output = Command::new("crontab").arg("-l").output().await?;
-
-        let mut crontab_content = if output.status.success() {
-            String::from_utf8_lossy(&output.stdout).to_string()
-        } else {
-            String::new()
-        };
-
-        // Add job with AgentShell markers
-        let job_entry = Self::format_job_entry(job, true);
-
+        let mut crontab_content = self.read_crontab().await?;
+        let job_entry = Self::format_job_entry(job, !crontab_content.trim().is_empty());
         crontab_content.push_str(&job_entry);
-
-        // Write back to crontab
-        self.write_crontab(&crontab_content).await?;
-
-        Ok(())
+        self.write_crontab(&crontab_content).await
     }
 
     async fn remove_from_crontab(&self, id: &str) -> Result<()> {
-        // Get current crontab
+        let crontab_content = self.read_crontab().await?;
+        let new_crontab = Self::remove_job_entry(&crontab_content, id);
+        self.write_crontab(&new_crontab).await
+    }
+
+    async fn upsert_in_crontab(&self, job: &CronJob) -> Result<()> {
+        let crontab_content = self.read_crontab().await?;
+        let mut new_crontab = Self::remove_job_entry(&crontab_content, &job.id);
+        let job_entry = Self::format_job_entry(job, !new_crontab.trim().is_empty());
+        new_crontab.push_str(&job_entry);
+        self.write_crontab(&new_crontab).await
+    }
+
+    async fn read_crontab(&self) -> Result<String> {
         let output = Command::new("crontab").arg("-l").output().await?;
-
-        if !output.status.success() {
-            return Ok(());
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        } else {
+            Ok(String::new())
         }
+    }
 
-        let crontab_content = String::from_utf8_lossy(&output.stdout);
+    fn remove_job_entry(crontab_content: &str, id: &str) -> String {
         let lines: Vec<&str> = crontab_content.lines().collect();
         let mut new_lines = Vec::new();
         let mut i = 0;
         let mut skip = false;
 
         while i < lines.len() {
-            if lines[i] == &format!("# AgentShell-Job-Start:{}", id) {
+            if lines[i] == format!("# AgentShell-Job-Start:{}", id) {
                 skip = true;
-            } else if lines[i] == &format!("# AgentShell-Job-End:{}", id) {
+            } else if lines[i] == format!("# AgentShell-Job-End:{}", id) {
                 skip = false;
                 i += 1;
                 continue;
@@ -678,10 +676,7 @@ impl CronManager {
             i += 1;
         }
 
-        let new_crontab = new_lines.join("\n");
-        self.write_crontab(&new_crontab).await?;
-
-        Ok(())
+        new_lines.join("\n")
     }
 
     async fn write_crontab(&self, content: &str) -> Result<()> {

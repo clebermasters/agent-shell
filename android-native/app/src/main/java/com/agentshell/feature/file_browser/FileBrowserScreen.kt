@@ -41,6 +41,7 @@ import com.agentshell.feature.alerts.MarkdownViewer
 @Composable
 fun FileBrowserScreen(
     initialPath: String = "/",
+    openPath: String? = null,
     onOpenFile: (FileEntry) -> Unit,
     onNavigateUp: () -> Unit,
     viewModel: FileBrowserViewModel = hiltViewModel(),
@@ -52,8 +53,19 @@ fun FileBrowserScreen(
     var deleteTargets by remember { mutableStateOf<List<FileEntry>>(emptyList()) }
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    val normalizedOpenPath = openPath?.trim()?.ifBlank { null }
+    val initialDirectory = when {
+        normalizedOpenPath == null -> initialPath
+        normalizedOpenPath.endsWith("/") -> normalizedOpenPath.trimEnd('/')
+        else -> parentDirectory(normalizedOpenPath)
+    }.ifBlank { "/" }
 
-    LaunchedEffect(initialPath) { viewModel.listDirectory(initialPath) }
+    LaunchedEffect(initialDirectory, normalizedOpenPath) {
+        viewModel.listDirectory(initialDirectory)
+        if (normalizedOpenPath != null && !normalizedOpenPath.endsWith("/")) {
+            viewModel.openFileByPath(normalizedOpenPath)
+        }
+    }
 
     // File viewer overlay
     state.viewer?.let { viewer ->
@@ -369,6 +381,14 @@ fun FileBrowserScreen(
             }
         }
     }
+}
+
+private fun parentDirectory(path: String): String {
+    val trimmed = path.trim()
+    val noTrailingSlash = if (trimmed.endsWith('/')) trimmed.dropLastWhile { it == '/' }.ifBlank { "/" } else trimmed
+    val idx = noTrailingSlash.lastIndexOf('/')
+    if (idx <= 0) return "/"
+    return noTrailingSlash.substring(0, idx)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

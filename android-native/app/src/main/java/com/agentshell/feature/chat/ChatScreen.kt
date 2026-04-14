@@ -104,6 +104,7 @@ fun ChatScreen(
     onNavigateBack: () -> Unit = {},
     onSwitchToTerminal: ((sessionName: String) -> Unit)? = null,
     onNavigateToFileBrowser: ((String) -> Unit)? = null,
+    onOpenServerPath: (String) -> Unit = {},
     onSwipeToChatSession: ((sessionName: String, windowIndex: Int, isAcp: Boolean) -> Unit)? = null,
     isSwipeNavigation: Boolean = false,
     viewModel: ChatViewModel = hiltViewModel(),
@@ -370,6 +371,8 @@ fun ChatScreen(
                                 showToolCalls = uiState.showToolCalls,
                                 fileBaseUrl = uiState.fileBaseUrl,
                                 audioPlayerManager = viewModel.audioPlayerManager,
+                                serverPathBase = uiState.sessionCwd.ifBlank { null },
+                                onOpenServerPath = onOpenServerPath,
                             )
                         }
 

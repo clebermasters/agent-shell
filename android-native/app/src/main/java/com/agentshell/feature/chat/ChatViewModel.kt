@@ -99,6 +99,7 @@ data class ChatUiState(
     val draftMessage: String = "",
     val error: String? = null,
     val fileBaseUrl: String = "",
+    val sessionCwd: String = "",
     val detectedTool: String? = null,
     val contextWindowUsage: Double? = null,
     val modelName: String? = null,
@@ -130,12 +131,14 @@ class ChatViewModel @Inject constructor(
     private val navSessionName: String = savedStateHandle["sessionName"] ?: ""
     private val navWindowIndex: Int = savedStateHandle["windowIndex"] ?: 0
     private val navIsAcp: Boolean = savedStateHandle["isAcp"] ?: false
+    private val navCwd: String = savedStateHandle["cwd"] ?: ""
 
     private val _uiState = MutableStateFlow(
         ChatUiState(
             sessionName = navSessionName,
             windowIndex = navWindowIndex,
             isAcp = navIsAcp,
+            sessionCwd = navCwd,
         )
     )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -257,6 +260,14 @@ class ChatViewModel @Inject constructor(
                 val type = message["type"] as? String ?: return@collect
                 if (type == "session-cwd") {
                     val path = message["cwd"] as? String ?: return@collect
+                    val messageSessionName = message["sessionName"] as? String
+                    _uiState.update { state ->
+                        if (messageSessionName == null || messageSessionName == state.sessionName) {
+                            state.copy(sessionCwd = path)
+                        } else {
+                            state
+                        }
+                    }
                     _cwdResult.emit(path)
                 }
             }
@@ -274,10 +285,12 @@ class ChatViewModel @Inject constructor(
                 isLoading = true,
                 messages = newMessageList(),
                 error = null,
+                sessionCwd = "",
             )
         }
         restoreDraft(draftKey(sessionName, windowIndex))
         webSocketService.watchChatLog(sessionName, windowIndex)
+        webSocketService.getSessionCwd(sessionName)
     }
 
     /** Begin watching an ACP chat session. */
@@ -293,6 +306,7 @@ class ChatViewModel @Inject constructor(
                 messages = newMessageList(),
                 error = null,
                 pendingPermission = null,
+                sessionCwd = cwd,
             )
         }
         webSocketService.selectBackend(directBackendForSession(sessionName))
@@ -309,8 +323,13 @@ class ChatViewModel @Inject constructor(
 
     /** Request the session CWD and invoke [onResult] with the path once received. */
     fun navigateToFileBrowser(onResult: (String) -> Unit) {
-        val currentName = _uiState.value.sessionName
+        val state = _uiState.value
+        val currentName = state.sessionName
         if (currentName.isBlank()) return
+        if (state.sessionCwd.isNotBlank()) {
+            onResult(state.sessionCwd)
+            return
+        }
         viewModelScope.launch {
             val deferred = viewModelScope.async {
                 withTimeoutOrNull(3000L) { _cwdResult.first() }
@@ -696,6 +715,7 @@ class ChatViewModel @Inject constructor(
                     showThinking = it.showThinking,
                     showToolCalls = it.showToolCalls,
                     fileBaseUrl = it.fileBaseUrl,
+                    sessionCwd = it.sessionCwd,
                 )
             }
             _chatCleared.tryEmit(true)

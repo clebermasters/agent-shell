@@ -1,6 +1,15 @@
 package com.agentshell.feature.chat
 
+import android.content.Context
+import android.content.Intent
+import android.graphics.Typeface
+import android.net.Uri
+import android.text.Spannable
+import android.text.method.LinkMovementMethod
+import android.text.style.URLSpan
+import android.view.MotionEvent
 import android.widget.TextView
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -46,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,10 +75,6 @@ import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatBlockType
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
-import android.content.Intent
-import android.graphics.Typeface
-import android.text.method.LinkMovementMethod
-import android.widget.Toast
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.layout.ContentScale
@@ -90,6 +96,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 @Composable
@@ -99,6 +107,8 @@ fun MessageBubble(
     showToolCalls: Boolean = true,
     fileBaseUrl: String = "",
     audioPlayerManager: AudioPlayerManager,
+    serverPathBase: String? = null,
+    onOpenServerPath: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val isUser = message.messageType == ChatMessageType.USER
@@ -161,6 +171,8 @@ fun MessageBubble(
                             showToolCalls = showToolCalls,
                             fileBaseUrl = fileBaseUrl,
                             audioPlayerManager = audioPlayerManager,
+                            serverPathBase = serverPathBase,
+                            onOpenServerPath = onOpenServerPath,
                         )
                     }
                 } else if (!message.content.isNullOrBlank()) {
@@ -178,6 +190,8 @@ fun MessageBubble(
                         MarkdownText(
                             text = message.content,
                             color = contentColor,
+                            serverPathBase = serverPathBase,
+                            onOpenServerPath = onOpenServerPath,
                         )
                     }
                 }
@@ -277,6 +291,8 @@ private fun BlockContent(
     showToolCalls: Boolean,
     fileBaseUrl: String = "",
     audioPlayerManager: AudioPlayerManager,
+    serverPathBase: String? = null,
+    onOpenServerPath: (String) -> Unit = {},
 ) {
     when (block.blockType) {
         ChatBlockType.TEXT -> {
@@ -284,6 +300,8 @@ private fun BlockContent(
                 MarkdownText(
                     text = block.text,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    serverPathBase = serverPathBase,
+                    onOpenServerPath = onOpenServerPath,
                 )
             }
         }
@@ -296,13 +314,21 @@ private fun BlockContent(
 
         ChatBlockType.TOOL_CALL -> {
             if (showToolCalls) {
-                ToolCallBlock(block = block)
+                ToolCallBlock(
+                    block = block,
+                    serverPathBase = serverPathBase,
+                    onOpenServerPath = onOpenServerPath,
+                )
             }
         }
 
         ChatBlockType.TOOL_RESULT -> {
             if (showToolCalls) {
-                ToolResultBlock(block = block)
+                ToolResultBlock(
+                    block = block,
+                    serverPathBase = serverPathBase,
+                    onOpenServerPath = onOpenServerPath,
+                )
             }
         }
 
@@ -329,10 +355,29 @@ fun MarkdownText(
     text: String,
     color: Color = MaterialTheme.colorScheme.onSurface,
     modifier: Modifier = Modifier,
+    serverPathBase: String? = null,
+    onOpenServerPath: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val isDark = MaterialTheme.colorScheme.background.let {
         (it.red * 255).roundToInt() < 128
+    }
+    val currentOnOpenServerPath by rememberUpdatedState(onOpenServerPath)
+    val currentServerPathBase by rememberUpdatedState(serverPathBase)
+    val movementMethod = remember {
+        ServerPathAwareLinkMovementMethod(
+            onLinkClick = { rawUrl ->
+                handleMarkdownLinkClick(
+                    context = context,
+                    rawUrl = rawUrl,
+                    serverPathBase = currentServerPathBase,
+                    onOpenServerPath = currentOnOpenServerPath,
+                )
+            },
+            findPathUnderOffset = { rawText, offset ->
+                findServerPathUnderOffset(rawText, offset, basePath = currentServerPathBase)
+            },
+        )
     }
 
     val textColorInt = android.graphics.Color.argb(
@@ -384,15 +429,112 @@ fun MarkdownText(
                 textSize = 15f
                 setLineSpacing(4 * density, 1f)
                 setTextIsSelectable(true)
-                movementMethod = LinkMovementMethod.getInstance()
+                setMovementMethod(movementMethod)
                 linksClickable = true
             }
         },
         update = { tv ->
             tv.setTextColor(textColorInt)
+            tv.setMovementMethod(movementMethod)
             markwon.setMarkdown(tv, text)
         },
     )
+}
+
+private class ServerPathAwareLinkMovementMethod(
+    private val onLinkClick: (String) -> Unit,
+    private val findPathUnderOffset: (CharSequence, Int) -> String?,
+) : LinkMovementMethod() {
+    override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_DOWN) {
+            val layout = widget.layout ?: return super.onTouchEvent(widget, buffer, event)
+            val x = (event.x - widget.totalPaddingLeft + widget.scrollX).toInt()
+            val y = (event.y - widget.totalPaddingTop + widget.scrollY).toInt()
+            val line = layout.getLineForVertical(y)
+            val offset = layout.getOffsetForHorizontal(line, x.toFloat())
+
+            val spans = buffer.getSpans(offset, (offset + 1).coerceAtMost(buffer.length), URLSpan::class.java)
+            if (spans.isNotEmpty()) {
+                if (event.action == MotionEvent.ACTION_UP) {
+                    onLinkClick(spans[0].url)
+                }
+                return true
+            }
+
+            val lineSpans = buffer.getSpans(
+                max(layout.getLineStart(line), 0),
+                min(layout.getLineEnd(line) + 1, buffer.length),
+                URLSpan::class.java,
+            )
+            if (lineSpans.isNotEmpty()) {
+                if (event.action == MotionEvent.ACTION_UP) {
+                    onLinkClick(lineSpans[0].url)
+                }
+                return true
+            }
+
+            if (event.action == MotionEvent.ACTION_UP) {
+                val rawText = buffer.toString()
+                val detectedPath = findPathUnderOffset(rawText, offset)
+                if (detectedPath != null) {
+                    onLinkClick(detectedPath)
+                    return true
+                }
+            }
+        }
+
+        return super.onTouchEvent(widget, buffer, event)
+    }
+}
+
+private fun findServerPathUnderOffset(text: CharSequence, offset: Int, basePath: String? = null): String? {
+    if (offset !in text.indices) return null
+    if (text.isEmpty()) return null
+
+    val regexMatch = extractServerPathFromText(text.toString(), offset, basePath = basePath)
+    if (!regexMatch.isNullOrBlank()) {
+        return regexMatch
+    }
+
+    val isPathBoundary = { c: Char ->
+        c.isWhitespace() || c == '\n' || c == '\r' || c == '\t'
+    }
+
+    var start = offset
+    while (start > 0 && !isPathBoundary(text[start - 1])) {
+        start--
+    }
+
+    var end = offset
+    while (end < text.length && !isPathBoundary(text[end])) {
+        end++
+    }
+
+    if (start >= end) return null
+    val token = text.substring(start, end)
+    return parseServerPathFromLink(token, basePath = basePath)
+}
+
+private fun handleMarkdownLinkClick(
+    context: Context,
+    rawUrl: String,
+    serverPathBase: String? = null,
+    onOpenServerPath: (String) -> Unit,
+) {
+    val serverPath = parseServerPathFromLink(rawUrl, basePath = serverPathBase)
+    if (!serverPath.isNullOrBlank()) {
+        onOpenServerPath(serverPath)
+        return
+    }
+
+    runCatching {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
+    }.onFailure {
+        Toast.makeText(context, "Cannot open link", Toast.LENGTH_SHORT).show()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +588,11 @@ private fun ThinkingBlock(content: String) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun ToolCallBlock(block: ChatBlock) {
+private fun ToolCallBlock(
+    block: ChatBlock,
+    serverPathBase: String? = null,
+    onOpenServerPath: (String) -> Unit = {},
+) {
     var expanded by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -504,12 +650,12 @@ private fun ToolCallBlock(block: ChatBlock) {
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(6.dp),
                     ) {
-                        Text(
+                        MarkdownText(
                             text = inputText,
                             modifier = Modifier.padding(8.dp),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            serverPathBase = serverPathBase,
+                            onOpenServerPath = onOpenServerPath,
                         )
                     }
                 }
@@ -523,7 +669,11 @@ private fun ToolCallBlock(block: ChatBlock) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun ToolResultBlock(block: ChatBlock) {
+private fun ToolResultBlock(
+    block: ChatBlock,
+    serverPathBase: String? = null,
+    onOpenServerPath: (String) -> Unit = {},
+) {
     var expanded by remember { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -581,12 +731,12 @@ private fun ToolResultBlock(block: ChatBlock) {
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(6.dp),
                     ) {
-                        Text(
+                        MarkdownText(
                             text = block.content,
                             modifier = Modifier.padding(8.dp),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            serverPathBase = serverPathBase,
+                            onOpenServerPath = onOpenServerPath,
                         )
                     }
                 }

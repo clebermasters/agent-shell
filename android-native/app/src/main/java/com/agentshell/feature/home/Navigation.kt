@@ -41,7 +41,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val DEBUG = "debug"
     const val ALERTS = "alerts"
-    const val FILE_BROWSER = "file_browser?path={path}"
+    const val FILE_BROWSER = "file_browser?path={path}&openPath={openPath}"
     const val HOST_SELECTION = "host_selection"
     const val CRON_EDITOR = "cron_editor?jobId={jobId}"
     const val DOTFILE_EDITOR = "dotfile_editor"
@@ -69,7 +69,15 @@ object Routes {
         val encodedCwd = Uri.encode(cwd, "")
         return "chat/$encodedSession/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav&cwd=$encodedCwd"
     }
-    fun fileBrowser(path: String = "/") = "file_browser?path=$path"
+    fun fileBrowser(path: String = "/", openPath: String? = null): String {
+        val encodedPath = Uri.encode(path, "")
+        val encodedOpenPath = openPath?.let { Uri.encode(it, "") }
+        return if (encodedOpenPath == null) {
+            "file_browser?path=$encodedPath"
+        } else {
+            "file_browser?path=$encodedPath&openPath=$encodedOpenPath"
+        }
+    }
     fun cronEditor(jobId: String? = null) = if (jobId != null) "cron_editor?jobId=$jobId" else "cron_editor"
     fun dotfileEditor() = DOTFILE_EDITOR
 
@@ -187,6 +195,9 @@ fun AgentShellNavHost() {
                 onNavigateToFileBrowser = { path ->
                     navController.navigate(Routes.fileBrowser(path))
                 },
+                onOpenServerPath = { path ->
+                    navController.navigate(Routes.fileBrowser(path = "/", openPath = path))
+                },
                 onSwipeToChatSession = { name, idx, isAcpNav ->
                     navController.navigate(Routes.chat(name, idx, isAcp = isAcpNav, isSwipeNav = true)) {
                         popUpTo(Routes.HOME)
@@ -259,11 +270,19 @@ fun AgentShellNavHost() {
                     defaultValue = "/"
                     nullable = true
                 },
+                navArgument("openPath") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                    nullable = true
+                },
             ),
         ) { backStackEntry ->
-            val path = backStackEntry.arguments?.getString("path") ?: "/"
+            val path = Uri.decode(backStackEntry.arguments?.getString("path") ?: "/")
+            val openPath = Uri.decode(backStackEntry.arguments?.getString("openPath") ?: "")
+                .takeIf { it.isNotBlank() }
             FileBrowserScreen(
                 initialPath = path,
+                openPath = openPath,
                 onOpenFile = { entry ->
                     // TODO: open file viewer/preview
                 },

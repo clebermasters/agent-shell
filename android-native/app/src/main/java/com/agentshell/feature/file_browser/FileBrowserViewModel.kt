@@ -175,6 +175,35 @@ class FileBrowserViewModel @Inject constructor(
         repository.readBinaryFile(entry.path)
     }
 
+    fun openFileByPath(path: String) {
+        val trimmed = path.trim()
+        if (trimmed.isBlank()) return
+        val normalized = trimmed.trimEnd('/')
+        if (normalized.isBlank()) return
+        val name = normalized.substringAfterLast('/').trim().ifBlank { normalized }
+        val entry = FileEntry(
+            name = name,
+            path = trimmed,
+            isDirectory = false,
+            size = 0L,
+            modified = null,
+        )
+        _state.update {
+            it.copy(
+                viewer = FileViewerState(
+                    isLoading = true,
+                    entry = entry,
+                    error = null,
+                    bytes = null,
+                    mimeType = null,
+                    isSaving = false,
+                    saveError = null,
+                ),
+            )
+        }
+        repository.readBinaryFile(trimmed)
+    }
+
     fun closeViewer() {
         _state.update { it.copy(viewer = null) }
     }

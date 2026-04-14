@@ -28,15 +28,71 @@ pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(P
         .map_err(|e| anyhow::anyhow!("failed to join log detection task: {e}"))?
 }
 
-/// Detect which AI tool (if any) is running in window 0 of the given tmux session.
+/// Detect which AI tool (if any) is running in any pane of the given tmux session.
+/// Active panes are prioritized first.
 /// Returns a short string identifier: "claude", "codex", "opencode", or "kiro".
 pub async fn detect_tool_name(session_name: &str) -> Option<String> {
-    let target = format!("{session_name}:0");
-    let pane_pid = get_pane_pid(&target).await.ok()?;
-    tokio::task::spawn_blocking(move || detect_tool_name_for_pane_pid(pane_pid))
+    let pane_pids = list_session_panes(session_name).await.ok()?;
+    tokio::task::spawn_blocking(move || detect_tool_name_from_pane_pids(pane_pids))
         .await
         .ok()
         .flatten()
+}
+
+async fn list_session_panes(session_name: &str) -> Result<Vec<u32>> {
+    let output = Command::new("tmux")
+        .args([
+            "list-panes",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_active}:#{pane_pid}",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .context("failed to run tmux list-panes")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("tmux list-panes failed for {session_name}: {stderr}");
+    }
+
+    let mut active = Vec::new();
+    let mut inactive = Vec::new();
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut parts = line.split(':');
+        let is_active = parts.next().unwrap_or("");
+        let pid = parts.next().and_then(|pid| pid.trim().parse::<u32>().ok());
+
+        if let Some(pid) = pid {
+            if is_active == "1" {
+                active.push(pid);
+            } else {
+                inactive.push(pid);
+            }
+        }
+    }
+
+    if active.is_empty() && inactive.is_empty() {
+        bail!("tmux list-panes returned no valid pane entries for {session_name}");
+    }
+
+    active.extend(inactive);
+    Ok(active)
+}
+
+fn detect_tool_name_from_pane_pids(mut pane_pids: Vec<u32>) -> Option<String> {
+    pane_pids.retain(|pid| *pid > 0);
+    for pane_pid in pane_pids {
+        if let Some((tool_name, _)) = detect_tool_for_pid(pane_pid) {
+            return Some(tool_name);
+        }
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -440,24 +496,167 @@ fn process_name(pid: u32) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+fn process_cmdline(pid: u32) -> Option<String> {
+    let path = format!("/proc/{pid}/cmdline");
+    let mut cmdline = std::fs::read_to_string(path).ok()?;
+    if cmdline.is_empty() {
+        return None;
+    }
+
+    // Convert NUL bytes in cmdline into spaces so tokenization can work with
+    // shell-like command strings and wrappers.
+    cmdline = cmdline.replace('\0', " ");
+    Some(cmdline.trim().to_string())
+}
+
+fn detect_tool_from_name(name: &str) -> Option<&'static str> {
+    match name.trim() {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "opencode" => Some("opencode"),
+        "kiro-cli" | "kiro-cli-chat" => Some("kiro"),
+        _ => None,
+    }
+}
+
+fn normalize_tool_token(token: &str) -> Option<&'static str> {
+    let cleaned = token.to_ascii_lowercase().trim().to_string();
+    let cleaned = cleaned.trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == ';');
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let base = cleaned
+        .rfind('/')
+        .map(|idx| &cleaned[idx + 1..])
+        .unwrap_or(cleaned);
+    let base = base.trim_matches('/').trim_end_matches(".exe");
+
+    match base {
+        "claude" | "claude-code" => Some("claude"),
+        "codex" | "codex-cli" | "codex-tui" | "codex-js" => Some("codex"),
+        "opencode" => Some("opencode"),
+        "kiro" | "kiro-cli" | "kiro-cli-chat" => Some("kiro"),
+        _ => None,
+    }
+}
+
+fn split_command_words(cmdline: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    for raw in cmdline.split_whitespace() {
+        let normalized = raw
+            .replace('&', " ")
+            .replace('|', " ")
+            .replace('(', " ")
+            .replace(')', " ")
+            .replace('[', " ")
+            .replace(']', " ")
+            .replace('{', " ")
+            .replace('}', " ");
+        for token in normalized.split_whitespace() {
+            if !token.is_empty() {
+                words.push(token.to_string());
+            }
+        }
+    }
+    words
+}
+
+fn is_wrapper_token(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "sh" | "bash"
+            | "zsh"
+            | "fish"
+            | "dash"
+            | "ksh"
+            | "env"
+            | "command"
+            | "exec"
+            | "nohup"
+            | "timeout"
+            | "npm"
+            | "npx"
+            | "pnpm"
+            | "yarn"
+            | "bun"
+            | "bunx"
+            | "deno"
+            | "node"
+            | "python"
+            | "python3"
+            | "ruby"
+    )
+}
+
+fn is_skippable_wrapper_arg(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    lower == "--"
+        || lower.starts_with('-')
+        || (token.contains('=') && token.contains('/') && lower.starts_with("env"))
+        || lower.contains("=codex")
+}
+
+fn detect_tool_from_cmdline(cmdline: &str) -> Option<&'static str> {
+    let words = split_command_words(cmdline);
+    if words.is_empty() {
+        return None;
+    }
+
+    for (index, token) in words.iter().enumerate() {
+        if let Some(tool) = normalize_tool_token(token) {
+            return Some(tool);
+        }
+
+        if is_wrapper_token(token) {
+            let mut next_index = index + 1;
+            while let Some(next) = words.get(next_index) {
+                if !is_skippable_wrapper_arg(next) {
+                    if let Some(tool) = normalize_tool_token(next) {
+                        return Some(tool);
+                    }
+                }
+                next_index += 1;
+            }
+        }
+    }
+
+    None
+}
+
+fn detect_tool_for_pid(pid: u32) -> Option<(String, u32)> {
+    if let Some(name) = process_name(pid) {
+        if let Some(tool) = detect_tool_from_name(&name) {
+            return Some((tool.to_string(), pid));
+        }
+    }
+
+    if let Some(cmdline) = process_cmdline(pid) {
+        if let Some(tool) = detect_tool_from_cmdline(&cmdline) {
+            return Some((tool.to_string(), pid));
+        }
+    }
+
+    None
+}
+
 fn detect_log_file_for_pane_pid(pane_pid: u32) -> Result<(PathBuf, AiTool)> {
     let descendants = get_descendant_pids(pane_pid)?;
 
     for pid in &descendants {
-        let name = match process_name(*pid) {
-            Some(n) => n,
-            None => continue,
+        let Some((tool_name, tool_pid)) = detect_tool_for_pid(*pid) else {
+            continue;
         };
 
-        if name == "claude" {
-            let cwd = get_process_cwd(*pid)?;
+        if tool_name == "claude" {
+            let cwd = get_process_cwd(tool_pid)?;
             let log = find_claude_log(&cwd)?;
             info!("detected Claude log: {}", log.display());
             return Ok((log, AiTool::Claude));
         }
 
-        if name == "codex" {
-            let cwd = get_process_cwd(*pid)?;
+        if tool_name == "codex" {
+            let cwd = get_process_cwd(tool_pid)?;
             let log = find_codex_log(&cwd)?;
             info!(
                 "detected Codex log: {} (cwd: {})",
@@ -467,26 +666,26 @@ fn detect_log_file_for_pane_pid(pane_pid: u32) -> Result<(PathBuf, AiTool)> {
             return Ok((log, AiTool::Codex));
         }
 
-        if name == "opencode" {
-            let cwd = get_process_cwd(*pid)?;
+        if tool_name == "opencode" {
+            let cwd = get_process_cwd(tool_pid)?;
             let log = find_opencode_db()?;
             info!(
                 "detected Opencode database: {} for PID {} (cwd: {})",
                 log.display(),
-                pid,
+                tool_pid,
                 cwd.display()
             );
-            return Ok((log, AiTool::Opencode { cwd, pid: *pid }));
+            return Ok((log, AiTool::Opencode { cwd, pid: tool_pid }));
         }
 
-        if name == "kiro-cli-chat" || name == "kiro-cli" {
-            let cwd = get_process_cwd(*pid)?;
-            let session_id =
-                kiro_parser::find_session_id(&cwd).unwrap_or_else(|_| format!("session-{}", pid));
+        if tool_name == "kiro" {
+            let cwd = get_process_cwd(tool_pid)?;
+            let session_id = kiro_parser::find_session_id(&cwd)
+                .unwrap_or_else(|_| format!("session-{}", tool_pid));
             info!(
                 "detected kiro-cli for PID {} (comm={}, cwd: {}, session: {})",
-                pid,
-                name,
+                tool_pid,
+                tool_name,
                 cwd.display(),
                 session_id
             );
@@ -494,7 +693,7 @@ fn detect_log_file_for_pane_pid(pane_pid: u32) -> Result<(PathBuf, AiTool)> {
                 PathBuf::from("/dev/null"),
                 AiTool::Kiro {
                     cwd,
-                    pid: *pid,
+                    pid: tool_pid,
                     session_id,
                 },
             ));
@@ -502,22 +701,6 @@ fn detect_log_file_for_pane_pid(pane_pid: u32) -> Result<(PathBuf, AiTool)> {
     }
 
     bail!("no AI tool (claude/codex/opencode/kiro) found among descendants of pane PID {pane_pid}");
-}
-
-fn detect_tool_name_for_pane_pid(pane_pid: u32) -> Option<String> {
-    let descendants = get_descendant_pids(pane_pid).ok()?;
-
-    for pid in &descendants {
-        match process_name(*pid).as_deref() {
-            Some("claude") => return Some("claude".to_string()),
-            Some("codex") => return Some("codex".to_string()),
-            Some("opencode") => return Some("opencode".to_string()),
-            Some("kiro-cli") | Some("kiro-cli-chat") => return Some("kiro".to_string()),
-            _ => {}
-        }
-    }
-
-    None
 }
 
 fn scan_proc_children_map() -> HashMap<u32, Vec<u32>> {
@@ -999,5 +1182,28 @@ mod tests {
 
         let result5 = parse_line("not json", &AiTool::Codex);
         assert!(result5.is_none());
+    }
+
+    #[test]
+    fn test_detect_tool_from_cmdline_with_node_wrapper() {
+        let cmdline =
+            "node /home/user/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex --yolo";
+        assert_eq!(detect_tool_from_cmdline(cmdline), Some("codex"));
+    }
+
+    #[test]
+    fn test_detect_tool_from_cmdline_with_nested_wrappers() {
+        assert_eq!(
+            detect_tool_from_cmdline("sh -lc env CODA=1 npx codex app-server"),
+            Some("codex")
+        );
+    }
+
+    #[test]
+    fn test_detect_tool_from_cmdline_with_kid_wrappers() {
+        assert_eq!(
+            detect_tool_from_cmdline("/usr/bin/env python3 -m codex --yolo"),
+            Some("codex")
+        );
     }
 }

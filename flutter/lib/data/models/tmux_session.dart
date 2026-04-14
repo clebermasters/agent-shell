@@ -5,11 +5,13 @@ class TmuxSession extends Equatable {
   final bool attached;
   final int windows;
   final DateTime? created;
+  final String? tool;
 
   const TmuxSession({
     required this.name,
     required this.attached,
     required this.windows,
+    this.tool,
     this.created,
   });
 
@@ -18,33 +20,37 @@ class TmuxSession extends Equatable {
     bool? attached,
     int? windows,
     DateTime? created,
+    String? tool,
   }) {
     return TmuxSession(
       name: name ?? this.name,
       attached: attached ?? this.attached,
       windows: windows ?? this.windows,
+      tool: tool ?? this.tool,
       created: created ?? this.created,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'attached': attached,
-        'windows': windows,
-        'created': created?.toIso8601String(),
-      };
+    'name': name,
+    'attached': attached,
+    'windows': windows,
+    'tool': tool,
+    'created': created?.toIso8601String(),
+  };
 
   factory TmuxSession.fromJson(Map<String, dynamic> json) => TmuxSession(
-        name: json['name'] as String,
-        attached: json['attached'] as bool? ?? false,
-        windows: json['windows'] as int? ?? 0,
-        created: json['created'] != null
-            ? DateTime.parse(json['created'] as String)
-            : null,
-      );
+    name: json['name'] as String,
+    attached: json['attached'] as bool? ?? false,
+    windows: json['windows'] as int? ?? 0,
+    tool: json['tool'] as String?,
+    created: json['created'] != null
+        ? DateTime.parse(json['created'] as String)
+        : null,
+  );
 
   @override
-  List<Object?> get props => [name, attached, windows, created];
+  List<Object?> get props => [name, attached, windows, tool, created];
 }
 
 class TmuxWindow extends Equatable {
@@ -61,18 +67,18 @@ class TmuxWindow extends Equatable {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'active': active,
-        'panes': panes,
-      };
+    'id': id,
+    'name': name,
+    'active': active,
+    'panes': panes,
+  };
 
   factory TmuxWindow.fromJson(Map<String, dynamic> json) => TmuxWindow(
-        id: json['id'] as int,
-        name: json['name'] as String,
-        active: json['active'] as bool? ?? false,
-        panes: json['panes'] as int? ?? 1,
-      );
+    id: json['id'] as int,
+    name: json['name'] as String,
+    active: json['active'] as bool? ?? false,
+    panes: json['panes'] as int? ?? 1,
+  );
 
   @override
   List<Object?> get props => [id, name, active, panes];

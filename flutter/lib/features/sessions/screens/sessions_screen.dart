@@ -56,9 +56,14 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete Sessions'),
-        content: Text('Delete ${ids.length} session${ids.length == 1 ? '' : 's'}? This cannot be undone.'),
+        content: Text(
+          'Delete ${ids.length} session${ids.length == 1 ? '' : 's'}? This cannot be undone.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             style: TextButton.styleFrom(foregroundColor: Colors.red),
@@ -80,19 +85,25 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
     super.initState();
     Future.microtask(() {
       ref.read(sessionsProvider.notifier).refresh();
-      _newSessionSub = ref.read(sessionsProvider.notifier).newAcpSession.listen((event) {
-        if (!mounted) return;
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => ChatScreen(
-            sessionName: event.sessionId,
-            windowIndex: 0,
-            isAcp: true,
-            cwd: event.cwd,
-          ),
-        )).then((_) {
-          if (mounted) ref.read(sessionsProvider.notifier).refresh();
-        });
-      });
+      _newSessionSub = ref.read(sessionsProvider.notifier).newAcpSession.listen(
+        (event) {
+          if (!mounted) return;
+          Navigator.of(context)
+              .push(
+                MaterialPageRoute(
+                  builder: (_) => ChatScreen(
+                    sessionName: event.sessionId,
+                    windowIndex: 0,
+                    isAcp: true,
+                    cwd: event.cwd,
+                  ),
+                ),
+              )
+              .then((_) {
+                if (mounted) ref.read(sessionsProvider.notifier).refresh();
+              });
+        },
+      );
     });
   }
 
@@ -124,197 +135,210 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
               ],
             )
           : AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Sessions'),
-            if (hostsState.selectedHost != null)
-              Text(
-                hostsState.selectedHost!.name,
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Sessions'),
+                  if (hostsState.selectedHost != null)
+                    Text(
+                      hostsState.selectedHost!.name,
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                ],
               ),
-          ],
-        ),
-        actions: [
-          const AlertsBellButton(),
-          IconButton(
-            icon: const Icon(Icons.dns),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const HostSelectionScreen()),
-              );
-            },
-            tooltip: 'Servers',
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              ref.read(sessionsProvider.notifier).refresh();
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () => _showCreateSessionDialog(context, ref),
-            tooltip: 'New Session',
-          ),
-        ],
-      ),
+              actions: [
+                const AlertsBellButton(),
+                IconButton(
+                  icon: const Icon(Icons.dns),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const HostSelectionScreen(),
+                      ),
+                    );
+                  },
+                  tooltip: 'Servers',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: () {
+                    ref.read(sessionsProvider.notifier).refresh();
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  onPressed: () => _showCreateSessionDialog(context, ref),
+                  tooltip: 'New Session',
+                ),
+              ],
+            ),
       body: Column(
         children: [
           const SystemMiniBar(),
-          Expanded(child: sessionsState.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : sessionsState.sessions.isEmpty && sessionsState.acpSessions.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.terminal, size: 64, color: Colors.grey[400]),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No sessions',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.titleLarge?.copyWith(color: Colors.grey[400]),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Create a new session to get started',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyMedium?.copyWith(color: Colors.grey[500]),
-                  ),
-                ],
-              ),
-            )
-          : ListView(
-              children: [
-                if (sessionsState.sessions.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text(
-                      'Terminal Sessions',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+          Expanded(
+            child: sessionsState.isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : sessionsState.sessions.isEmpty &&
+                      sessionsState.acpSessions.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.terminal, size: 64, color: Colors.grey[400]),
+                        const SizedBox(height: 16),
+                        Text(
+                          'No sessions',
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(color: Colors.grey[400]),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Create a new session to get started',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(color: Colors.grey[500]),
+                        ),
+                      ],
                     ),
-                  ),
-                  ...sessionsState.sessions.map(
-                    (session) => _SessionTile(
-                      session: session,
-                      onAttach: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                TerminalScreen(sessionName: session.name),
+                  )
+                : ListView(
+                    children: [
+                      if (sessionsState.sessions.isNotEmpty) ...[
+                        const Padding(
+                          padding: EdgeInsets.all(16.0),
+                          child: Text(
+                            'Terminal Sessions',
+                            style: TextStyle(fontWeight: FontWeight.bold),
                           ),
-                        );
-                      },
-                      onChat: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => ChatScreen(
-                              sessionName: session.name,
-                              windowIndex: 0,
-                            ),
-                          ),
-                        );
-                      },
-                      onRename: () => _showRenameSessionDialog(context, ref, session.name),
-                      onKill: () async {
-                        final confirmed = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Kill Session'),
-                            content: Text(
-                              'Are you sure you want to kill "${session.name}"?',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: Colors.red,
+                        ),
+                        ...sessionsState.sessions.map(
+                          (session) => _SessionTile(
+                            session: session,
+                            onAttach: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      TerminalScreen(sessionName: session.name),
                                 ),
-                                child: const Text('Kill'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (confirmed == true) {
-                          ref
-                              .read(sessionsProvider.notifier)
-                              .killSession(session.name);
-                        }
-                      },
-                    ),
-                  ),
-                ],
-                if (sessionsState.acpSessions.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text(
-                      'Direct Sessions (ACP)',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  ...sessionsState.acpSessions.map(
-                    (session) => _AcpSessionTile(
-                      session: session,
-                      isSelecting: _isSelecting,
-                      isSelected: _selectedIds.contains(session.sessionId),
-                      onTap: () {
-                        if (_isSelecting) {
-                          _toggleSelection(session.sessionId);
-                        } else {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => ChatScreen(
-                                sessionName: session.sessionId,
-                                windowIndex: 0,
-                                isAcp: true,
-                                cwd: session.cwd,
-                              ),
-                            ),
-                          );
-                        }
-                      },
-                      onLongPress: () => _enterSelectionMode(session.sessionId),
-                      onDelete: () async {
-                        final confirmed = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Delete ACP Session'),
-                            content: Text(
-                              'Delete session in "${session.cwd.split('/').last}"? This cannot be undone.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: Colors.red,
+                              );
+                            },
+                            onChat: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ChatScreen(
+                                    sessionName: session.name,
+                                    windowIndex: 0,
+                                  ),
                                 ),
-                                child: const Text('Delete'),
-                              ),
-                            ],
+                              );
+                            },
+                            onRename: () => _showRenameSessionDialog(
+                              context,
+                              ref,
+                              session.name,
+                            ),
+                            onKill: () async {
+                              final confirmed = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Kill Session'),
+                                  content: Text(
+                                    'Are you sure you want to kill "${session.name}"?',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: Colors.red,
+                                      ),
+                                      child: const Text('Kill'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirmed == true) {
+                                ref
+                                    .read(sessionsProvider.notifier)
+                                    .killSession(session.name);
+                              }
+                            },
                           ),
-                        );
-                        if (confirmed == true) {
-                          ref
-                              .read(sessionsProvider.notifier)
-                              .deleteAcpSession(session.sessionId);
-                        }
-                      },
-                    ),
+                        ),
+                      ],
+                      if (sessionsState.acpSessions.isNotEmpty) ...[
+                        const Padding(
+                          padding: EdgeInsets.all(16.0),
+                          child: Text(
+                            'Direct Sessions (ACP)',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        ...sessionsState.acpSessions.map(
+                          (session) => _AcpSessionTile(
+                            session: session,
+                            isSelecting: _isSelecting,
+                            isSelected: _selectedIds.contains(
+                              session.sessionId,
+                            ),
+                            onTap: () {
+                              if (_isSelecting) {
+                                _toggleSelection(session.sessionId);
+                              } else {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => ChatScreen(
+                                      sessionName: session.sessionId,
+                                      windowIndex: 0,
+                                      isAcp: true,
+                                      cwd: session.cwd,
+                                    ),
+                                  ),
+                                );
+                              }
+                            },
+                            onLongPress: () =>
+                                _enterSelectionMode(session.sessionId),
+                            onDelete: () async {
+                              final confirmed = await showDialog<bool>(
+                                context: context,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Delete ACP Session'),
+                                  content: Text(
+                                    'Delete session in "${session.cwd.split('/').last}"? This cannot be undone.',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: Colors.red,
+                                      ),
+                                      child: const Text('Delete'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirmed == true) {
+                                ref
+                                    .read(sessionsProvider.notifier)
+                                    .deleteAcpSession(session.sessionId);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
-              ],
-            ),
           ),
         ],
       ),
@@ -325,12 +349,18 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
     );
   }
 
-  void _showRenameSessionDialog(BuildContext context, WidgetRef ref, String currentName) {
+  void _showRenameSessionDialog(
+    BuildContext context,
+    WidgetRef ref,
+    String currentName,
+  ) {
     final controller = TextEditingController(text: currentName);
 
     void doRename(String newName, NavigatorState nav) {
       if (newName.isEmpty || newName == currentName) return;
-      ref.read(sharedWebSocketServiceProvider).renameSession(currentName, newName);
+      ref
+          .read(sharedWebSocketServiceProvider)
+          .renameSession(currentName, newName);
       Future.delayed(const Duration(milliseconds: 500), () {
         if (mounted) ref.read(sessionsProvider.notifier).refresh();
       });
@@ -351,7 +381,10 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen> {
           },
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
           ElevatedButton(
             onPressed: () {
               final nav = Navigator.of(ctx);
@@ -482,18 +515,17 @@ class _SessionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tool = session.tool;
+    final moduleLabel = tool != null && tool.isNotEmpty ? tool : 'unknown';
+    final subtitle =
+        '${session.windows} window${session.windows != 1 ? 's' : ''} • $moduleLabel';
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: ListTile(
-        leading: Icon(
-          Icons.terminal,
-          color: session.attached ? Colors.green : Colors.grey,
-        ),
+        leading: Icon(Icons.terminal, color: _toolColor(tool)),
         title: Text(session.name),
-        subtitle: Text(
-          '${session.windows} window${session.windows != 1 ? 's' : ''}',
-          style: TextStyle(color: Colors.grey[500]),
-        ),
+        subtitle: Text(subtitle, style: TextStyle(color: Colors.grey[500])),
         trailing: PopupMenuButton(
           itemBuilder: (context) => [
             const PopupMenuItem(
@@ -545,6 +577,21 @@ class _SessionTile extends StatelessWidget {
       ),
     );
   }
+
+  Color _toolColor(String? tool) {
+    switch (tool) {
+      case 'claude':
+        return Colors.blue;
+      case 'codex':
+        return Colors.purple;
+      case 'opencode':
+        return Colors.teal;
+      case 'kiro':
+        return Colors.amber;
+      default:
+        return session.attached ? Colors.green : Colors.grey;
+    }
+  }
 }
 
 class _AcpSessionTile extends StatelessWidget {
@@ -568,10 +615,7 @@ class _AcpSessionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       leading: isSelecting
-          ? Checkbox(
-              value: isSelected,
-              onChanged: (_) => onTap(),
-            )
+          ? Checkbox(value: isSelected, onChanged: (_) => onTap())
           : const Icon(Icons.smart_toy),
       title: Text(
         session.title.isEmpty ? session.cwd.split('/').last : session.title,
@@ -589,14 +633,14 @@ class _AcpSessionTile extends StatelessWidget {
                   value: 'delete',
                   child: Row(
                     children: [
-                Icon(Icons.delete, color: Colors.red),
-                SizedBox(width: 8),
-                Text('Delete', style: TextStyle(color: Colors.red)),
+                      Icon(Icons.delete, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Delete', style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
               ],
             ),
-          ),
-        ],
-      ),
       onTap: onTap,
       onLongPress: onLongPress,
     );

@@ -80,17 +80,16 @@ impl TmuxMonitor {
             !sessions_equal_ignoring_tool(&previous_state.sessions, &current_sessions);
         let window_pane_changed = previous_state.window_pane_counts != current_window_pane_counts;
 
-        if sessions_changed || window_pane_changed {
+        let has_unknown_tools = current_sessions.iter().any(|session| session.tool.is_none());
+
+        if sessions_changed || window_pane_changed || has_unknown_tools {
             debug!(
-                "Tmux state changed - sessions: {}, windows/panes: {}",
-                sessions_changed, window_pane_changed
+                "Tmux state changed - sessions: {}, windows/panes: {}, unknown tools: {}",
+                sessions_changed, window_pane_changed, has_unknown_tools
             );
 
-            let current_sessions = if sessions_changed {
-                enrich_tools_from_previous(current_sessions, &previous_state.sessions).await
-            } else {
-                previous_state.sessions.clone()
-            };
+            let current_sessions =
+                enrich_tools_from_previous(current_sessions, &previous_state.sessions).await;
 
             let mut state = self.state.write().await;
             state.sessions = current_sessions.clone();

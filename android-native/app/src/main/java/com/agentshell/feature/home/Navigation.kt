@@ -118,7 +118,7 @@ fun AgentShellNavHost(
                 onNavigateToAlerts = { navController.navigate(Routes.alerts()) },
                 onNavigateToHosts = { navController.navigate(Routes.HOST_SELECTION) },
                 onNavigateToSplitScreen = { layoutId -> navController.navigate(Routes.splitScreen(layoutId)) },
-                sessionsContent = {
+                sessionsContent = { _ ->
                     SessionsScreen(
                         onNavigateToTerminal = { name -> navController.navigate(Routes.terminal(name)) },
                         onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
@@ -127,14 +127,14 @@ fun AgentShellNavHost(
                         onNavigateToGit = { name, path, isAcp -> navController.navigate(Routes.git(name, path, isAcp)) },
                     )
                 },
-                cronContent = {
+                cronContent = { _ ->
                     CronScreen(
                         onNavigateToEditor = { job ->
                             navController.navigate(Routes.cronEditor(job?.id))
                         },
                     )
                 },
-                dotfilesContent = {
+                dotfilesContent = { _ ->
                     DotfilesScreen(
                         onNavigateToEditor = { _ ->
                             // selectFile() already called in DotfilesScreen — just navigate
@@ -148,8 +148,8 @@ fun AgentShellNavHost(
                         },
                     )
                 },
-                systemContent = {
-                    SystemScreen()
+                systemContent = { isVisible ->
+                    SystemScreen(isVisible = isVisible)
                 },
             )
         }

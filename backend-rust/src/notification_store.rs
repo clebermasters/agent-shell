@@ -1,9 +1,7 @@
 use std::{fs, path::{Path, PathBuf}, time::Duration};
 
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
-use uuid::Uuid;
 
 use crate::notification::{Notification, NotificationFile};
 

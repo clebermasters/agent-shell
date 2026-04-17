@@ -11,10 +11,12 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
+import okhttp3.OkHttpClient
 
 @EntryPoint
 @InstallIn(SingletonComponent::class)
 interface SplitScreenEntryPoint {
+    fun okHttpClient(): OkHttpClient
     fun terminalService(): TerminalService
     fun webSocketService(): WebSocketService
     fun chatRepository(): ChatRepository

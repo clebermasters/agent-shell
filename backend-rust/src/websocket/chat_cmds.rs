@@ -199,7 +199,6 @@ pub(crate) async fn handle(
 
                             // Forward parsed events to WebSocket + persist to store
                             let session_name_owned = session_name.clone();
-                            let event_tx_owned = event_tx.clone();
                             let chat_event_store_kiro = chat_event_store.clone();
                             tokio::spawn(async move {
                                 while let Some(event) = event_rx.recv().await {
@@ -1320,7 +1319,7 @@ pub(crate) async fn handle(
 
             // If session:window failed (window doesn't exist), retry with session only
             // so tmux targets the active window.
-            let (send_text, effective_target) = match &send_text {
+            let (_send_text, effective_target) = match &send_text {
                 Ok(output) if !output.status.success() => {
                     warn!(
                         "SendChatMessage: target {} failed, retrying with session only ({})",

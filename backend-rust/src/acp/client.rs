@@ -671,7 +671,7 @@ impl AcpClient {
 
     #[cfg(test)]
     pub fn new_for_test_with_channel() -> (Self, mpsc::Sender<AcpEvent>) {
-        let (event_tx, event_rx) = mpsc::channel::<AcpEvent>(100);
+        let (event_tx, _event_rx) = mpsc::channel::<AcpEvent>(100);
         let client = Self {
             child: Arc::new(Mutex::new(None)),
             request_id: Arc::new(Mutex::new(1)),

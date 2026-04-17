@@ -15,15 +15,12 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatBlockType
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
 import com.agentshell.feature.chat.MarkdownText
-import com.agentshell.data.remote.acpSendPrompt
-import com.agentshell.data.remote.sendChatMessage
-import com.agentshell.data.remote.watchAcpChatLog
-import com.agentshell.data.remote.watchChatLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,7 +29,7 @@ import java.util.UUID
 /**
  * Lightweight chat panel for the split-screen feature.
  * Displays messages with text content and a compact input bar.
- * Uses the same message parsing logic as [ChatViewModel].
+ * Uses a dedicated WebSocket so multiple panels can stay live concurrently.
  */
 @Composable
 fun ChatPanelContent(
@@ -43,8 +40,9 @@ fun ChatPanelContent(
     isFocused: Boolean,
 ) {
     val services = rememberSplitScreenServices()
-    val webSocketService = services.webSocketService()
-    val chatRepository = services.chatRepository()
+    val webSocketUrl = services.webSocketService().currentWebSocketUrl
+    val panelSocket = remember(panelId) { SplitPanelSocket(services.okHttpClient()) }
+    val isSocketConnected by panelSocket.isConnected.collectAsStateWithLifecycle()
 
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var inputText by remember { mutableStateOf("") }
@@ -52,18 +50,37 @@ fun ChatPanelContent(
     val coroutineScope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
 
-    // Only the focused chat panel sends the watch command to the backend.
-    // The backend's watch-chat-log handler sets current_session, cancelling
-    // any previous watcher — so only one chat session can be "live" at a time.
-    // Non-focused panels keep their loaded messages but don't receive live updates.
-    LaunchedEffect(isFocused, sessionName, windowIndex, isAcp) {
-        if (sessionName.isEmpty()) return@LaunchedEffect
-        if (isFocused) {
-            if (isAcp) {
-                webSocketService.watchAcpChatLog(sessionName)
-            } else {
-                webSocketService.watchChatLog(sessionName, windowIndex)
-            }
+    LaunchedEffect(webSocketUrl) {
+        if (!webSocketUrl.isNullOrEmpty()) {
+            panelSocket.connect(webSocketUrl)
+        }
+    }
+
+    DisposableEffect(panelId) {
+        onDispose {
+            panelSocket.dispose()
+        }
+    }
+
+    LaunchedEffect(isSocketConnected, sessionName, windowIndex, isAcp) {
+        if (!isSocketConnected || sessionName.isEmpty()) return@LaunchedEffect
+        messages.clear()
+        if (isAcp) {
+            panelSocket.send(
+                mapOf(
+                    "type" to "watch-acp-chat-log",
+                    "sessionId" to sessionName,
+                    "windowIndex" to windowIndex,
+                ),
+            )
+        } else {
+            panelSocket.send(
+                mapOf(
+                    "type" to "watch-chat-log",
+                    "sessionName" to sessionName,
+                    "windowIndex" to windowIndex,
+                ),
+            )
         }
     }
 
@@ -72,7 +89,7 @@ fun ChatPanelContent(
         messages.clear()
         if (sessionName.isEmpty()) return@LaunchedEffect
 
-        chatRepository.chatMessages.collect { message ->
+        panelSocket.messages.collect { message ->
             val type = message["type"] as? String ?: return@collect
             when (type) {
                 "chat-history" -> {
@@ -262,9 +279,23 @@ fun ChatPanelContent(
                     val text = inputText.trim()
                     if (text.isEmpty()) return@IconButton
                     if (isAcp) {
-                        webSocketService.acpSendPrompt(sessionName, text)
+                        panelSocket.send(
+                            mapOf(
+                                "type" to "acp-send-prompt",
+                                "sessionId" to sessionName,
+                                "message" to text,
+                            ),
+                        )
                     } else {
-                        webSocketService.sendChatMessage(sessionName, windowIndex, text)
+                        panelSocket.send(
+                            mapOf(
+                                "type" to "send-chat-message",
+                                "sessionName" to sessionName,
+                                "windowIndex" to windowIndex,
+                                "message" to text,
+                                "notify" to false,
+                            ),
+                        )
                     }
                     messages.add(ChatMessage(
                         id = "user-${System.currentTimeMillis()}",

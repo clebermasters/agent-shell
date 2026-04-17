@@ -1134,11 +1134,7 @@ mod tests {
 
     #[test]
     fn test_find_opencode_db_not_found() {
-        // Set HOME to a temp dir to ensure the DB won't be found
-        let dir = tempfile::TempDir::new().unwrap();
-        let original_home = std::env::var("HOME").ok();
-        // Don't actually change HOME as it affects other tests running in parallel
-        // Instead, just verify the function exists and returns the expected type
+        // Don't mutate HOME because tests run in parallel; just verify the call is safe.
         let result = find_opencode_db();
         // The result depends on whether the file exists on the test machine
         let _ = result;
@@ -1166,6 +1162,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn test_parse_line_with_various_inputs() {
         // Test that parse_line handles various inputs without panicking
         let result1 = parse_line("", &AiTool::Claude);

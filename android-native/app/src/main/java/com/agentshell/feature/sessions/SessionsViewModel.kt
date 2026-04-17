@@ -33,9 +33,11 @@ import com.agentshell.data.remote.selectBackend
 import com.agentshell.data.remote.setFavoriteTags
 import com.agentshell.data.remote.updateFavorite
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -115,11 +117,39 @@ class SessionsViewModel @Inject constructor(
     private val _sessionCwdResults = MutableSharedFlow<SessionCwdResult>(extraBufferCapacity = 8)
     private var pendingTagSnapshot = PendingTagSnapshot()
     private val sessionCwdCache = linkedMapOf<String, String>()
+    private var scheduledSessionRefreshJob: Job? = null
 
     init {
+        observeCachedFavorites()
+        observeCachedTags()
         observeMessages()
         observeConnection()
-        requestSessions()
+    }
+
+    private fun observeCachedFavorites() {
+        viewModelScope.launch {
+            favoriteSessionDao.getAll().collect { favorites ->
+                _uiState.update { it.copy(favorites = favorites) }
+            }
+        }
+    }
+
+    private fun observeCachedTags() {
+        viewModelScope.launch {
+            combine(
+                sessionTagDao.getAllTags(),
+                sessionTagDao.getAllAssignments(),
+            ) { tags, assignments ->
+                tags to assignments
+            }.collect { (tags, assignments) ->
+                _uiState.update {
+                    it.copy(
+                        tags = tags,
+                        sessionTagMap = buildSessionTagMap(tags, assignments),
+                    )
+                }
+            }
+        }
     }
 
     private fun observeMessages() {
@@ -161,10 +191,7 @@ class SessionsViewModel @Inject constructor(
                         val cwd = message["cwd"] as? String
                         if (sessionId != null && cwd != null) {
                             _uiState.update { it.copy(error = null) }
-                            viewModelScope.launch {
-                                delay(300)
-                                requestSessions()
-                            }
+                            scheduleSessionListRefresh(delayMs = 300)
                             _newAcpSession.emit(NewAcpSessionEvent(sessionId, cwd))
                         }
                     }
@@ -186,10 +213,7 @@ class SessionsViewModel @Inject constructor(
                     }
 
                     "session-created" -> {
-                        viewModelScope.launch {
-                            delay(500)
-                            requestSessions()
-                        }
+                        scheduleSessionListRefresh(delayMs = 350)
                     }
 
                     "session-cwd" -> {
@@ -219,10 +243,7 @@ class SessionsViewModel @Inject constructor(
                             val tagIds = (f["tagIds"] as? List<*>)?.filterIsInstance<String>() ?: emptyList()
                             id to tagIds
                         }
-                        viewModelScope.launch {
-                            favoriteSessionDao.deleteAll()
-                            favoriteSessionDao.insertAll(favorites)
-                        }
+                        viewModelScope.launch { favoriteSessionDao.replaceAll(favorites) }
                         _uiState.update { it.copy(favorites = favorites, favoriteTagMap = favoriteTagMap) }
                     }
 
@@ -453,28 +474,44 @@ class SessionsViewModel @Inject constructor(
         viewModelScope.launch {
             wsService.connectionStatus.collect { status ->
                 if (status == com.agentshell.data.model.ConnectionStatus.CONNECTED) {
-                    requestSessions()
+                    requestSessions(
+                        includeMetadata = true,
+                        showLoading = _uiState.value.tmuxSessions.isEmpty() && _uiState.value.acpSessions.isEmpty(),
+                    )
                 }
             }
         }
     }
 
-    fun requestSessions() {
-        _uiState.update { it.copy(isLoading = true) }
+    fun requestSessions(
+        includeMetadata: Boolean = true,
+        showLoading: Boolean = true,
+    ) {
+        scheduledSessionRefreshJob?.cancel()
+        if (showLoading) {
+            _uiState.update { it.copy(isLoading = true) }
+        }
         wsService.requestSessions()
         wsService.acpListSessions()
-        wsService.getFavorites()
-        wsService.getTags()
-        wsService.getTagAssignments()
+        if (includeMetadata) {
+            wsService.getFavorites()
+            wsService.getTags()
+            wsService.getTagAssignments()
+        }
+    }
+
+    private fun scheduleSessionListRefresh(delayMs: Long = 350L) {
+        scheduledSessionRefreshJob?.cancel()
+        scheduledSessionRefreshJob = viewModelScope.launch {
+            delay(delayMs)
+            requestSessions(includeMetadata = false, showLoading = false)
+        }
     }
 
     fun createSession(name: String) {
         _uiState.update { it.copy(isLoading = true) }
         wsService.createSession(name)
-        viewModelScope.launch {
-            delay(500)
-            requestSessions()
-        }
+        scheduleSessionListRefresh(delayMs = 350)
     }
 
     fun createAcpSession(cwd: String, backend: String = "opencode") {
@@ -489,19 +526,13 @@ class SessionsViewModel @Inject constructor(
 
     fun killSession(sessionName: String) {
         wsService.killSession(sessionName)
-        viewModelScope.launch {
-            delay(500)
-            requestSessions()
-        }
+        scheduleSessionListRefresh(delayMs = 350)
     }
 
     fun deleteAcpSession(sessionId: String) {
         wsService.selectBackend("acp")
         wsService.deleteAcpSession(sessionId)
-        viewModelScope.launch {
-            delay(500)
-            requestSessions()
-        }
+        scheduleSessionListRefresh(delayMs = 350)
     }
 
     fun deleteSelectedSessions() {
@@ -510,10 +541,7 @@ class SessionsViewModel @Inject constructor(
             wsService.selectBackend("acp")
             wsService.deleteAcpSession(id)
         }
-        viewModelScope.launch {
-            delay(500)
-            requestSessions()
-        }
+        scheduleSessionListRefresh(delayMs = 350)
         exitSelectionMode()
     }
 
@@ -645,10 +673,7 @@ class SessionsViewModel @Inject constructor(
                 )
                 val tagIds = _uiState.value.favoriteTagMap[favorite.id] ?: emptyList()
                 tagIds.forEach { tagId -> wsService.assignTagToSession(favorite.name, tagId) }
-                viewModelScope.launch {
-                    delay(500)
-                    requestSessions()
-                }
+                scheduleSessionListRefresh(delayMs = 350)
             }
 
             FavoriteLaunchTarget.ACP -> {

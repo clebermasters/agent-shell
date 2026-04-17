@@ -1,6 +1,7 @@
 package com.agentshell.terminal
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.text.InputType
 import android.util.Base64
 import android.util.Log
@@ -10,10 +11,13 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.webkit.JavascriptInterface
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebChromeClient
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import kotlin.math.abs
+import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewClientCompat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -22,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 
 private const val TAG = "XTermView"
+private const val TERMINAL_ASSET_URL = "https://appassets.androidplatform.net/assets/terminal.html"
 
 /**
  * Compose wrapper for an xterm.js-based terminal running in a WebView.
@@ -49,25 +54,7 @@ fun XTermView(
 
     val webView = remember {
         WebView(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
-            setBackgroundColor(0xFF1E1E1E.toInt())
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.allowFileAccess = true
-            settings.loadWithOverviewMode = true
-            settings.useWideViewPort = false
-            settings.setSupportZoom(false)
-            settings.builtInZoomControls = false
-            settings.displayZoomControls = false
-
-            webViewClient = WebViewClient()
-            webChromeClient = WebChromeClient()
-
-            addJavascriptInterface(bridge, "Android")
-            loadUrl("file:///android_asset/terminal.html")
+            configureTerminalWebView(context = context, bridge = bridge)
         }
     }
 
@@ -378,25 +365,7 @@ fun XTermView(
                 }
             }
         }.apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
-            setBackgroundColor(0xFF1E1E1E.toInt())
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.allowFileAccess = true
-            settings.loadWithOverviewMode = true
-            settings.useWideViewPort = false
-            settings.setSupportZoom(false)
-            settings.builtInZoomControls = false
-            settings.displayZoomControls = false
-
-            webViewClient = WebViewClient()
-            webChromeClient = WebChromeClient()
-
-            addJavascriptInterface(bridge, "Android")
-            loadUrl("file:///android_asset/terminal.html")
+            configureTerminalWebView(context = context, bridge = bridge)
         }
     }
 
@@ -469,4 +438,38 @@ internal class XTermBridge(
         val wv = webView ?: return
         wv.post { wv.evaluateJavascript(script, null) }
     }
+}
+
+private fun WebView.configureTerminalWebView(
+    context: Context,
+    bridge: XTermBridge,
+) {
+    layoutParams = ViewGroup.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT,
+    )
+    setBackgroundColor(0xFF1E1E1E.toInt())
+    settings.javaScriptEnabled = true
+    settings.domStorageEnabled = true
+    settings.allowFileAccess = false
+    settings.loadWithOverviewMode = true
+    settings.useWideViewPort = false
+    settings.setSupportZoom(false)
+    settings.builtInZoomControls = false
+    settings.displayZoomControls = false
+
+    val assetLoader = WebViewAssetLoader.Builder()
+        .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context.applicationContext))
+        .build()
+
+    webViewClient = object : WebViewClientCompat() {
+        override fun shouldInterceptRequest(
+            view: WebView,
+            request: WebResourceRequest,
+        ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
+    }
+    webChromeClient = WebChromeClient()
+
+    addJavascriptInterface(bridge, "Android")
+    loadUrl(TERMINAL_ASSET_URL)
 }

@@ -10,6 +10,9 @@ use crate::{
     types::{ServerMessage, TmuxSession},
 };
 
+const SESSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const WINDOW_DETAIL_REFRESH_TICKS: usize = 5;
+
 #[derive(Debug, Clone, PartialEq)]
 struct SessionState {
     sessions: Vec<TmuxSession>,
@@ -37,18 +40,24 @@ impl TmuxMonitor {
         info!("Starting tmux monitor");
 
         // Initial state fetch
-        self.check_for_changes().await;
+        self.check_for_changes(true).await;
 
         // Start monitoring loop
-        let mut interval = interval(Duration::from_millis(250)); // Check every 250ms for better responsiveness
+        let mut interval = interval(SESSION_POLL_INTERVAL);
+        let mut ticks_since_window_refresh = 0usize;
 
         loop {
             interval.tick().await;
-            self.check_for_changes().await;
+            ticks_since_window_refresh += 1;
+            let refresh_window_details = ticks_since_window_refresh >= WINDOW_DETAIL_REFRESH_TICKS;
+            self.check_for_changes(refresh_window_details).await;
+            if refresh_window_details {
+                ticks_since_window_refresh = 0;
+            }
         }
     }
 
-    async fn check_for_changes(&self) {
+    async fn check_for_changes(&self, refresh_window_details: bool) {
         let previous_state = self.state.read().await.clone();
 
         let current_sessions = match tmux::list_sessions_basic().await {
@@ -59,30 +68,33 @@ impl TmuxMonitor {
             }
         };
 
-        // Get detailed window/pane counts for each session
-        let mut current_window_pane_counts = HashMap::new();
-        for session in &current_sessions {
-            match tmux::list_windows(&session.name).await {
-                Ok(windows) => {
-                    let window_count = windows.len();
-                    let pane_count: usize = windows.iter().map(|w| w.panes as usize).sum();
-                    current_window_pane_counts
-                        .insert(session.name.clone(), (window_count, pane_count));
-                }
-                Err(e) => {
-                    error!("Failed to list windows for session {}: {}", session.name, e);
-                }
-            }
-        }
-
-        // Check if state has changed
         let sessions_changed =
             !sessions_equal_ignoring_tool(&previous_state.sessions, &current_sessions);
-        let window_pane_changed = previous_state.window_pane_counts != current_window_pane_counts;
-
         let has_unknown_tools = current_sessions
             .iter()
             .any(|session| session.tool.is_none());
+        let should_refresh_window_details = refresh_window_details || sessions_changed;
+
+        let current_window_pane_counts = if should_refresh_window_details {
+            let mut counts = HashMap::new();
+            for session in &current_sessions {
+                match tmux::list_windows(&session.name).await {
+                    Ok(windows) => {
+                        let window_count = windows.len();
+                        let pane_count: usize = windows.iter().map(|w| w.panes as usize).sum();
+                        counts.insert(session.name.clone(), (window_count, pane_count));
+                    }
+                    Err(e) => {
+                        error!("Failed to list windows for session {}: {}", session.name, e);
+                    }
+                }
+            }
+            counts
+        } else {
+            previous_state.window_pane_counts.clone()
+        };
+        let window_pane_changed =
+            should_refresh_window_details && previous_state.window_pane_counts != current_window_pane_counts;
 
         if sessions_changed || window_pane_changed || has_unknown_tools {
             debug!(
@@ -190,7 +202,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel::<crate::types::ServerMessage>(256);
         let monitor = TmuxMonitor::new(tx);
         // Run check_for_changes once — should succeed since tmux is running
-        monitor.check_for_changes().await;
+        monitor.check_for_changes(true).await;
         // May or may not broadcast depending on whether state changed — just shouldn't panic
         let _ = rx.try_recv();
     }

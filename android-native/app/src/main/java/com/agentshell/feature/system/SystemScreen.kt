@@ -89,6 +89,7 @@ private enum class SystemTab(val label: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SystemScreen(
+    isVisible: Boolean = true,
     viewModel: SystemViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -102,14 +103,17 @@ fun SystemScreen(
     }
 
     DisposableEffect(viewModel) {
-        viewModel.setScreenActive(true)
         onDispose {
             viewModel.setScreenActive(false)
         }
     }
 
-    LaunchedEffect(selectedTab) {
-        viewModel.setContainerStatsEnabled(selectedTab == SystemTab.CONTAINERS)
+    LaunchedEffect(isVisible) {
+        viewModel.setScreenActive(isVisible)
+    }
+
+    LaunchedEffect(selectedTab, isVisible) {
+        viewModel.setContainerStatsEnabled(isVisible && selectedTab == SystemTab.CONTAINERS)
     }
 
     Scaffold(

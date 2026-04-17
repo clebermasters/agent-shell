@@ -624,13 +624,6 @@ impl CronManager {
         Ok(())
     }
 
-    async fn add_to_crontab(&self, job: &CronJob) -> Result<()> {
-        let mut crontab_content = self.read_crontab().await?;
-        let job_entry = Self::format_job_entry(job, !crontab_content.trim().is_empty());
-        crontab_content.push_str(&job_entry);
-        self.write_crontab(&crontab_content).await
-    }
-
     async fn remove_from_crontab(&self, id: &str) -> Result<()> {
         let crontab_content = self.read_crontab().await?;
         let new_crontab = Self::remove_job_entry(&crontab_content, id);

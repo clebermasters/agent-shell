@@ -241,8 +241,6 @@ pub struct KiroState {
     pub pid: u32,
     /// kiro session ID (from history file lookup).
     pub session_id: String,
-    /// Working directory of the process.
-    pub cwd: PathBuf,
     /// Last time we received PTY output.
     pub last_output: Instant,
     /// Accumulated response buffer since last complete message.
@@ -251,21 +249,17 @@ pub struct KiroState {
     pub seen_responses: HashMap<String, bool>,
     /// Whether we're currently inside a tool call block.
     pub in_tool_block: bool,
-    /// Current tool call name (if in_tool_block).
-    pub current_tool: Option<String>,
 }
 
 impl KiroState {
-    pub fn new(pid: u32, session_id: String, cwd: PathBuf) -> Self {
+    pub fn new(pid: u32, session_id: String, _cwd: PathBuf) -> Self {
         Self {
             pid,
             session_id,
-            cwd,
             last_output: Instant::now(),
             response_buffer: String::new(),
             seen_responses: HashMap::new(),
             in_tool_block: false,
-            current_tool: None,
         }
     }
 }

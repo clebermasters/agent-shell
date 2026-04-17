@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -73,7 +74,7 @@ private const val TAB_SYSTEM = 3
  * - ConnectionStatusBanner (animated WS state)
  * - Alerts bell icon with unread badge in top bar
  * - FAB to open CommandPaletteSheet
- * - Tab content kept alive via remembered composable instances
+ * - Tab content kept alive after first visit via a visibility-aware layout container
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,10 +86,10 @@ fun HomeScreen(
     onNavigateToAlerts: () -> Unit,
     onNavigateToHosts: () -> Unit,
     onNavigateToSplitScreen: (layoutId: String?) -> Unit = {},
-    sessionsContent: @Composable () -> Unit,
-    cronContent: @Composable () -> Unit,
-    dotfilesContent: @Composable () -> Unit,
-    systemContent: @Composable () -> Unit,
+    sessionsContent: @Composable (Boolean) -> Unit,
+    cronContent: @Composable (Boolean) -> Unit,
+    dotfilesContent: @Composable (Boolean) -> Unit,
+    systemContent: @Composable (Boolean) -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -190,14 +191,12 @@ fun HomeScreen(
             // ── Claude usage banner ──
             claudeUsage?.let { usage -> ClaudeUsageBanner(usage) }
 
-            // ── Tab content (preserved – uses Box with visibility to keep state) ──
+            // ── Tab content (kept alive after first visit) ──
             Box(modifier = Modifier.fillMaxSize()) {
-                // Using "show only the active one" pattern so that tab state
-                // is preserved across switches (same as Flutter's IndexedStack).
-                TabContent(visible = uiState.currentTabIndex == TAB_SESSIONS) { sessionsContent() }
-                TabContent(visible = uiState.currentTabIndex == TAB_CRON) { cronContent() }
-                TabContent(visible = uiState.currentTabIndex == TAB_DOTFILES) { dotfilesContent() }
-                TabContent(visible = uiState.currentTabIndex == TAB_SYSTEM) { systemContent() }
+                KeepAliveTabContent(visible = uiState.currentTabIndex == TAB_SESSIONS, content = sessionsContent)
+                KeepAliveTabContent(visible = uiState.currentTabIndex == TAB_CRON, content = cronContent)
+                KeepAliveTabContent(visible = uiState.currentTabIndex == TAB_DOTFILES, content = dotfilesContent)
+                KeepAliveTabContent(visible = uiState.currentTabIndex == TAB_SYSTEM, content = systemContent)
             }
         }
     }
@@ -273,17 +272,31 @@ private fun TopBarRow(
 }
 
 /**
- * Wraps a tab's content so it is always in composition (preserving state)
- * but only visible when [visible] is true — analogous to Flutter's IndexedStack.
+ * Keeps a tab's content in composition after first visit, but only places it
+ * when [visible] is true so hidden tabs do not intercept input or draw.
  */
 @Composable
-private fun TabContent(
+private fun KeepAliveTabContent(
     visible: Boolean,
-    content: @Composable () -> Unit,
+    content: @Composable (Boolean) -> Unit,
 ) {
-    if (visible) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            content()
+    var activated by rememberSaveable { mutableStateOf(visible) }
+
+    LaunchedEffect(visible) {
+        if (visible) activated = true
+    }
+
+    if (!activated) return
+
+    Layout(
+        modifier = Modifier.fillMaxSize(),
+        content = { content(visible) },
+    ) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(constraints) }
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            if (visible) {
+                placeables.forEach { it.placeRelative(0, 0) }
+            }
         }
     }
 }

@@ -1,0 +1,11 @@
+Lcom/agentshell/AgentShellApp;
+Lcom/agentshell/MainActivity;
+Lcom/agentshell/feature/home/NavigationKt;
+Lcom/agentshell/feature/home/HomeScreenKt;
+Lcom/agentshell/feature/sessions/SessionsScreenKt;
+Lcom/agentshell/feature/terminal/TerminalScreenKt;
+Lcom/agentshell/feature/chat/ChatScreenKt;
+Lcom/agentshell/terminal/XTermViewKt;
+
+HSPLcom/agentshell/AgentShellApp;->onCreate()V
+HSPLcom/agentshell/MainActivity;->onCreate(Landroid/os/Bundle;)V

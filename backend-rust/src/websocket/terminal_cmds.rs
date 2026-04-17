@@ -296,7 +296,6 @@ pub(crate) async fn attach_to_session(
         let mut consecutive_errors = 0;
         let mut utf8_decoder = crate::terminal_buffer::Utf8StreamDecoder::new();
         let mut pending_output = String::with_capacity(16384);
-        let mut last_send = std::time::Instant::now();
         let mut bytes_since_pause = 0usize;
 
         loop {
@@ -396,7 +395,6 @@ pub(crate) async fn attach_to_session(
                             }
 
                             pending_output.clear();
-                            last_send = std::time::Instant::now();
 
                             if bytes_since_pause > 65536 {
                                 std::thread::sleep(std::time::Duration::from_millis(5));

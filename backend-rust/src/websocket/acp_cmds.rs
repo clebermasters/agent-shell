@@ -2089,7 +2089,7 @@ mod tests {
     #[tokio::test]
     async fn test_acp_list_sessions_auto_init_start_failure() {
         let dir = TempDir::new().unwrap();
-        let (mut ws_state, mut rx, app_state) = make_state(dir.path());
+        let (mut ws_state, _rx, app_state) = make_state(dir.path());
         let result = handle(WebSocketMessage::AcpListSessions, &mut ws_state, app_state).await;
         assert!(result.is_ok());
     }

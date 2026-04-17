@@ -3,6 +3,7 @@ package com.agentshell.data.local
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.agentshell.data.model.FavoriteSession
 import kotlinx.coroutines.flow.Flow
@@ -30,4 +31,12 @@ interface FavoriteSessionDao {
 
     @Query("DELETE FROM favorite_sessions")
     suspend fun deleteAll()
+
+    @Transaction
+    suspend fun replaceAll(favorites: List<FavoriteSession>) {
+        deleteAll()
+        if (favorites.isNotEmpty()) {
+            insertAll(favorites)
+        }
+    }
 }

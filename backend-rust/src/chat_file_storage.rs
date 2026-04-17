@@ -206,7 +206,6 @@ fn sanitize_filename(filename: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     use tempfile::TempDir;
 
     fn make_storage() -> (ChatFileStorage, TempDir) {

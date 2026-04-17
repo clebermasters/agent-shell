@@ -79,11 +79,9 @@ pub enum CodexSessionUpdate {
 enum PendingPermissionRequest {
     CommandExecution {
         jsonrpc_request_id: sj::Value,
-        command: Option<String>,
     },
     FileChange {
         jsonrpc_request_id: sj::Value,
-        paths: Vec<String>,
     },
     Permissions {
         jsonrpc_request_id: sj::Value,
@@ -878,7 +876,6 @@ async fn handle_server_request(
                 let external_request_id = next_permission_request_id(permission_request_seq).await;
                 let pending = PendingPermissionRequest::CommandExecution {
                     jsonrpc_request_id: request_id.clone(),
-                    command: params.command,
                 };
 
                 Some((
@@ -909,7 +906,6 @@ async fn handle_server_request(
                 let external_request_id = next_permission_request_id(permission_request_seq).await;
                 let pending = PendingPermissionRequest::FileChange {
                     jsonrpc_request_id: request_id.clone(),
-                    paths: params.grant_root.into_iter().collect(),
                 };
 
                 Some((
@@ -1527,15 +1523,18 @@ struct ReadTurn {
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ThreadItem {
     UserMessage {
-        id: String,
+        #[serde(rename = "id")]
+        _id: String,
         content: Vec<UserInput>,
     },
     AgentMessage {
-        id: String,
+        #[serde(rename = "id")]
+        _id: String,
         text: String,
     },
     Reasoning {
-        id: String,
+        #[serde(rename = "id")]
+        _id: String,
         #[serde(default)]
         summary: Vec<String>,
         #[serde(default)]
@@ -1580,13 +1579,15 @@ enum ThreadItem {
         path: String,
     },
     ImageGeneration {
+        #[serde(rename = "id")]
         id: String,
         result: String,
         #[serde(rename = "revisedPrompt")]
-        revised_prompt: Option<String>,
+        _revised_prompt: Option<String>,
         #[serde(rename = "savedPath")]
         saved_path: Option<String>,
-        status: String,
+        #[serde(rename = "status")]
+        _status: String,
     },
     #[serde(other)]
     Other,

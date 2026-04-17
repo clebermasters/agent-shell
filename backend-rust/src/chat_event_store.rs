@@ -31,11 +31,13 @@ impl ChatEventStore {
     }
 
     fn init(&self) -> Result<()> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let conn = self.open_connection()?;
         conn.execute_batch(
             r#"
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA temp_store = MEMORY;
+
             CREATE TABLE IF NOT EXISTS chat_events (
                 event_id TEXT PRIMARY KEY,
                 session_name TEXT NOT NULL,
@@ -56,6 +58,13 @@ impl ChatEventStore {
         Ok(())
     }
 
+    fn open_connection(&self) -> Result<Connection> {
+        let conn = Connection::open(&self.db_path)
+            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        Ok(conn)
+    }
+
     pub fn append_message(
         &self,
         session_name: &str,
@@ -63,9 +72,7 @@ impl ChatEventStore {
         source: &str,
         message: &ChatMessage,
     ) -> Result<String> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let conn = self.open_connection()?;
 
         let event_id = Uuid::new_v4().to_string();
         let timestamp_millis = message
@@ -107,12 +114,11 @@ impl ChatEventStore {
     ) -> Result<()> {
         use crate::chat_log::ContentBlock;
 
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let mut conn = self.open_connection()?;
+        let tx = conn.transaction()?;
 
         // Fetch the last row for this session
-        let last: Option<(String, String)> = conn
+        let last: Option<(String, String)> = tx
             .query_row(
                 r#"
                 SELECT event_id, message_json FROM chat_events
@@ -136,10 +142,11 @@ impl ChatEventStore {
                         let merged = format!("{}{}", existing, text);
                         msg.blocks[0] = ContentBlock::Text { text: merged };
                         let updated_json = serde_json::to_string(&msg)?;
-                        conn.execute(
+                        tx.execute(
                             "UPDATE chat_events SET message_json = ?1 WHERE event_id = ?2",
                             params![updated_json, event_id],
                         )?;
+                        tx.commit()?;
                         return Ok(());
                     }
                 }
@@ -154,7 +161,28 @@ impl ChatEventStore {
                 text: text.to_string(),
             }],
         };
-        self.append_message(session_name, window_index, source, &message)?;
+        let timestamp_millis = message
+            .timestamp
+            .as_ref()
+            .map(|ts| ts.timestamp_millis())
+            .unwrap_or_else(|| Utc::now().timestamp_millis());
+        let message_json = serde_json::to_string(&message)?;
+        tx.execute(
+            r#"
+            INSERT INTO chat_events (
+                event_id, session_name, window_index, source, timestamp_millis, message_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            params![
+                Uuid::new_v4().to_string(),
+                session_name,
+                i64::from(window_index),
+                source,
+                timestamp_millis,
+                message_json
+            ],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -163,9 +191,7 @@ impl ChatEventStore {
         session_name: &str,
         window_index: u32,
     ) -> Result<Vec<StoredChatEvent>> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let conn = self.open_connection()?;
 
         let mut stmt = conn.prepare(
             r#"
@@ -236,9 +262,7 @@ impl ChatEventStore {
         offset: usize,
         limit: usize,
     ) -> Result<(Vec<ChatMessage>, bool)> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let conn = self.open_connection()?;
 
         let total: i64 = conn.query_row(
             r#"
@@ -294,9 +318,7 @@ impl ChatEventStore {
     }
 
     pub fn clear_messages(&self, session_name: &str, window_index: u32) -> Result<()> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let conn = self.open_connection()?;
 
         conn.execute(
             r#"
@@ -310,8 +332,7 @@ impl ChatEventStore {
     }
 
     pub fn mark_acp_session_deleted(&self, session_id: &str) -> Result<()> {
-        let conn = Connection::open(&self.db_path)?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let conn = self.open_connection()?;
         conn.execute(
             "INSERT OR IGNORE INTO acp_deleted_sessions (session_id) VALUES (?1)",
             params![session_id],
@@ -320,8 +341,7 @@ impl ChatEventStore {
     }
 
     pub fn get_deleted_acp_session_ids(&self) -> Result<Vec<String>> {
-        let conn = Connection::open(&self.db_path)?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let conn = self.open_connection()?;
         let mut stmt = conn.prepare("SELECT session_id FROM acp_deleted_sessions")?;
         let ids = stmt
             .query_map([], |row| row.get(0))?
@@ -337,9 +357,7 @@ impl ChatEventStore {
         session_key: &str,
         cleared_at: Option<i64>,
     ) -> Result<Vec<StoredChatEvent>> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open chat event db: {}", self.db_path.display()))?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let conn = self.open_connection()?;
 
         let min_time = cleared_at.unwrap_or(0);
 

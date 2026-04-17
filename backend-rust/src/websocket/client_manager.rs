@@ -42,10 +42,24 @@ impl ClientManager {
         // Serialize once for all clients
         if let Ok(serialized) = serde_json::to_string(&message) {
             let msg = BroadcastMessage::Text(Arc::new(serialized));
-            let clients = self.clients.read().await;
-            for (client_id, tx) in clients.iter() {
+            let clients = {
+                let clients = self.clients.read().await;
+                clients
+                    .iter()
+                    .map(|(client_id, tx)| (client_id.clone(), tx.clone()))
+                    .collect::<Vec<_>>()
+            };
+            let mut dead_clients = Vec::new();
+            for (client_id, tx) in clients {
                 if let Err(e) = tx.send(msg.clone()).await {
                     error!("Failed to send to client {}: {}", client_id, e);
+                    dead_clients.push(client_id);
+                }
+            }
+            if !dead_clients.is_empty() {
+                let mut clients = self.clients.write().await;
+                for client_id in dead_clients {
+                    clients.remove(&client_id);
                 }
             }
         }
@@ -53,10 +67,24 @@ impl ClientManager {
 
     pub async fn broadcast_binary(&self, data: bytes::Bytes) {
         let msg = BroadcastMessage::Binary(data);
-        let clients = self.clients.read().await;
-        for (client_id, tx) in clients.iter() {
+        let clients = {
+            let clients = self.clients.read().await;
+            clients
+                .iter()
+                .map(|(client_id, tx)| (client_id.clone(), tx.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut dead_clients = Vec::new();
+        for (client_id, tx) in clients {
             if let Err(e) = tx.send(msg.clone()).await {
                 error!("Failed to send binary to client {}: {}", client_id, e);
+                dead_clients.push(client_id);
+            }
+        }
+        if !dead_clients.is_empty() {
+            let mut clients = self.clients.write().await;
+            for client_id in dead_clients {
+                clients.remove(&client_id);
             }
         }
     }

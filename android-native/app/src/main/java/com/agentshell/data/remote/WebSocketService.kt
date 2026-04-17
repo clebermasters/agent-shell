@@ -21,7 +21,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.time.Instant
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -30,6 +29,11 @@ import javax.inject.Singleton
 class WebSocketService @Inject constructor(
     baseClient: OkHttpClient,
 ) {
+    private data class PendingMessage(
+        val type: String?,
+        val payload: String,
+    )
+
 
     // -------------------------------------------------------------------------
     // Coroutine scope – SupervisorJob so one child failure doesn't cancel others
@@ -51,6 +55,8 @@ class WebSocketService @Inject constructor(
     private var currentUrl: String? = null
     private var activeListenerId = 0L  // Monotonic ID to ignore stale listener callbacks
 
+    val currentWebSocketUrl: String? get() = currentUrl
+
     @Volatile
     private var _isConnected = false
     val isConnected: Boolean get() = _isConnected
@@ -62,7 +68,8 @@ class WebSocketService @Inject constructor(
     private var intentionalClose = false
 
     // Pending messages buffered while disconnected
-    private val pendingQueue = ConcurrentLinkedQueue<String>()
+    private val pendingQueue = ArrayDeque<PendingMessage>()
+    private val pendingQueueLock = Any()
 
     // Jobs for ping / pong-timeout / reconnect timers
     private var pingJob: Job? = null
@@ -180,7 +187,7 @@ class WebSocketService @Inject constructor(
         if (_isConnected && webSocket != null) {
             webSocket!!.send(json)
         } else {
-            pendingQueue.add(json)
+            enqueuePendingMessage(message["type"] as? String, json)
             // Only trigger reconnect if not already connecting/reconnecting
             if (!_isConnecting && (reconnectJob == null || reconnectJob!!.isCompleted)) {
                 scheduleReconnect()
@@ -235,7 +242,7 @@ class WebSocketService @Inject constructor(
         }
 
         _isConnecting = true
-        log("Attempting WebSocket connection to: ${sanitizeUrl(url)} reconnectAttempts=$reconnectAttempts pendingQueue=${pendingQueue.size}")
+        log("Attempting WebSocket connection to: ${sanitizeUrl(url)} reconnectAttempts=$reconnectAttempts pendingQueue=${pendingQueueSize()}")
 
         val listenerId = ++activeListenerId
         val request = Request.Builder().url(url).build()
@@ -251,7 +258,7 @@ class WebSocketService @Inject constructor(
             reconnectAttempts < 3 -> ConnectionStatus.RECONNECTING
             else -> ConnectionStatus.OFFLINE
         }
-        log("Scheduling reconnect #$reconnectAttempts in ${delayMs}ms pendingQueue=${pendingQueue.size} url=${sanitizeUrl(currentUrl ?: "")}")
+        log("Scheduling reconnect #$reconnectAttempts in ${delayMs}ms pendingQueue=${pendingQueueSize()} url=${sanitizeUrl(currentUrl ?: "")}")
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             delay(delayMs)
@@ -298,17 +305,32 @@ class WebSocketService @Inject constructor(
     }
 
     private fun flushPendingQueue() {
-        if (pendingQueue.isEmpty()) return
-        val ws = webSocket ?: return
-        val snapshot = mutableListOf<String>()
-        while (true) {
-            snapshot.add(pendingQueue.poll() ?: break)
+        val snapshot = synchronized(pendingQueueLock) {
+            if (pendingQueue.isEmpty()) return
+            val drained = pendingQueue.map(PendingMessage::payload)
+            pendingQueue.clear()
+            drained
         }
+        val ws = webSocket ?: return
         log("Flushing ${snapshot.size} queued message(s) after reconnect")
         for (json in snapshot) {
             ws.send(json)
         }
     }
+
+    private fun enqueuePendingMessage(type: String?, payload: String) {
+        synchronized(pendingQueueLock) {
+            if (type in COLLAPSIBLE_PENDING_TYPES) {
+                pendingQueue.removeAll { it.type == type }
+            }
+            pendingQueue.addLast(PendingMessage(type = type, payload = payload))
+            while (pendingQueue.size > MAX_PENDING_QUEUE_SIZE) {
+                pendingQueue.removeFirstOrNull()
+            }
+        }
+    }
+
+    private fun pendingQueueSize(): Int = synchronized(pendingQueueLock) { pendingQueue.size }
 
     // -------------------------------------------------------------------------
     // WebSocketListener implementation
@@ -321,7 +343,7 @@ class WebSocketService @Inject constructor(
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             if (isStale()) return
-            log("onOpen listenerId=$id url=${sanitizeUrl(currentUrl ?: "")} pendingQueue=${pendingQueue.size}")
+            log("onOpen listenerId=$id url=${sanitizeUrl(currentUrl ?: "")} pendingQueue=${pendingQueueSize()}")
             println("[CONN] Android→Backend CONNECTED to ${sanitizeUrl(currentUrl ?: "")}")
             _isConnecting = false
             _isConnected = true
@@ -441,3 +463,17 @@ class WebSocketService @Inject constructor(
         else                 -> value
     }
 }
+
+private const val MAX_PENDING_QUEUE_SIZE = 128
+private val COLLAPSIBLE_PENDING_TYPES = setOf(
+    "list-sessions",
+    "acp-list-sessions",
+    "get-favorites",
+    "get-tags",
+    "get-tag-assignments",
+    "list-cron-jobs",
+    "list-dotfiles",
+    "get-stats",
+    "get-claude-usage",
+    "get-codex-usage",
+)

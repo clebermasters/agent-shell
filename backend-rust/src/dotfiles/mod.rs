@@ -641,7 +641,6 @@ mod tests {
     async fn test_read_binary_file_valid() {
         let mgr = make_manager();
         // Try reading a known small file that's likely to exist
-        let home = dirs::home_dir().unwrap();
         // Try .bashrc first
         let result = mgr.read_binary_file(".bashrc").await;
         if let Ok((bytes, mime)) = result {

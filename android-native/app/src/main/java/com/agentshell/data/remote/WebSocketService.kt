@@ -78,6 +78,9 @@ class WebSocketService @Inject constructor(
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.CONNECTING)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
 
+    private val _keepAliveEnabled = MutableStateFlow(false)
+    val keepAliveEnabled: StateFlow<Boolean> = _keepAliveEnabled.asStateFlow()
+
     private val _logs = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 128)
     val logs: SharedFlow<String> = _logs.asSharedFlow()
 
@@ -106,17 +109,23 @@ class WebSocketService @Inject constructor(
             val separator = if (finalUrl.contains('?')) "&" else "?"
             finalUrl = "$finalUrl${separator}token=${android.net.Uri.encode(authToken)}"
         }
+        _keepAliveEnabled.value = true
         // Skip if already connected or connecting to the same URL
         if (finalUrl == currentUrl && (_isConnected || _isConnecting)) {
             log("Already connected/connecting to ${sanitizeUrl(finalUrl)}, skipping")
             return
         }
         // Disconnect from previous host if switching
-        if (currentUrl != null && currentUrl != finalUrl && _isConnected) {
-            log("Switching host — disconnecting from previous")
-            webSocket?.close(1000, "Switching host")
+        if (currentUrl != null && currentUrl != finalUrl) {
+            log("Switching host — resetting previous websocket")
+            intentionalClose = true
+            activeListenerId++
+            try {
+                webSocket?.cancel()
+            } catch (_: Exception) {}
             webSocket = null
             _isConnected = false
+            _isConnecting = false
             cancelTimers()
         }
         currentUrl = finalUrl
@@ -130,12 +139,14 @@ class WebSocketService @Inject constructor(
     fun disconnect() {
         log("Disconnecting...")
         intentionalClose = true
+        _keepAliveEnabled.value = false
         cancelTimers()
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         _isConnected = false
+        _isConnecting = false
         reconnectAttempts = 0
-        _connectionStatus.value = ConnectionStatus.CONNECTING
+        _connectionStatus.value = ConnectionStatus.OFFLINE
     }
 
     /**
@@ -146,13 +157,17 @@ class WebSocketService @Inject constructor(
         if (currentUrl == null) return
         log("Forcing immediate reconnect...")
         intentionalClose = false
+        _keepAliveEnabled.value = true
         cancelTimers()
+        activeListenerId++
         try {
             webSocket?.cancel()
         } catch (_: Exception) {}
         webSocket = null
         _isConnected = false
+        _isConnecting = false
         reconnectAttempts = 0
+        _connectionStatus.value = ConnectionStatus.RECONNECTING
         doConnect()
     }
 
@@ -179,11 +194,18 @@ class WebSocketService @Inject constructor(
      * Called when the app returns to foreground.
      */
     fun checkConnection() {
+        log("checkConnection status=${_connectionStatus.value} connected=$_isConnected connecting=$_isConnecting url=${sanitizeUrl(currentUrl ?: "")}")
         if (_isConnected) {
             send(mapOf("type" to "ping"))
         } else if (currentUrl != null) {
             forceReconnect()
         }
+    }
+
+    fun onNetworkAvailable() {
+        if (!_keepAliveEnabled.value || currentUrl == null) return
+        log("Network available — checking websocket health")
+        checkConnection()
     }
 
     /** Release all resources permanently. */
@@ -213,7 +235,7 @@ class WebSocketService @Inject constructor(
         }
 
         _isConnecting = true
-        log("Attempting WebSocket connection to: ${sanitizeUrl(url)}")
+        log("Attempting WebSocket connection to: ${sanitizeUrl(url)} reconnectAttempts=$reconnectAttempts pendingQueue=${pendingQueue.size}")
 
         val listenerId = ++activeListenerId
         val request = Request.Builder().url(url).build()
@@ -222,10 +244,14 @@ class WebSocketService @Inject constructor(
 
     private fun scheduleReconnect() {
         // Don't schedule if already connected (race with successful reconnect)
-        if (_isConnected) return
+        if (_isConnected || !_keepAliveEnabled.value) return
         // Exponential backoff: 2s, 4s, 8s, 16s, cap at 30s — never give up
         val delayMs = (2_000L * (1L shl reconnectAttempts.coerceAtMost(4))).coerceAtMost(30_000L)
-        log("Scheduling reconnect #$reconnectAttempts in ${delayMs}ms...")
+        _connectionStatus.value = when {
+            reconnectAttempts < 3 -> ConnectionStatus.RECONNECTING
+            else -> ConnectionStatus.OFFLINE
+        }
+        log("Scheduling reconnect #$reconnectAttempts in ${delayMs}ms pendingQueue=${pendingQueue.size} url=${sanitizeUrl(currentUrl ?: "")}")
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             delay(delayMs)
@@ -237,6 +263,20 @@ class WebSocketService @Inject constructor(
         pingJob?.cancel();         pingJob = null
         pongTimeoutJob?.cancel();  pongTimeoutJob = null
         reconnectJob?.cancel();    reconnectJob = null
+    }
+
+    private fun cancelHeartbeat() {
+        pingJob?.cancel();        pingJob = null
+        pongTimeoutJob?.cancel(); pongTimeoutJob = null
+    }
+
+    private fun handleUnexpectedDisconnect(reason: String) {
+        _isConnecting = false
+        _isConnected = false
+        cancelHeartbeat()
+        reconnectAttempts++
+        log("$reason reconnectAttempts=$reconnectAttempts")
+        scheduleReconnect()
     }
 
     private fun startPingTimer() {
@@ -281,6 +321,7 @@ class WebSocketService @Inject constructor(
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             if (isStale()) return
+            log("onOpen listenerId=$id url=${sanitizeUrl(currentUrl ?: "")} pendingQueue=${pendingQueue.size}")
             println("[CONN] Android→Backend CONNECTED to ${sanitizeUrl(currentUrl ?: "")}")
             _isConnecting = false
             _isConnected = true
@@ -326,20 +367,16 @@ class WebSocketService @Inject constructor(
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             if (isStale() || intentionalClose) return
+            log("onFailure listenerId=$id error=${t.message} reconnectAttempts=${reconnectAttempts + 1} url=${sanitizeUrl(currentUrl ?: "")}")
             println("[CONN] Android→Backend WebSocket ERROR: $t (url: ${sanitizeUrl(currentUrl ?: "")})")
-            _isConnecting = false
-            _isConnected = false
-            reconnectAttempts++
-            scheduleReconnect()
+            handleUnexpectedDisconnect("WebSocket failure")
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             if (isStale() || intentionalClose) return
+            log("onClosed listenerId=$id code=$code reason=$reason reconnectAttempts=${reconnectAttempts + 1} url=${sanitizeUrl(currentUrl ?: "")}")
             println("[CONN] Android→Backend WebSocket CLOSED (url: ${sanitizeUrl(currentUrl ?: "")})")
-            _isConnecting = false
-            _isConnected = false
-            reconnectAttempts++
-            scheduleReconnect()
+            handleUnexpectedDisconnect("WebSocket closed code=$code reason=$reason")
         }
     }
 

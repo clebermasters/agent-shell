@@ -1,6 +1,7 @@
 package com.agentshell.feature.chat
 
 import android.app.Application
+import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.SavedStateHandle
@@ -151,6 +152,8 @@ class ChatViewModel @Inject constructor(
     private var messageCollectionJob: Job? = null
     private var pendingAcpChunk: PendingAcpChunk? = null
     private var acpChunkFlushJob: Job? = null
+    private var hasSeenConnectedState = false
+    private var shouldResubscribeOnReconnect = false
 
     private fun newMessageList(messages: List<ChatMessage> = emptyList()): SnapshotStateList<ChatMessage> =
         mutableStateListOf<ChatMessage>().apply { addAll(messages) }
@@ -167,6 +170,10 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun rawAcpSessionId(sessionName: String): String = sessionName.removePrefix("acp_")
+
+    private fun logDebug(message: String) {
+        Log.d("ChatViewModel", message)
+    }
 
     private fun directBackendForSession(sessionId: String): String =
         if (rawAcpSessionId(sessionId).startsWith("codex:")) "codex" else "opencode"
@@ -228,6 +235,64 @@ class ChatViewModel @Inject constructor(
         return "$kind:$normalized"
     }
 
+    private fun observeConnectionRecovery() {
+        viewModelScope.launch {
+            webSocketService.connectionStatus.collect { status ->
+                    when (status) {
+                        com.agentshell.data.model.ConnectionStatus.CONNECTED -> {
+                            if (!hasSeenConnectedState) {
+                                hasSeenConnectedState = true
+                                logDebug("Chat connection established for session=${_uiState.value.sessionName}")
+                            } else if (shouldResubscribeOnReconnect) {
+                                val state = _uiState.value
+                                logDebug(
+                                    "Chat reconnect detected; resubscribing session=${state.sessionName} window=${state.windowIndex} isAcp=${state.isAcp} messageCount=${state.messages.size}"
+                                )
+                                resubscribeActiveChat("reconnected")
+                            }
+                        }
+                        com.agentshell.data.model.ConnectionStatus.RECONNECTING,
+                        com.agentshell.data.model.ConnectionStatus.OFFLINE -> {
+                            if (hasSeenConnectedState) {
+                                shouldResubscribeOnReconnect = true
+                                logDebug("Chat connection lost; will resubscribe when connected status=${status.name} session=${_uiState.value.sessionName}")
+                            }
+                        }
+                        com.agentshell.data.model.ConnectionStatus.CONNECTING -> Unit
+                    }
+                }
+        }
+    }
+
+    private fun resubscribeActiveChat(reason: String) {
+        val state = _uiState.value
+        if (state.sessionName.isBlank()) return
+
+        clearPendingAcpChunk()
+        _uiState.update { it.copy(error = null) }
+
+        if (state.isAcp) {
+            val rawSessionId = rawAcpSessionId(state.sessionName)
+            val backend = directBackendForSession(rawSessionId)
+            logDebug(
+                "Resubscribing ACP chat reason=$reason rawSessionId=$rawSessionId backend=$backend cwd=${state.sessionCwd.isNotBlank()}"
+            )
+            webSocketService.selectBackend(backend)
+            if (state.sessionCwd.isNotBlank()) {
+                webSocketService.acpResumeSession(rawSessionId, state.sessionCwd)
+            }
+            webSocketService.watchAcpChatLog(rawSessionId, limit = 30)
+        } else {
+            logDebug(
+                "Resubscribing TMUX chat reason=$reason session=${state.sessionName} window=${state.windowIndex}"
+            )
+            webSocketService.watchChatLog(state.sessionName, state.windowIndex)
+            webSocketService.getSessionCwd(state.sessionName)
+        }
+
+        shouldResubscribeOnReconnect = false
+    }
+
     // -------------------------------------------------------------------------
     // Initialisation / lifecycle
     // -------------------------------------------------------------------------
@@ -254,6 +319,7 @@ class ChatViewModel @Inject constructor(
                 _uiState.update { it.copy(recordingDuration = seconds) }
             }
         }
+        observeConnectionRecovery()
         collectMessages()
         viewModelScope.launch {
             webSocketService.messages.collect { message ->
@@ -277,6 +343,7 @@ class ChatViewModel @Inject constructor(
     /** Begin watching a TMUX chat log. */
     fun watchChatLog(sessionName: String, windowIndex: Int) {
         clearPendingAcpChunk()
+        shouldResubscribeOnReconnect = false
         _uiState.update {
             it.copy(
                 sessionName = sessionName,
@@ -288,6 +355,8 @@ class ChatViewModel @Inject constructor(
                 sessionCwd = "",
             )
         }
+        logDebug("Initial TMUX chat watch session=$sessionName window=$windowIndex")
+        hasSeenConnectedState = false
         restoreDraft(draftKey(sessionName, windowIndex))
         webSocketService.watchChatLog(sessionName, windowIndex)
         webSocketService.getSessionCwd(sessionName)
@@ -296,6 +365,7 @@ class ChatViewModel @Inject constructor(
     /** Begin watching an ACP chat session. */
     fun startAcpChat(sessionName: String, cwd: String) {
         clearPendingAcpChunk()
+        shouldResubscribeOnReconnect = false
         val sessionKey = "acp_$sessionName"
         _uiState.update {
             it.copy(
@@ -309,6 +379,8 @@ class ChatViewModel @Inject constructor(
                 sessionCwd = cwd,
             )
         }
+        logDebug("Initial ACP chat watch session=$sessionName backend=${directBackendForSession(sessionName)} cwd=${cwd.isNotBlank()}")
+        hasSeenConnectedState = false
         webSocketService.selectBackend(directBackendForSession(sessionName))
         if (cwd.isNotBlank()) {
             webSocketService.acpResumeSession(sessionName, cwd)
@@ -318,7 +390,28 @@ class ChatViewModel @Inject constructor(
 
     /** Stop watching the current chat log. */
     fun unwatchChatLog() {
+        val state = _uiState.value
+        logDebug("Stopping chat watch session=${state.sessionName} window=${state.windowIndex} isAcp=${state.isAcp}")
+        shouldResubscribeOnReconnect = false
         webSocketService.unwatchChatLog()
+    }
+
+    fun refreshActiveChat(reason: String = "manual-refresh") {
+        val state = _uiState.value
+        if (state.sessionName.isBlank()) return
+
+        shouldResubscribeOnReconnect = true
+        if (webSocketService.isConnected) {
+            logDebug(
+                "Refreshing active chat immediately reason=$reason session=${state.sessionName} window=${state.windowIndex} isAcp=${state.isAcp}"
+            )
+            resubscribeActiveChat(reason)
+        } else {
+            logDebug(
+                "Refresh queued until reconnect reason=$reason session=${state.sessionName} window=${state.windowIndex} isAcp=${state.isAcp}"
+            )
+            webSocketService.checkConnection()
+        }
     }
 
     /** Request the session CWD and invoke [onResult] with the path once received. */
@@ -594,6 +687,7 @@ class ChatViewModel @Inject constructor(
         val ctxUsage = (message["contextWindowUsage"] as? Number)?.toDouble()
         val model = message["modelName"] as? String
 
+        logDebug("Received chat history session=$sessionName window=$windowIndex count=${parsed.size} total=$totalCount hasMore=$hasMore")
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -643,6 +737,8 @@ class ChatViewModel @Inject constructor(
 
         val state = _uiState.value
         if (sessionName != state.sessionName || windowIndex != state.windowIndex) return
+
+        logDebug("Received chat event session=$sessionName window=$windowIndex source=${message["source"]}")
 
         @Suppress("UNCHECKED_CAST")
         val msgData = message["message"] as? Map<String, Any?> ?: return
@@ -733,6 +829,7 @@ class ChatViewModel @Inject constructor(
 
         val content = message["content"] as? String ?: ""
         val isThinking = message["isThinking"] as? Boolean ?: false
+        logDebug("Received ACP chunk sessionId=$sessionId currentSession=${state.sessionName} isThinking=$isThinking contentLength=${content.length}")
         if (content.isEmpty()) return
 
         enqueueAcpChunk(sessionId, content, isThinking)

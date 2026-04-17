@@ -88,7 +88,7 @@ class ConnectionService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("AgentShell")
-            .setContentText("Connected to backend")
+            .setContentText("Keeping the backend connection alive")
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -98,13 +98,14 @@ class ConnectionService : Service() {
 
     @Suppress("DEPRECATION")
     private fun acquireWakeLock() {
-        if (wakeLock == null) {
+        if (wakeLock == null || wakeLock?.isHeld != true) {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "AgentShell::ConnectionWakeLock",
             ).apply {
-                acquire(10 * 60 * 1000L) // 10 minutes max, renewed on each reconnect
+                setReferenceCounted(false)
+                acquire()
             }
         }
     }

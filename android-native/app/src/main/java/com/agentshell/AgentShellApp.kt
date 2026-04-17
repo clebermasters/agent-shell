@@ -2,12 +2,13 @@ package com.agentshell
 
 import android.app.Activity
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Bundle
 import com.agentshell.core.service.ConnectionService
-import com.agentshell.data.services.AudioPlayerManager
 import com.agentshell.core.util.NotificationHelper
-import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.remote.WebSocketService
+import com.agentshell.data.services.AudioPlayerManager
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.HiltAndroidApp
@@ -16,9 +17,7 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @HiltAndroidApp
@@ -45,6 +44,7 @@ class AgentShellApp : Application() {
         observeNotificationEvents()
         manageForegroundService()
         registerForegroundReconnect()
+        registerNetworkReconnect()
     }
 
     /**
@@ -67,16 +67,14 @@ class AgentShellApp : Application() {
     }
 
     /**
-     * Start/stop the foreground service based on WebSocket connection state.
-     * The service keeps the process alive so the WebSocket survives background.
+     * Keep the foreground service alive for the full lifetime of the desired
+     * websocket connection, including reconnect attempts while offline.
      */
     private fun manageForegroundService() {
         appScope.launch {
-            wsService.connectionStatus
-                .map { it == ConnectionStatus.CONNECTED }
-                .distinctUntilChanged()
-                .collect { connected ->
-                    if (connected) {
+            wsService.keepAliveEnabled
+                .collect { keepAlive ->
+                    if (keepAlive) {
                         ConnectionService.start(this@AgentShellApp)
                     } else {
                         ConnectionService.stop(this@AgentShellApp)
@@ -93,6 +91,7 @@ class AgentShellApp : Application() {
     private fun registerForegroundReconnect() {
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityResumed(activity: Activity) {
+                android.util.Log.d("AgentShellApp", "Foreground resume: ${activity::class.java.simpleName} -> checkConnection()")
                 wsService.checkConnection()
             }
             override fun onActivityCreated(a: Activity, b: Bundle?) {}
@@ -102,5 +101,18 @@ class AgentShellApp : Application() {
             override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
             override fun onActivityDestroyed(a: Activity) {}
         })
+    }
+
+    private fun registerNetworkReconnect() {
+        val connectivityManager = getSystemService(ConnectivityManager::class.java) ?: return
+        connectivityManager.registerDefaultNetworkCallback(
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    appScope.launch {
+                        wsService.onNetworkAvailable()
+                    }
+                }
+            }
+        )
     }
 }

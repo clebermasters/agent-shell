@@ -56,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -89,6 +90,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.agentshell.data.model.AiUsage
 import com.agentshell.feature.common.SwipeableSessionContainer
 import java.time.Instant
@@ -121,10 +125,12 @@ fun ChatScreen(
     var showVoiceButton by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     // Swipe navigation state
     val chatKey = if (isAcp) "acp:$sessionName" else "tmux:$sessionName\u0000$windowIndex"
     var recentChatSessions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var hasSkippedInitialResume by remember(chatKey) { mutableStateOf(false) }
 
     LaunchedEffect(chatKey) {
         if (!isSwipeNavigation) {
@@ -194,6 +200,22 @@ fun ChatScreen(
             viewModel.startAcpChat(sessionName, cwd)
         } else {
             viewModel.watchChatLog(sessionName, windowIndex)
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, chatKey) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (!hasSkippedInitialResume) {
+                    hasSkippedInitialResume = true
+                } else {
+                    viewModel.refreshActiveChat("screen-resume")
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 

@@ -1,5 +1,10 @@
 package com.agentshell.feature.settings
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -9,12 +14,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.agentshell.core.config.AppConfig
 import com.agentshell.data.local.PreferencesDataStore
@@ -293,6 +302,8 @@ fun SettingsScreen(
                 Text("Host Selection")
             }
 
+            BatteryOptimizationCard()
+
             // ── About ─────────────────────────────────────────────────────────
             SectionHeader("About")
 
@@ -323,4 +334,103 @@ private fun SectionHeader(title: String) {
         color = MaterialTheme.colorScheme.primary,
         fontSize = 13.sp,
     )
+}
+
+@Composable
+private fun BatteryOptimizationCard() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var ignoringBatteryOptimizations by remember {
+        mutableStateOf(isIgnoringBatteryOptimizations(context))
+    }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ignoringBatteryOptimizations = isIgnoringBatteryOptimizations(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    Card {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Background Reliability", style = MaterialTheme.typography.titleSmall)
+            Text(
+                if (ignoringBatteryOptimizations) {
+                    "Battery restrictions are disabled for AgentShell. Background reconnects are less likely to be paused when the screen is off."
+                } else {
+                    "Battery restrictions can pause reconnects and delay chat refresh after the screen turns off. Allow unrestricted battery if you want the chat to stay more reliable in the background."
+                },
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            AssistChip(
+                onClick = {},
+                enabled = false,
+                label = {
+                    Text(
+                        if (ignoringBatteryOptimizations) "Status: unrestricted"
+                        else "Status: battery optimized"
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        if (ignoringBatteryOptimizations) Icons.Default.CheckCircle else Icons.Default.BatterySaver,
+                        contentDescription = null,
+                    )
+                },
+            )
+
+            if (!ignoringBatteryOptimizations) {
+                Button(
+                    onClick = {
+                        launchSettingsIntent(
+                            context,
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.BatteryChargingFull, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Allow Unrestricted Battery")
+                }
+            }
+
+            OutlinedButton(
+                onClick = {
+                    launchSettingsIntent(
+                        context,
+                        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Open Battery Settings")
+            }
+        }
+    }
+}
+
+private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+    return powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
+}
+
+private fun launchSettingsIntent(context: Context, intent: Intent) {
+    val launchIntent = intent.apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching {
+        context.startActivity(launchIntent)
+    }
 }

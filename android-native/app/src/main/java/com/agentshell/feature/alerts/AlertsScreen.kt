@@ -30,11 +30,25 @@ import java.time.format.DateTimeFormatter
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlertsScreen(
+    initialNotificationId: String? = null,
     viewModel: AlertsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
     var detailNotification by remember { mutableStateOf<AppNotification?>(null) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
+    var pendingOpenNotificationId by remember(initialNotificationId) {
+        mutableStateOf(initialNotificationId)
+    }
+
+    LaunchedEffect(state.notifications, pendingOpenNotificationId) {
+        val targetId = pendingOpenNotificationId ?: return@LaunchedEffect
+        val notification = state.notifications.firstOrNull { it.id == targetId } ?: return@LaunchedEffect
+        if (!notification.read) {
+            viewModel.markAsRead(notification.id)
+        }
+        detailNotification = notification.copy(read = true)
+        pendingOpenNotificationId = null
+    }
 
     detailNotification?.let { notification ->
         AlertDetailDialog(

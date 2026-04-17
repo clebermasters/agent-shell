@@ -58,6 +58,54 @@ pub struct ProcessInfo {
     pub memory_bytes: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ContainerRuntime {
+    Docker,
+    Podman,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContainerAction {
+    Start,
+    Stop,
+    Restart,
+    Kill,
+    Pause,
+    Resume,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerInfo {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub state: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_usage: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_usage_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_limit_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_percent: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pids: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerRuntimeInfo {
+    pub runtime: ContainerRuntime,
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub containers: Vec<ContainerInfo>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemStats {
@@ -70,6 +118,8 @@ pub struct SystemStats {
     pub arch: String,
     pub top_processes_by_cpu: Vec<ProcessInfo>,
     pub top_processes_by_memory: Vec<ProcessInfo>,
+    pub timestamp: i64,
+    pub container_runtimes: Vec<ContainerRuntimeInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -257,7 +307,16 @@ pub enum WebSocketMessage {
         new_name: String,
     },
     // System stats
-    GetStats,
+    GetStats {
+        #[serde(rename = "includeContainers", default)]
+        include_containers: bool,
+    },
+    ContainerAction {
+        runtime: ContainerRuntime,
+        #[serde(rename = "containerId")]
+        container_id: String,
+        action: ContainerAction,
+    },
     GetClaudeUsage,
     GetCodexUsage,
     // Cron management
@@ -822,6 +881,15 @@ pub enum ServerMessage {
     // System stats response
     Stats {
         stats: SystemStats,
+    },
+    ContainerActionResult {
+        runtime: ContainerRuntime,
+        #[serde(rename = "containerId")]
+        container_id: String,
+        action: ContainerAction,
+        success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     // Claude usage response
     ClaudeUsage {
@@ -1585,7 +1653,43 @@ mod tests {
     fn test_get_stats_deser() {
         let json = r#"{"type":"get-stats"}"#;
         let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
-        assert!(matches!(msg, WebSocketMessage::GetStats));
+        assert!(matches!(
+            msg,
+            WebSocketMessage::GetStats {
+                include_containers: false
+            }
+        ));
+    }
+
+    #[test]
+    fn test_get_stats_with_containers_deser() {
+        let json = r#"{"type":"get-stats","includeContainers":true}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            msg,
+            WebSocketMessage::GetStats {
+                include_containers: true
+            }
+        ));
+    }
+
+    #[test]
+    fn test_container_action_deser() {
+        let json =
+            r#"{"type":"container-action","runtime":"docker","containerId":"abc123","action":"pause"}"#;
+        let msg: WebSocketMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            WebSocketMessage::ContainerAction {
+                runtime,
+                container_id,
+                action,
+            } => {
+                assert_eq!(runtime, ContainerRuntime::Docker);
+                assert_eq!(container_id, "abc123");
+                assert_eq!(action, ContainerAction::Pause);
+            }
+            _ => panic!("Expected ContainerAction"),
+        }
     }
 
     #[test]

@@ -99,6 +99,16 @@ import com.agentshell.data.model.SessionTag
 import com.agentshell.data.model.TmuxSession
 import com.agentshell.core.util.timeAgo
 
+private data class FavoriteDraft(
+    val title: String,
+    val initialName: String,
+    val initialPath: String,
+    val initialStartupCommand: String? = null,
+    val initialStartupArgs: String? = null,
+    val initialTagIds: Set<String> = emptySet(),
+    val isPathLoading: Boolean = false,
+)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionsScreen(
@@ -116,7 +126,7 @@ fun SessionsScreen(
 
     var selectedTabIndex by rememberSaveable { mutableStateOf(0) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
-    var showAddFavoriteDialog by rememberSaveable { mutableStateOf(false) }
+    var favoriteDraftToAdd by remember { mutableStateOf<FavoriteDraft?>(null) }
     var favoriteToEdit by remember { mutableStateOf<FavoriteSession?>(null) }
     var showTagsSheet by rememberSaveable { mutableStateOf(false) }
     var tagAssignSession by remember { mutableStateOf<String?>(null) }
@@ -222,7 +232,13 @@ fun SessionsScreen(
                     }
                     IconButton(
                         onClick = {
-                            if (selectedTabIndex == 2) showAddFavoriteDialog = true
+                            if (selectedTabIndex == 2) {
+                                favoriteDraftToAdd = FavoriteDraft(
+                                    title = "Add Favorite",
+                                    initialName = "",
+                                    initialPath = "",
+                                )
+                            }
                             else showCreateDialog = true
                         },
                         modifier = Modifier.size(36.dp),
@@ -236,7 +252,13 @@ fun SessionsScreen(
             if (!uiState.isSelectionMode) {
                 FloatingActionButton(
                     onClick = {
-                        if (selectedTabIndex == 2) showAddFavoriteDialog = true
+                        if (selectedTabIndex == 2) {
+                            favoriteDraftToAdd = FavoriteDraft(
+                                title = "Add Favorite",
+                                initialName = "",
+                                initialPath = "",
+                            )
+                        }
                         else showCreateDialog = true
                     },
                 ) {
@@ -312,6 +334,33 @@ fun SessionsScreen(
                         onGit = { session -> onNavigateToGit(session.name, "", false) },
                         sessionTagMap = uiState.sessionTagMap,
                         onManageSessionTags = { sessionName -> tagAssignSession = sessionName },
+                        onSaveAsFavorite = { session ->
+                            favoriteDraftToAdd = FavoriteDraft(
+                                title = "Save to Favorites",
+                                initialName = session.name,
+                                initialPath = viewModel.getCachedSessionPath(session.name).orEmpty(),
+                                initialTagIds = uiState.sessionTagMap[session.name]
+                                    ?.map { it.id }
+                                    ?.toSet()
+                                    ?: emptySet(),
+                                isPathLoading = true,
+                            )
+                            scope.launch {
+                                val path = viewModel.resolveTmuxSessionPath(session.name)
+                                if (path.isNullOrBlank()) {
+                                    favoriteDraftToAdd = favoriteDraftToAdd?.copy(isPathLoading = false)
+                                    snackbarHostState.showSnackbar(
+                                        "Could not determine the path for ${session.name}",
+                                    )
+                                    return@launch
+                                }
+
+                                favoriteDraftToAdd = favoriteDraftToAdd?.copy(
+                                    initialPath = path,
+                                    isPathLoading = false,
+                                )
+                            }
+                        },
                     )
                     1 -> AcpSessionList(
                         sessions = uiState.acpSessions,
@@ -325,6 +374,15 @@ fun SessionsScreen(
                         onLongPress = { session -> viewModel.enterSelectionMode(session.sessionId) },
                         onDelete = { session -> viewModel.deleteAcpSession(session.sessionId) },
                         onGit = { session -> onNavigateToGit(session.sessionId, session.cwd, true) },
+                        onSaveAsFavorite = { session ->
+                            favoriteDraftToAdd = FavoriteDraft(
+                                title = "Save to Favorites",
+                                initialName = session.title.ifBlank {
+                                    session.cwd.substringAfterLast('/').ifBlank { session.sessionId }
+                                },
+                                initialPath = session.cwd,
+                            )
+                        },
                     )
                     2 -> FavoriteSessionsList(
                         favorites = uiState.favorites,
@@ -356,20 +414,21 @@ fun SessionsScreen(
         )
     }
 
-    if (showAddFavoriteDialog) {
+    favoriteDraftToAdd?.let { draft ->
         FavoriteDialog(
-            title = "Add Favorite",
-            initialName = "",
-            initialPath = "",
-            initialStartupCommand = null,
-            initialStartupArgs = null,
+            title = draft.title,
+            initialName = draft.initialName,
+            initialPath = draft.initialPath,
+            initialStartupCommand = draft.initialStartupCommand,
+            initialStartupArgs = draft.initialStartupArgs,
             availableTags = uiState.tags,
-            initialTagIds = emptySet(),
+            initialTagIds = draft.initialTagIds,
+            isPathLoading = draft.isPathLoading,
             onConfirm = { name, path, startupCommand, startupArgs, tagIds ->
                 viewModel.addFavorite(name, path, startupCommand, startupArgs, tagIds)
-                showAddFavoriteDialog = false
+                favoriteDraftToAdd = null
             },
-            onDismiss = { showAddFavoriteDialog = false },
+            onDismiss = { favoriteDraftToAdd = null },
         )
     }
 
@@ -601,12 +660,19 @@ private fun FavoriteDialog(
     initialStartupArgs: String? = null,
     availableTags: List<SessionTag> = emptyList(),
     initialTagIds: Set<String> = emptySet(),
+    isPathLoading: Boolean = false,
     onConfirm: (name: String, path: String, startupCommand: String?, startupArgs: String?, tagIds: List<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by rememberSaveable { mutableStateOf(initialName) }
     var path by rememberSaveable { mutableStateOf(initialPath) }
     var selectedTagIds by remember { mutableStateOf(initialTagIds) }
+
+    LaunchedEffect(initialPath) {
+        if (initialPath.isNotBlank() && path.isBlank()) {
+            path = initialPath
+        }
+    }
 
     val presets = listOf("None", "claude", "codex", "opencode", "Custom")
     var selectedPreset by rememberSaveable {
@@ -657,6 +723,13 @@ private fun FavoriteDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (isPathLoading && path.isBlank()) {
+                    Text(
+                        "Resolving current session path...",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
                     "Startup Command (optional)",
                     fontSize = 12.sp,
@@ -760,6 +833,7 @@ private fun TmuxSessionList(
     onGit: (TmuxSession) -> Unit,
     sessionTagMap: Map<String, List<SessionTag>> = emptyMap(),
     onManageSessionTags: (sessionName: String) -> Unit = {},
+    onSaveAsFavorite: (TmuxSession) -> Unit = {},
 ) {
     if (isLoading && sessions.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -787,6 +861,7 @@ private fun TmuxSessionList(
                 onKill = { onKill(session) },
                 onGit = { onGit(session) },
                 onManageTags = { onManageSessionTags(session.name) },
+                onSaveAsFavorite = { onSaveAsFavorite(session) },
             )
         }
     }
@@ -802,6 +877,7 @@ private fun TmuxSessionCard(
     onKill: () -> Unit,
     onGit: () -> Unit,
     onManageTags: () -> Unit = {},
+    onSaveAsFavorite: () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showKillDialog by remember { mutableStateOf(false) }
@@ -907,6 +983,11 @@ private fun TmuxSessionCard(
                         onClick = { showMenu = false; onGit() },
                     )
                     DropdownMenuItem(
+                        text = { Text("Save to Favorites") },
+                        leadingIcon = { Icon(Icons.Default.Bookmark, null) },
+                        onClick = { showMenu = false; onSaveAsFavorite() },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Tags") },
                         leadingIcon = { Icon(Icons.Default.Bookmark, null) },
                         onClick = { showMenu = false; onManageTags() },
@@ -949,6 +1030,7 @@ private fun AcpSessionList(
     onLongPress: (AcpSession) -> Unit,
     onDelete: (AcpSession) -> Unit,
     onGit: (AcpSession) -> Unit,
+    onSaveAsFavorite: (AcpSession) -> Unit = {},
 ) {
     if (isLoading && sessions.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1009,6 +1091,7 @@ private fun AcpSessionList(
                         onLongPress = { onLongPress(session) },
                         onDelete = { onDelete(session) },
                         onGit = { onGit(session) },
+                        onSaveAsFavorite = { onSaveAsFavorite(session) },
                     )
                 }
             }
@@ -1127,6 +1210,7 @@ private fun AcpSessionCard(
     onLongPress: () -> Unit,
     onDelete: () -> Unit,
     onGit: () -> Unit,
+    onSaveAsFavorite: () -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -1193,6 +1277,11 @@ private fun AcpSessionCard(
                                 Icon(Icons.Default.Edit, contentDescription = "Options")
                             }
                             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Save to Favorites") },
+                                    leadingIcon = { Icon(Icons.Default.Bookmark, null) },
+                                    onClick = { showMenu = false; onSaveAsFavorite() },
+                                )
                                 DropdownMenuItem(
                                     text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
                                     leadingIcon = {

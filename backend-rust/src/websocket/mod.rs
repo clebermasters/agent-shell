@@ -43,6 +43,7 @@ pub async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let client_id = Uuid::new_v4().to_string();
     info!("New WebSocket connection established: {}", client_id);
+    info!("[CONN] Backend socket opened client_id={}", client_id);
 
     let (mut sender, mut receiver) = socket.split();
 
@@ -169,8 +170,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // Cleanup - use graceful mode to preserve tmux sessions on server shutdown
     let is_shutdown = state.shutdown_token.is_cancelled();
     terminal_cmds::cleanup_session(&ws_state, is_shutdown).await;
+    let had_chat_watcher = ws_state.chat_log_handle.lock().await.is_some();
     state.client_manager.remove_client(&client_id).await;
-    info!("WebSocket connection closed: {}", client_id);
+    info!(
+        "WebSocket connection closed: {} (had_chat_watcher={})",
+        client_id,
+        had_chat_watcher
+    );
 }
 
 async fn handle_message(
@@ -295,8 +301,22 @@ async fn handle_message(
         }
 
         // System stats
-        WebSocketMessage::GetStats => {
-            system_cmds::handle_get_stats(&state.message_tx).await?;
+        WebSocketMessage::GetStats { include_containers } => {
+            system_cmds::handle_get_stats(&state.message_tx, include_containers).await?;
+        }
+
+        WebSocketMessage::ContainerAction {
+            runtime,
+            container_id,
+            action,
+        } => {
+            system_cmds::handle_container_action(
+                &state.message_tx,
+                runtime,
+                container_id,
+                action,
+            )
+            .await?;
         }
 
         WebSocketMessage::GetClaudeUsage => {

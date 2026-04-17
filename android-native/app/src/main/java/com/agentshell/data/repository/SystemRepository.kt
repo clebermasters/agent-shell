@@ -1,12 +1,16 @@
 package com.agentshell.data.repository
 
 import com.agentshell.data.model.AiUsage
+import com.agentshell.data.model.ContainerInfo
+import com.agentshell.data.model.ContainerRuntimeInfo
+import com.agentshell.data.model.ContainerRuntimeKind
 import com.agentshell.data.model.ProcessInfo
 import com.agentshell.data.model.SystemStats
 import com.agentshell.data.model.UsageWindow
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.remote.requestClaudeUsage
 import com.agentshell.data.remote.requestCodexUsage
+import com.agentshell.data.remote.requestSystemStats
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,8 +30,8 @@ class SystemRepository @Inject constructor(
     private val _codexUsage = MutableStateFlow<AiUsage?>(null)
     val codexUsage: StateFlow<AiUsage?> = _codexUsage.asStateFlow()
 
-    fun requestStats() {
-        wsService.send(mapOf("type" to "get-stats"))
+    fun requestStats(includeContainers: Boolean = false) {
+        wsService.requestSystemStats(includeContainers = includeContainers)
     }
 
     fun requestClaudeUsage() {
@@ -138,6 +142,40 @@ class SystemRepository @Inject constructor(
                 }
             }
 
+            fun parseRuntimeKind(value: String?): ContainerRuntimeKind = when (value?.lowercase()) {
+                "podman" -> ContainerRuntimeKind.PODMAN
+                else -> ContainerRuntimeKind.DOCKER
+            }
+
+            fun parseContainerRuntimes(): List<ContainerRuntimeInfo> {
+                val rawRuntimes = statsObj["containerRuntimes"] as? List<*> ?: return emptyList()
+                return rawRuntimes.mapNotNull { runtimeEntry ->
+                    val runtimeMap = runtimeEntry as? Map<*, *> ?: return@mapNotNull null
+                    val rawContainers = runtimeMap["containers"] as? List<*> ?: emptyList<Any?>()
+                    val containers = rawContainers.mapNotNull { item ->
+                        val m = item as? Map<*, *> ?: return@mapNotNull null
+                        ContainerInfo(
+                            id = m["id"] as? String ?: return@mapNotNull null,
+                            name = m["name"] as? String ?: "",
+                            image = m["image"] as? String ?: "",
+                            state = m["state"] as? String ?: "unknown",
+                            status = m["status"] as? String ?: "",
+                            cpuUsage = (m["cpuUsage"] as? Number)?.toDouble(),
+                            memoryUsageBytes = (m["memoryUsageBytes"] as? Number)?.toLong(),
+                            memoryLimitBytes = (m["memoryLimitBytes"] as? Number)?.toLong(),
+                            memoryPercent = (m["memoryPercent"] as? Number)?.toDouble(),
+                            pids = (m["pids"] as? Number)?.toLong(),
+                        )
+                    }
+                    ContainerRuntimeInfo(
+                        runtime = parseRuntimeKind(runtimeMap["runtime"] as? String),
+                        available = runtimeMap["available"] as? Boolean ?: false,
+                        error = runtimeMap["error"] as? String,
+                        containers = containers,
+                    )
+                }
+            }
+
             _stats.value = SystemStats(
                 cpuUsage = (cpu?.get("usage") as? Number)?.toDouble() ?: 0.0,
                 cpuCores = (cpu?.get("cores") as? Number)?.toInt() ?: 0,
@@ -161,6 +199,7 @@ class SystemRepository @Inject constructor(
                 timestamp = (statsObj["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis(),
                 topCpuProcesses = parseProcessList("topProcessesByCpu"),
                 topMemProcesses = parseProcessList("topProcessesByMemory"),
+                containerRuntimes = parseContainerRuntimes(),
             )
         } catch (_: Exception) {
             // Silently ignore parse failures

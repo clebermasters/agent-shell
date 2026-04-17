@@ -1,6 +1,7 @@
 package com.agentshell
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -11,6 +12,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.agentshell.core.theme.AgentShellTheme
@@ -29,21 +33,37 @@ object VolumeKeyHandler {
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    private var pendingNotificationId by mutableStateOf<String?>(null)
+
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { /* granted or denied — no action needed, NotificationHelper handles SecurityException */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingNotificationId = intent.extractNotificationId()
         enableEdgeToEdge()
         requestNotificationPermission()
         setContent {
             AgentShellTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    AgentShellNavHost()
+                    AgentShellNavHost(
+                        pendingNotificationId = pendingNotificationId,
+                        onNotificationIntentConsumed = { consumedId ->
+                            if (pendingNotificationId == consumedId) {
+                                pendingNotificationId = null
+                            }
+                        },
+                    )
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingNotificationId = intent.extractNotificationId()
     }
 
     private fun requestNotificationPermission() {
@@ -80,4 +100,7 @@ class MainActivity : ComponentActivity() {
         }
         return super.onKeyUp(keyCode, event)
     }
+
+    private fun Intent?.extractNotificationId(): String? =
+        this?.getStringExtra("notification_id")?.takeIf { it.isNotBlank() }
 }

@@ -23,6 +23,7 @@ import com.agentshell.data.remote.deleteAcpSession
 import com.agentshell.data.remote.deleteFavorite
 import com.agentshell.data.remote.deleteTag
 import com.agentshell.data.remote.getFavorites
+import com.agentshell.data.remote.getSessionCwd
 import com.agentshell.data.remote.getTagAssignments
 import com.agentshell.data.remote.getTags
 import com.agentshell.data.remote.killSession
@@ -33,14 +34,18 @@ import com.agentshell.data.remote.setFavoriteTags
 import com.agentshell.data.remote.updateFavorite
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @Serializable
@@ -79,6 +84,16 @@ data class SessionsUiState(
 /** Emitted when a new ACP session is created so the UI can navigate to it. */
 data class NewAcpSessionEvent(val sessionId: String, val cwd: String)
 
+private data class SessionCwdResult(
+    val sessionName: String,
+    val cwd: String,
+)
+
+private data class PendingTagSnapshot(
+    val tags: List<SessionTag>? = null,
+    val assignments: List<SessionTagAssignment>? = null,
+)
+
 enum class FavoriteLaunchTarget {
     TMUX,
     ACP,
@@ -97,6 +112,9 @@ class SessionsViewModel @Inject constructor(
 
     private val _newAcpSession = MutableSharedFlow<NewAcpSessionEvent>(extraBufferCapacity = 8)
     val newAcpSession: SharedFlow<NewAcpSessionEvent> = _newAcpSession.asSharedFlow()
+    private val _sessionCwdResults = MutableSharedFlow<SessionCwdResult>(extraBufferCapacity = 8)
+    private var pendingTagSnapshot = PendingTagSnapshot()
+    private val sessionCwdCache = linkedMapOf<String, String>()
 
     init {
         observeMessages()
@@ -172,6 +190,13 @@ class SessionsViewModel @Inject constructor(
                             delay(500)
                             requestSessions()
                         }
+                    }
+
+                    "session-cwd" -> {
+                        val sessionName = message["sessionName"] as? String ?: return@collect
+                        val cwd = message["cwd"] as? String ?: return@collect
+                        sessionCwdCache[sessionName] = cwd
+                        _sessionCwdResults.emit(SessionCwdResult(sessionName = sessionName, cwd = cwd))
                     }
 
                     "favorites-list" -> {
@@ -278,11 +303,8 @@ class SessionsViewModel @Inject constructor(
                                 createdAt = (t["createdAt"] as? Number)?.toLong() ?: 0L,
                             )
                         }
-                        viewModelScope.launch {
-                            sessionTagDao.deleteAllTags()
-                            tags.forEach { sessionTagDao.upsertTag(it) }
-                        }
-                        _uiState.update { it.copy(tags = tags) }
+                        pendingTagSnapshot = pendingTagSnapshot.copy(tags = tags)
+                        applyPendingTagSnapshotIfReady()
                     }
 
                     "tag-added" -> {
@@ -294,14 +316,26 @@ class SessionsViewModel @Inject constructor(
                             colorHex = t["colorHex"] as? String ?: "#2196F3",
                             createdAt = (t["createdAt"] as? Number)?.toLong() ?: 0L,
                         )
-                        viewModelScope.launch { sessionTagDao.upsertTag(tag) }
-                        _uiState.update { state -> state.copy(tags = state.tags + tag) }
+                        sessionTagDao.upsertTag(tag)
+                        pendingTagSnapshot = pendingTagSnapshot.copy(
+                            tags = (pendingTagSnapshot.tags ?: _uiState.value.tags)
+                                .filterNot { it.id == tag.id } + tag,
+                        )
+                        _uiState.update { state ->
+                            state.copy(tags = state.tags.filterNot { it.id == tag.id } + tag)
+                        }
                     }
 
                     "tag-deleted" -> {
                         val id = message["id"] as? String ?: return@collect
                         val tag = _uiState.value.tags.find { it.id == id }
-                        if (tag != null) viewModelScope.launch { sessionTagDao.deleteTag(tag) }
+                        if (tag != null) {
+                            sessionTagDao.deleteTag(tag)
+                        }
+                        pendingTagSnapshot = pendingTagSnapshot.copy(
+                            tags = pendingTagSnapshot.tags?.filterNot { it.id == id },
+                            assignments = pendingTagSnapshot.assignments?.filterNot { it.tagId == id },
+                        )
                         _uiState.update { state ->
                             state.copy(
                                 tags = state.tags.filter { it.id != id },
@@ -318,21 +352,13 @@ class SessionsViewModel @Inject constructor(
                     "tag-assignments-list" -> {
                         @Suppress("UNCHECKED_CAST")
                         val rawList = message["assignments"] as? List<Map<String, Any?>> ?: emptyList()
-                        val tagById = _uiState.value.tags.associateBy { it.id }
-                        val tagMap = rawList
-                            .groupBy { it["sessionName"] as? String ?: "" }
-                            .mapValues { (_, items) ->
-                                items.mapNotNull { tagById[it["tagId"] as? String ?: ""] }
-                            }
-                        viewModelScope.launch {
-                            sessionTagDao.deleteAllAssignments()
-                            rawList.forEach { a ->
-                                val sn = a["sessionName"] as? String ?: return@forEach
-                                val tid = a["tagId"] as? String ?: return@forEach
-                                sessionTagDao.assignTag(SessionTagAssignment(sessionName = sn, tagId = tid))
-                            }
+                        val assignments = rawList.mapNotNull { assignment ->
+                            val sessionName = assignment["sessionName"] as? String ?: return@mapNotNull null
+                            val tagId = assignment["tagId"] as? String ?: return@mapNotNull null
+                            SessionTagAssignment(sessionName = sessionName, tagId = tagId)
                         }
-                        _uiState.update { it.copy(sessionTagMap = tagMap) }
+                        pendingTagSnapshot = pendingTagSnapshot.copy(assignments = assignments)
+                        applyPendingTagSnapshotIfReady()
                     }
 
                     "tag-assignment-updated" -> {
@@ -340,12 +366,30 @@ class SessionsViewModel @Inject constructor(
                         val tagId = message["tagId"] as? String ?: return@collect
                         val assigned = message["assigned"] as? Boolean ?: return@collect
                         val tag = _uiState.value.tags.find { it.id == tagId }
-                        viewModelScope.launch {
-                            if (assigned) {
-                                sessionTagDao.assignTag(SessionTagAssignment(sessionName = sessionName, tagId = tagId))
-                            } else {
-                                sessionTagDao.removeTag(sessionName, tagId)
-                            }
+                        if (assigned && tag == null) {
+                            pendingTagSnapshot = pendingTagSnapshot.copy(assignments = null)
+                            wsService.getTags()
+                            wsService.getTagAssignments()
+                            return@collect
+                        }
+                        if (assigned) {
+                            sessionTagDao.assignTag(SessionTagAssignment(sessionName = sessionName, tagId = tagId))
+                            pendingTagSnapshot = pendingTagSnapshot.copy(
+                                assignments = updatePendingAssignments(
+                                    sessionName = sessionName,
+                                    tagId = tagId,
+                                    assigned = true,
+                                ),
+                            )
+                        } else {
+                            sessionTagDao.removeTag(sessionName, tagId)
+                            pendingTagSnapshot = pendingTagSnapshot.copy(
+                                assignments = updatePendingAssignments(
+                                    sessionName = sessionName,
+                                    tagId = tagId,
+                                    assigned = false,
+                                ),
+                            )
                         }
                         _uiState.update { state ->
                             val current = state.sessionTagMap[sessionName]?.toMutableList() ?: mutableListOf()
@@ -359,6 +403,49 @@ class SessionsViewModel @Inject constructor(
                     }
                 }
             }
+        }
+    }
+
+    private suspend fun applyPendingTagSnapshotIfReady() {
+        val tags = pendingTagSnapshot.tags ?: return
+        val assignments = pendingTagSnapshot.assignments ?: return
+        val validTagIds = tags.asSequence()
+            .map(SessionTag::id)
+            .toSet()
+        val validAssignments = assignments.filter { it.tagId in validTagIds }
+        val tagMap = buildSessionTagMap(tags, validAssignments)
+
+        sessionTagDao.replaceTagsAndAssignments(tags, validAssignments)
+        _uiState.update { it.copy(tags = tags, sessionTagMap = tagMap) }
+        pendingTagSnapshot = pendingTagSnapshot.copy(assignments = validAssignments)
+    }
+
+    private fun buildSessionTagMap(
+        tags: List<SessionTag>,
+        assignments: List<SessionTagAssignment>,
+    ): Map<String, List<SessionTag>> {
+        val tagById = tags.associateBy { it.id }
+        return assignments
+            .groupBy(SessionTagAssignment::sessionName)
+            .mapValues { (_, items) ->
+                items.mapNotNull { tagById[it.tagId] }
+            }
+    }
+
+    private fun updatePendingAssignments(
+        sessionName: String,
+        tagId: String,
+        assigned: Boolean,
+    ): List<SessionTagAssignment> {
+        val currentAssignments = pendingTagSnapshot.assignments ?: emptyList()
+        return if (assigned) {
+            if (currentAssignments.any { it.sessionName == sessionName && it.tagId == tagId }) {
+                currentAssignments
+            } else {
+                currentAssignments + SessionTagAssignment(sessionName = sessionName, tagId = tagId)
+            }
+        } else {
+            currentAssignments.filterNot { it.sessionName == sessionName && it.tagId == tagId }
         }
     }
 
@@ -450,6 +537,19 @@ class SessionsViewModel @Inject constructor(
 
     fun switchBackend(backend: String) {
         _uiState.update { it.copy(selectedBackend = backend) }
+    }
+
+    fun getCachedSessionPath(sessionName: String): String? = sessionCwdCache[sessionName]
+
+    suspend fun resolveTmuxSessionPath(sessionName: String): String? = coroutineScope {
+        sessionCwdCache[sessionName]?.let { return@coroutineScope it }
+        val pendingResult = async {
+            withTimeoutOrNull(3000L) {
+                _sessionCwdResults.first { it.sessionName == sessionName }.cwd
+            }
+        }
+        wsService.getSessionCwd(sessionName)
+        pendingResult.await()
     }
 
     // ── Favorites CRUD ────────────────────────────────────────────────────────

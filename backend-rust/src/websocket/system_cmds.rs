@@ -1,4 +1,5 @@
 use std::process::Stdio;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -10,16 +11,29 @@ use tracing::{error, info};
 use super::types::{send_message, BroadcastMessage, WsState};
 use crate::{audio, types::*};
 
-pub(crate) async fn handle_ping(
-    tx: &mpsc::Sender<BroadcastMessage>,
-) -> anyhow::Result<()> {
-    send_message(tx, ServerMessage::Pong).await
+const CONTAINER_PS_TEMPLATE: &str = "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}";
+const CONTAINER_STATS_TEMPLATE: &str =
+    "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.PIDs}}";
+
+#[derive(Debug, Clone, PartialEq)]
+struct ContainerStatSample {
+    id: String,
+    cpu_usage: Option<f32>,
+    memory_usage_bytes: Option<u64>,
+    memory_limit_bytes: Option<u64>,
+    memory_percent: Option<f32>,
+    pids: Option<u64>,
 }
 
-pub(crate) async fn handle_get_stats(
-    tx: &mpsc::Sender<BroadcastMessage>,
-) -> anyhow::Result<()> {
-    let stats = tokio::task::spawn_blocking(|| {
+fn now_epoch_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+async fn collect_system_stats() -> anyhow::Result<SystemStats> {
+    tokio::task::spawn_blocking(|| {
         let mut sys = sysinfo::System::new_with_specifics(
             sysinfo::RefreshKind::new()
                 .with_memory(sysinfo::MemoryRefreshKind::everything())
@@ -27,8 +41,8 @@ pub(crate) async fn handle_get_stats(
         );
         sys.refresh_memory();
         sys.refresh_cpu_usage();
-        // Second refresh for accurate per-process CPU (sysinfo needs two snapshots)
         std::thread::sleep(std::time::Duration::from_millis(200));
+        sys.refresh_cpu_usage();
         sys.refresh_processes();
         let load_avg = sysinfo::System::load_average();
 
@@ -40,7 +54,6 @@ pub(crate) async fn handle_get_stats(
             .unwrap_or((0, 0));
         let disk_used = disk_total.saturating_sub(disk_free);
 
-        // Collect all processes into a sortable Vec
         let mut processes: Vec<ProcessInfo> = sys
             .processes()
             .values()
@@ -52,7 +65,6 @@ pub(crate) async fn handle_get_stats(
             })
             .collect();
 
-        // Top 5 by CPU (descending)
         processes.sort_by(|a, b| {
             b.cpu_usage
                 .partial_cmp(&a.cpu_usage)
@@ -60,11 +72,11 @@ pub(crate) async fn handle_get_stats(
         });
         let top_processes_by_cpu: Vec<ProcessInfo> = processes.iter().take(5).cloned().collect();
 
-        // Top 5 by memory (descending)
         processes.sort_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes));
-        let top_processes_by_memory: Vec<ProcessInfo> = processes.iter().take(5).cloned().collect();
+        let top_processes_by_memory: Vec<ProcessInfo> =
+            processes.iter().take(5).cloned().collect();
 
-        SystemStats {
+        Ok::<SystemStats, anyhow::Error>(SystemStats {
             cpu: CpuInfo {
                 cores: sys.cpus().len(),
                 model: sys
@@ -72,7 +84,7 @@ pub(crate) async fn handle_get_stats(
                     .first()
                     .map(|c| c.brand().to_string())
                     .unwrap_or_default(),
-                usage: load_avg.one as f32,
+                usage: sys.global_cpu_info().cpu_usage(),
                 load_avg: [
                     load_avg.one as f32,
                     load_avg.five as f32,
@@ -85,7 +97,7 @@ pub(crate) async fn handle_get_stats(
                 free: sys.available_memory(),
                 percent: format!(
                     "{:.1}",
-                    (sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0
+                    (sys.used_memory() as f64 / sys.total_memory().max(1) as f64) * 100.0
                 ),
             },
             disk: DiskInfo {
@@ -104,10 +116,328 @@ pub(crate) async fn handle_get_stats(
             arch: std::env::consts::ARCH.to_string(),
             top_processes_by_cpu,
             top_processes_by_memory,
-        }
+            timestamp: now_epoch_millis(),
+            container_runtimes: Vec::new(),
+        })
     })
-    .await?;
+    .await?
+}
+
+fn runtime_command(runtime: &ContainerRuntime) -> &'static str {
+    match runtime {
+        ContainerRuntime::Docker => "docker",
+        ContainerRuntime::Podman => "podman",
+    }
+}
+
+fn runtime_display_name(runtime: &ContainerRuntime) -> &'static str {
+    match runtime {
+        ContainerRuntime::Docker => "Docker",
+        ContainerRuntime::Podman => "Podman",
+    }
+}
+
+fn normalize_container_state(state: &str) -> String {
+    let trimmed = state.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return "unknown".to_string();
+    }
+    trimmed
+}
+
+fn container_state_rank(state: &str) -> u8 {
+    match state {
+        "running" => 0,
+        "paused" => 1,
+        "restarting" => 2,
+        "created" => 3,
+        "exited" => 4,
+        "dead" => 5,
+        _ => 6,
+    }
+}
+
+fn parse_ps_output(stdout: &str) -> Vec<ContainerInfo> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 5 {
+                return None;
+            }
+            Some(ContainerInfo {
+                id: parts[0].trim().to_string(),
+                name: parts[1].trim().to_string(),
+                image: parts[2].trim().to_string(),
+                state: normalize_container_state(parts[3]),
+                status: parts[4].trim().to_string(),
+                cpu_usage: None,
+                memory_usage_bytes: None,
+                memory_limit_bytes: None,
+                memory_percent: None,
+                pids: None,
+            })
+        })
+        .collect()
+}
+
+fn parse_percentage(value: &str) -> Option<f32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "--" {
+        return None;
+    }
+    trimmed.trim_end_matches('%').parse::<f32>().ok()
+}
+
+fn parse_count(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "--" {
+        return None;
+    }
+    trimmed.parse::<u64>().ok()
+}
+
+fn parse_human_bytes(input: &str) -> Option<u64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed == "--" {
+        return None;
+    }
+
+    let compact = trimmed.replace(' ', "");
+    let numeric_len = compact
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .count();
+    if numeric_len == 0 {
+        return None;
+    }
+
+    let number = compact[..numeric_len].parse::<f64>().ok()?;
+    let unit = compact[numeric_len..].to_ascii_lowercase();
+    let multiplier = match unit.as_str() {
+        "" | "b" => 1.0,
+        "kb" => 1_000.0,
+        "mb" => 1_000_000.0,
+        "gb" => 1_000_000_000.0,
+        "tb" => 1_000_000_000_000.0,
+        "pb" => 1_000_000_000_000_000.0,
+        "kib" => 1024.0,
+        "mib" => 1024.0 * 1024.0,
+        "gib" => 1024.0 * 1024.0 * 1024.0,
+        "tib" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        "pib" => 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+
+    Some((number * multiplier).round() as u64)
+}
+
+fn parse_memory_usage(value: &str) -> (Option<u64>, Option<u64>) {
+    let Some((used, limit)) = value.split_once('/') else {
+        return (parse_human_bytes(value), None);
+    };
+    (parse_human_bytes(used), parse_human_bytes(limit))
+}
+
+fn parse_stats_output(stdout: &str) -> Vec<ContainerStatSample> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 6 {
+                return None;
+            }
+            let (memory_usage_bytes, memory_limit_bytes) = parse_memory_usage(parts[3]);
+            Some(ContainerStatSample {
+                id: parts[0].trim().to_string(),
+                cpu_usage: parse_percentage(parts[2]),
+                memory_usage_bytes,
+                memory_limit_bytes,
+                memory_percent: parse_percentage(parts[4]),
+                pids: parse_count(parts[5]),
+            })
+        })
+        .collect()
+}
+
+fn merge_container_stats(
+    containers: &mut [ContainerInfo],
+    stats: Vec<ContainerStatSample>,
+) {
+    for sample in stats {
+        if let Some(container) = containers.iter_mut().find(|container| {
+            container.id == sample.id
+                || container.id.starts_with(&sample.id)
+                || sample.id.starts_with(&container.id)
+        }) {
+            container.cpu_usage = sample.cpu_usage;
+            container.memory_usage_bytes = sample.memory_usage_bytes;
+            container.memory_limit_bytes = sample.memory_limit_bytes;
+            container.memory_percent = sample.memory_percent;
+            container.pids = sample.pids;
+        }
+    }
+
+    containers.sort_by(|left, right| {
+        container_state_rank(&left.state)
+            .cmp(&container_state_rank(&right.state))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+}
+
+fn command_error_message(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        return stdout;
+    }
+    "command failed".to_string()
+}
+
+async fn collect_runtime_containers(runtime: ContainerRuntime) -> ContainerRuntimeInfo {
+    let runtime_bin = runtime_command(&runtime);
+    let ps_output = match Command::new(runtime_bin)
+        .args(["ps", "-a", "--no-trunc", "--format", CONTAINER_PS_TEMPLATE])
+        .output()
+        .await
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let missing_message = format!(
+                "{} CLI is not installed",
+                runtime_display_name(&runtime)
+            );
+            return ContainerRuntimeInfo {
+                runtime,
+                available: false,
+                error: Some(missing_message),
+                containers: Vec::new(),
+            };
+        }
+        Err(err) => {
+            return ContainerRuntimeInfo {
+                runtime,
+                available: true,
+                error: Some(err.to_string()),
+                containers: Vec::new(),
+            };
+        }
+    };
+
+    if !ps_output.status.success() {
+        return ContainerRuntimeInfo {
+            runtime,
+            available: true,
+            error: Some(command_error_message(&ps_output)),
+            containers: Vec::new(),
+        };
+    }
+
+    let mut containers = parse_ps_output(&String::from_utf8_lossy(&ps_output.stdout));
+    let stats_output = Command::new(runtime_bin)
+        .args([
+            "stats",
+            "--all",
+            "--no-stream",
+            "--no-trunc",
+            "--format",
+            CONTAINER_STATS_TEMPLATE,
+        ])
+        .output()
+        .await;
+
+    let error = match stats_output {
+        Ok(output) if output.status.success() => {
+            let stats = parse_stats_output(&String::from_utf8_lossy(&output.stdout));
+            merge_container_stats(&mut containers, stats);
+            None
+        }
+        Ok(output) => Some(command_error_message(&output)),
+        Err(err) => Some(err.to_string()),
+    };
+
+    ContainerRuntimeInfo {
+        runtime,
+        available: true,
+        error,
+        containers,
+    }
+}
+
+async fn collect_container_runtimes() -> anyhow::Result<Vec<ContainerRuntimeInfo>> {
+    let (docker, podman) = tokio::join!(
+        collect_runtime_containers(ContainerRuntime::Docker),
+        collect_runtime_containers(ContainerRuntime::Podman),
+    );
+    Ok(vec![docker, podman])
+}
+
+pub(crate) async fn handle_ping(
+    tx: &mpsc::Sender<BroadcastMessage>,
+) -> anyhow::Result<()> {
+    send_message(tx, ServerMessage::Pong).await
+}
+
+pub(crate) async fn handle_get_stats(
+    tx: &mpsc::Sender<BroadcastMessage>,
+    include_containers: bool,
+) -> anyhow::Result<()> {
+    let mut stats = collect_system_stats().await?;
+    if include_containers {
+        stats.container_runtimes = collect_container_runtimes().await?;
+    }
     send_message(tx, ServerMessage::Stats { stats }).await
+}
+
+pub(crate) async fn handle_container_action(
+    tx: &mpsc::Sender<BroadcastMessage>,
+    runtime: ContainerRuntime,
+    container_id: String,
+    action: ContainerAction,
+) -> anyhow::Result<()> {
+    let runtime_bin = runtime_command(&runtime);
+    let cli_action = match action {
+        ContainerAction::Start => "start",
+        ContainerAction::Stop => "stop",
+        ContainerAction::Restart => "restart",
+        ContainerAction::Kill => "kill",
+        ContainerAction::Pause => "pause",
+        ContainerAction::Resume => "unpause",
+    };
+
+    let result = match Command::new(runtime_bin)
+        .arg(cli_action)
+        .arg(&container_id)
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => ServerMessage::ContainerActionResult {
+            runtime,
+            container_id,
+            action,
+            success: true,
+            error: None,
+        },
+        Ok(output) => ServerMessage::ContainerActionResult {
+            runtime,
+            container_id,
+            action,
+            success: false,
+            error: Some(command_error_message(&output)),
+        },
+        Err(err) => ServerMessage::ContainerActionResult {
+            runtime,
+            container_id,
+            action,
+            success: false,
+            error: Some(err.to_string()),
+        },
+    };
+
+    send_message(tx, result).await
 }
 
 /// Cached last successful Claude usage response so we can serve stale data on 429.
@@ -788,7 +1118,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_get_stats_sends_response() {
         let (tx, mut rx) = make_tx();
-        let result = handle_get_stats(&tx).await;
+        let result = handle_get_stats(&tx, false).await;
         assert!(result.is_ok());
         let msg = rx.try_recv().unwrap();
         let json = match msg {
@@ -796,6 +1126,78 @@ mod tests {
             _ => panic!("Expected text"),
         };
         assert!(json.contains("cpu") || json.contains("stats"));
+        assert!(json.contains("containerRuntimes"));
+    }
+
+    #[test]
+    fn test_parse_human_bytes_supports_decimal_and_binary_units() {
+        assert_eq!(parse_human_bytes("2.5MB"), Some(2_500_000));
+        assert_eq!(parse_human_bytes("2.5 MiB"), Some(2_621_440));
+        assert_eq!(parse_human_bytes("--"), None);
+    }
+
+    #[test]
+    fn test_parse_ps_output_extracts_container_rows() {
+        let rows = parse_ps_output(
+            "abc123\tweb\tnginx:latest\trunning\tUp 2 minutes\n\
+             def456\tworker\tredis:7\texited\tExited (0) 3 minutes ago",
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "abc123");
+        assert_eq!(rows[0].name, "web");
+        assert_eq!(rows[0].state, "running");
+        assert_eq!(rows[1].state, "exited");
+    }
+
+    #[test]
+    fn test_parse_stats_output_extracts_resource_metrics() {
+        let rows = parse_stats_output(
+            "abc123\tweb\t12.5%\t64MiB / 512MiB\t12.5%\t7\n\
+             def456\tworker\t--\t0B / 0B\t--\t--",
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "abc123");
+        assert_eq!(rows[0].cpu_usage, Some(12.5));
+        assert_eq!(rows[0].memory_usage_bytes, Some(67_108_864));
+        assert_eq!(rows[0].memory_limit_bytes, Some(536_870_912));
+        assert_eq!(rows[0].memory_percent, Some(12.5));
+        assert_eq!(rows[0].pids, Some(7));
+        assert_eq!(rows[1].cpu_usage, None);
+        assert_eq!(rows[1].pids, None);
+    }
+
+    #[test]
+    fn test_merge_container_stats_matches_by_id_prefix() {
+        let mut containers = vec![ContainerInfo {
+            id: "abc123def456".to_string(),
+            name: "web".to_string(),
+            image: "nginx".to_string(),
+            state: "running".to_string(),
+            status: "Up 1 minute".to_string(),
+            cpu_usage: None,
+            memory_usage_bytes: None,
+            memory_limit_bytes: None,
+            memory_percent: None,
+            pids: None,
+        }];
+
+        merge_container_stats(
+            &mut containers,
+            vec![ContainerStatSample {
+                id: "abc123".to_string(),
+                cpu_usage: Some(4.2),
+                memory_usage_bytes: Some(1_024),
+                memory_limit_bytes: Some(2_048),
+                memory_percent: Some(50.0),
+                pids: Some(2),
+            }],
+        );
+
+        assert_eq!(containers[0].cpu_usage, Some(4.2));
+        assert_eq!(containers[0].memory_usage_bytes, Some(1_024));
+        assert_eq!(containers[0].memory_limit_bytes, Some(2_048));
+        assert_eq!(containers[0].memory_percent, Some(50.0));
+        assert_eq!(containers[0].pids, Some(2));
     }
 
     #[tokio::test]

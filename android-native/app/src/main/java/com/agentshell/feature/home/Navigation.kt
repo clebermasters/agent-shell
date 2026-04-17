@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -40,7 +41,7 @@ object Routes {
     const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}&isSwipeNav={isSwipeNav}&cwd={cwd}"
     const val SETTINGS = "settings"
     const val DEBUG = "debug"
-    const val ALERTS = "alerts"
+    const val ALERTS = "alerts?notificationId={notificationId}"
     const val FILE_BROWSER = "file_browser?path={path}&openPath={openPath}"
     const val HOST_SELECTION = "host_selection"
     const val CRON_EDITOR = "cron_editor?jobId={jobId}"
@@ -80,13 +81,28 @@ object Routes {
     }
     fun cronEditor(jobId: String? = null) = if (jobId != null) "cron_editor?jobId=$jobId" else "cron_editor"
     fun dotfileEditor() = DOTFILE_EDITOR
+    fun alerts(notificationId: String? = null): String {
+        val encodedId = notificationId?.takeIf { it.isNotBlank() }?.let { Uri.encode(it, "") }
+        return if (encodedId == null) "alerts" else "alerts?notificationId=$encodedId"
+    }
 
     private fun encodeRouteParam(value: String): String = Uri.encode(value, "")
 }
 
 @Composable
-fun AgentShellNavHost() {
+fun AgentShellNavHost(
+    pendingNotificationId: String? = null,
+    onNotificationIntentConsumed: (String) -> Unit = {},
+) {
     val navController = rememberNavController()
+
+    LaunchedEffect(pendingNotificationId) {
+        val notificationId = pendingNotificationId ?: return@LaunchedEffect
+        navController.navigate(Routes.alerts(notificationId)) {
+            launchSingleTop = true
+        }
+        onNotificationIntentConsumed(notificationId)
+    }
 
     NavHost(
         navController = navController,
@@ -99,7 +115,7 @@ fun AgentShellNavHost() {
                 onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
                 onNavigateToAcpChat = { id, cwd -> navController.navigate(Routes.chat(id, 0, isAcp = true, cwd = cwd)) },
                 onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
-                onNavigateToAlerts = { navController.navigate(Routes.ALERTS) },
+                onNavigateToAlerts = { navController.navigate(Routes.alerts()) },
                 onNavigateToHosts = { navController.navigate(Routes.HOST_SELECTION) },
                 onNavigateToSplitScreen = { layoutId -> navController.navigate(Routes.splitScreen(layoutId)) },
                 sessionsContent = {
@@ -257,8 +273,20 @@ fun AgentShellNavHost() {
         }
 
         // ── Alerts ────────────────────────────────────────────────────────────
-        composable(Routes.ALERTS) {
-            AlertsScreen()
+        composable(
+            route = Routes.ALERTS,
+            arguments = listOf(
+                navArgument("notificationId") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+            ),
+        ) { backStackEntry ->
+            val notificationId = Uri.decode(backStackEntry.arguments?.getString("notificationId") ?: "")
+                .takeIf { it.isNotBlank() }
+            AlertsScreen(
+                initialNotificationId = notificationId,
+            )
         }
 
         // ── File Browser ──────────────────────────────────────────────────────

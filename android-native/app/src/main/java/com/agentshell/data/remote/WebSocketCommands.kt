@@ -583,8 +583,27 @@ fun WebSocketService.acpRespondPermission(requestId: String, optionId: String) {
 // =============================================================================
 
 /** Request current system resource statistics (CPU, memory, etc.). */
-fun WebSocketService.requestSystemStats() {
-    send(mapOf("type" to "get-stats"))
+fun WebSocketService.requestSystemStats(includeContainers: Boolean = false) {
+    send(
+        buildMap {
+            put("type", "get-stats")
+            if (includeContainers) {
+                put("includeContainers", true)
+            }
+        },
+    )
+}
+
+/** Run a lifecycle action against a Docker or Podman container. */
+fun WebSocketService.requestContainerAction(runtime: String, containerId: String, action: String) {
+    send(
+        mapOf(
+            "type" to "container-action",
+            "runtime" to runtime,
+            "containerId" to containerId,
+            "action" to action,
+        ),
+    )
 }
 
 /** Request Claude Max subscription usage metrics. */

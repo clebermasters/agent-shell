@@ -91,7 +91,7 @@ class HomeViewModel @Inject constructor(
     init {
         restoreTabIndex()
         observeMessages()
-        startStatsPolling()
+        observeStatsRefreshTriggers()
         observeAndConnect()
         checkAutoAttach()
     }
@@ -225,21 +225,23 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun startStatsPolling() {
+    private fun observeStatsRefreshTriggers() {
         viewModelScope.launch {
-            while (true) {
-                if (wsService.isConnected) {
+            var lastStatus: ConnectionStatus? = null
+            wsService.connectionStatus.collect { status ->
+                if (status == ConnectionStatus.CONNECTED && lastStatus != status) {
                     systemRepository.requestStats()
                 }
-                delay(5_000)
+                lastStatus = status
             }
         }
         viewModelScope.launch {
-            // Wait for connection before first request
             wsService.connectionStatus.first { it == ConnectionStatus.CONNECTED }
             while (true) {
-                systemRepository.requestClaudeUsage()
-                systemRepository.requestCodexUsage()
+                if (wsService.isConnected) {
+                    systemRepository.requestClaudeUsage()
+                    systemRepository.requestCodexUsage()
+                }
                 delay(300_000) // 5 minutes — Anthropic rate-limits this endpoint
             }
         }

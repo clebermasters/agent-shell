@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.agentshell.data.model.SessionTag
 import com.agentshell.data.model.SessionTagAssignment
@@ -19,6 +20,9 @@ interface SessionTagDao {
     @Upsert
     suspend fun upsertTag(tag: SessionTag)
 
+    @Upsert
+    suspend fun upsertTags(tags: List<SessionTag>)
+
     @Delete
     suspend fun deleteTag(tag: SessionTag)
 
@@ -30,6 +34,9 @@ interface SessionTagDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun assignTag(assignment: SessionTagAssignment)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun assignTags(assignments: List<SessionTagAssignment>)
 
     @Query("DELETE FROM session_tag_assignments WHERE sessionName = :sessionName AND tagId = :tagId")
     suspend fun removeTag(sessionName: String, tagId: String)
@@ -45,4 +52,25 @@ interface SessionTagDao {
 
     @Query("DELETE FROM session_tag_assignments")
     suspend fun deleteAllAssignments()
+
+    @Transaction
+    suspend fun replaceTagsAndAssignments(
+        tags: List<SessionTag>,
+        assignments: List<SessionTagAssignment>,
+    ) {
+        val validTagIds = tags.asSequence()
+            .map(SessionTag::id)
+            .toSet()
+        val validAssignments = assignments.filter { it.tagId in validTagIds }
+
+        deleteAllAssignments()
+        deleteAllTags()
+
+        if (tags.isNotEmpty()) {
+            upsertTags(tags)
+        }
+        if (validAssignments.isNotEmpty()) {
+            assignTags(validAssignments)
+        }
+    }
 }

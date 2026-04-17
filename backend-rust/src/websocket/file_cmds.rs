@@ -412,6 +412,7 @@ fn detect_mime_type(path: &Path) -> &'static str {
         "flac" => "audio/flac",
         "html" | "htm" => "text/html",
         "md" => "text/markdown",
+        "pdf" => "application/pdf",
         "json" => "application/json",
         "xml" => "application/xml",
         "yaml" | "yml" => "text/yaml",
@@ -490,6 +491,11 @@ mod tests {
     #[test]
     fn test_validate_path_traversal_fails() {
         assert!(validate_path("/home/../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_detect_mime_type_pdf() {
+        assert_eq!(detect_mime_type(Path::new("/tmp/report.pdf")), "application/pdf");
     }
 
     #[tokio::test]

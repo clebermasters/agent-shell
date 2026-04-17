@@ -372,6 +372,7 @@ impl DotFilesManager {
             Some("ogg") => "audio/ogg",
             Some("m4a") | Some("aac") => "audio/aac",
             Some("flac") => "audio/flac",
+            Some("pdf") => "application/pdf",
             _ => "application/octet-stream",
         }
     }
@@ -513,6 +514,10 @@ mod tests {
         assert_eq!(
             DotFilesManager::detect_mime_type(Path::new("audio.flac")),
             "audio/flac"
+        );
+        assert_eq!(
+            DotFilesManager::detect_mime_type(Path::new("manual.pdf")),
+            "application/pdf"
         );
         assert_eq!(
             DotFilesManager::detect_mime_type(Path::new("unknown.xyz")),

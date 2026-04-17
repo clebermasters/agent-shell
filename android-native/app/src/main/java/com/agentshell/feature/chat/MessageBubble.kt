@@ -55,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,7 +88,12 @@ import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 import coil.request.ImageRequest
+import com.agentshell.feature.alerts.InlineFileViewer
+import com.agentshell.feature.alerts.supportsInlineFilePreview
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.agentshell.core.config.BuildConfig
 import com.agentshell.data.services.AudioPlayerManager
 import okhttp3.OkHttpClient
@@ -899,20 +905,53 @@ private fun FileBlock(block: ChatBlock, fileBaseUrl: String = "") {
         null
     }
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var isDownloading by remember { mutableStateOf(false) }
+    var previewBytes by remember { mutableStateOf<ByteArray?>(null) }
+    val filename = block.filename ?: "file"
+    val mimeType = block.mimeType ?: "application/octet-stream"
+    val supportsInlinePreview = remember(filename, mimeType) {
+        supportsInlineFilePreview(mimeType, filename)
+    }
+
+    previewBytes?.let { bytes ->
+        InlineFileViewer(
+            fileBytes = bytes,
+            filename = filename,
+            mimeType = mimeType,
+            size = block.sizeBytes ?: bytes.size.toLong(),
+            onDismiss = { previewBytes = null },
+        )
+    }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = fileUrl != null && !isDownloading) {
-                isDownloading = true
-                downloadAndOpenFile(
-                    context = context,
-                    url = fileUrl!!,
-                    filename = block.filename ?: "file",
-                    mimeType = block.mimeType ?: "application/octet-stream",
-                    onComplete = { isDownloading = false },
-                )
+                if (supportsInlinePreview) {
+                    isDownloading = true
+                    coroutineScope.launch {
+                        val bytes = downloadFileBytes(
+                            url = fileUrl!!,
+                            onError = { message ->
+                                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                            },
+                        )
+                        isDownloading = false
+                        if (bytes != null) {
+                            previewBytes = bytes
+                        }
+                    }
+                } else {
+                    isDownloading = true
+                    downloadAndOpenFile(
+                        context = context,
+                        url = fileUrl!!,
+                        filename = filename,
+                        mimeType = mimeType,
+                        onComplete = { isDownloading = false },
+                    )
+                }
             },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(8.dp),
@@ -934,13 +973,13 @@ private fun FileBlock(block: ChatBlock, fileBaseUrl: String = "") {
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = block.filename ?: "File",
+                    text = filename,
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                 )
                 val sizeText = block.sizeBytes?.let { formatFileSize(it) } ?: ""
-                val mimeText = block.mimeType ?: ""
+                val mimeText = mimeType
                 val subtitle = listOf(mimeText, sizeText).filter { it.isNotBlank() }.joinToString(" · ")
                 if (subtitle.isNotBlank()) {
                     Text(
@@ -951,6 +990,30 @@ private fun FileBlock(block: ChatBlock, fileBaseUrl: String = "") {
                 }
             }
         }
+    }
+}
+
+private suspend fun downloadFileBytes(
+    url: String,
+    onError: (String) -> Unit,
+): ByteArray? = withContext(Dispatchers.IO) {
+    runCatching {
+        val client = OkHttpClient()
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IllegalStateException("Download failed: ${response.code}")
+            }
+            response.body?.bytes() ?: throw IllegalStateException("Empty file")
+        }
+    }.getOrElse { error ->
+        withContext(Dispatchers.Main) {
+            onError(error.message ?: "Download failed")
+        }
+        null
     }
 }
 
@@ -1013,15 +1076,21 @@ private fun downloadAndOpenFile(
 ) {
     Thread {
         try {
-            val client = OkHttpClient()
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
-                .build()
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
+            val bytes = runCatching {
+                val client = OkHttpClient()
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw IllegalStateException("Download failed: ${response.code}")
+                    }
+                    response.body?.bytes() ?: throw IllegalStateException("Empty file")
+                }
+            }.getOrElse { error ->
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    Toast.makeText(context, "Download failed: ${response.code}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, error.message ?: "Download failed", Toast.LENGTH_SHORT).show()
                     onComplete()
                 }
                 return@Thread
@@ -1029,9 +1098,7 @@ private fun downloadAndOpenFile(
             val cacheDir = File(context.cacheDir, "chat_files")
             cacheDir.mkdirs()
             val file = File(cacheDir, filename)
-            file.outputStream().use { out ->
-                response.body?.byteStream()?.copyTo(out)
-            }
+            file.writeBytes(bytes)
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",

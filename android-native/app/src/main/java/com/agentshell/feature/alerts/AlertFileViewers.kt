@@ -1,18 +1,25 @@
 package com.agentshell.feature.alerts
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.graphics.Typeface
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import android.text.method.LinkMovementMethod
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -24,6 +31,7 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,10 +50,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -62,7 +72,12 @@ import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.roundToInt
 
 // ---------------------------------------------------------------------------
@@ -430,6 +445,90 @@ fun HtmlViewer(
 }
 
 // ---------------------------------------------------------------------------
+// PdfViewer — Dialog with PdfRenderer-backed page rendering
+// ---------------------------------------------------------------------------
+
+@Composable
+fun PdfViewer(
+    pdfBytes: ByteArray,
+    filename: String,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val pdfFile = remember(pdfBytes, filename) {
+        File.createTempFile("agentshell_preview_", ".pdf", context.cacheDir).apply {
+            writeBytes(pdfBytes)
+        }
+    }
+    val fileDescriptor = remember(pdfFile.absolutePath) {
+        ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY)
+    }
+    val renderer = remember(fileDescriptor) { PdfRenderer(fileDescriptor) }
+    val renderMutex = remember(renderer) { Mutex() }
+
+    DisposableEffect(renderer, fileDescriptor, pdfFile) {
+        onDispose {
+            runCatching { renderer.close() }
+            runCatching { fileDescriptor.close() }
+            runCatching { pdfFile.delete() }
+        }
+    }
+
+    val pageCount = remember(renderer) { renderer.pageCount }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .fillMaxHeight(0.95f),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = filename,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                        Text(
+                            text = "$pageCount page${if (pageCount == 1) "" else "s"}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(pageCount) { pageIndex ->
+                        PdfPage(
+                            renderer = renderer,
+                            pageIndex = pageIndex,
+                            renderMutex = renderMutex,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FileInfoDialog — Fallback info dialog for unsupported file types
 // ---------------------------------------------------------------------------
 
@@ -465,6 +564,24 @@ fun FileInfoDialog(
 }
 
 @Composable
+fun InlineFileViewer(
+    fileBytes: ByteArray,
+    filename: String,
+    mimeType: String,
+    size: Long,
+    onDismiss: () -> Unit,
+) {
+    when {
+        isImageFile(mimeType) -> ImageViewer(fileBytes, filename, onDismiss)
+        isAudioFile(mimeType) -> AudioViewer(fileBytes, filename, mimeType, onDismiss)
+        isMarkdownFile(mimeType, filename) -> MarkdownViewer(fileBytes, filename, onDismiss)
+        isHtmlFile(mimeType, filename) -> HtmlViewer(fileBytes, filename, onDismiss)
+        isPdfFile(mimeType, filename) -> PdfViewer(fileBytes, filename, onDismiss)
+        else -> FileInfoDialog(filename, size, mimeType.ifBlank { "unknown" }, onDismiss)
+    }
+}
+
+@Composable
 private fun InfoRow(label: String, value: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -496,3 +613,110 @@ private fun formatFileSize(bytes: Long): String = when {
     bytes >= 1_024 -> "%.1f KB".format(bytes / 1_024.0)
     else -> "$bytes B"
 }
+
+internal fun supportsInlineFilePreview(mimeType: String, filename: String): Boolean {
+    return isImageFile(mimeType) ||
+        isAudioFile(mimeType) ||
+        isMarkdownFile(mimeType, filename) ||
+        isHtmlFile(mimeType, filename) ||
+        isPdfFile(mimeType, filename)
+}
+
+private fun normalizedMimeType(mimeType: String): String =
+    mimeType.substringBefore(';').trim().lowercase()
+
+private fun isImageFile(mimeType: String): Boolean =
+    normalizedMimeType(mimeType).startsWith("image/")
+
+private fun isAudioFile(mimeType: String): Boolean =
+    normalizedMimeType(mimeType).startsWith("audio/")
+
+internal fun isMarkdownFile(mimeType: String, filename: String): Boolean {
+    val lowerFilename = filename.lowercase()
+    return normalizedMimeType(mimeType) == "text/markdown" ||
+        lowerFilename.endsWith(".md") ||
+        lowerFilename.endsWith(".markdown")
+}
+
+internal fun isHtmlFile(mimeType: String, filename: String): Boolean {
+    val lowerFilename = filename.lowercase()
+    return normalizedMimeType(mimeType) == "text/html" ||
+        lowerFilename.endsWith(".html") ||
+        lowerFilename.endsWith(".htm")
+}
+
+internal fun isPdfFile(mimeType: String, filename: String): Boolean =
+    normalizedMimeType(mimeType) == "application/pdf" || filename.lowercase().endsWith(".pdf")
+
+@Composable
+private fun PdfPage(
+    renderer: PdfRenderer,
+    pageIndex: Int,
+    renderMutex: Mutex,
+) {
+    val context = LocalContext.current
+    val targetWidthPx = remember(context.resources.displayMetrics.widthPixels) {
+        (context.resources.displayMetrics.widthPixels * 0.82f).roundToInt().coerceAtLeast(720)
+    }
+    val bitmap by produceState<Bitmap?>(initialValue = null, renderer, pageIndex, targetWidthPx) {
+        value = withContext(Dispatchers.IO) {
+            renderPdfPage(
+                renderer = renderer,
+                pageIndex = pageIndex,
+                targetWidthPx = targetWidthPx,
+                renderMutex = renderMutex,
+            )
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "Page ${pageIndex + 1}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            tonalElevation = 1.dp,
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = "PDF page ${pageIndex + 1}",
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            }
+        }
+    }
+}
+
+private suspend fun renderPdfPage(
+    renderer: PdfRenderer,
+    pageIndex: Int,
+    targetWidthPx: Int,
+    renderMutex: Mutex,
+): Bitmap? = runCatching {
+    renderMutex.withLock {
+        val page = renderer.openPage(pageIndex)
+        try {
+            val scale = targetWidthPx / page.width.toFloat()
+            val targetHeight = (page.height * scale).roundToInt().coerceAtLeast(1)
+            Bitmap.createBitmap(targetWidthPx, targetHeight, Bitmap.Config.ARGB_8888).also { bitmap ->
+                bitmap.eraseColor(android.graphics.Color.WHITE)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            }
+        } finally {
+            page.close()
+        }
+    }
+}.getOrNull()

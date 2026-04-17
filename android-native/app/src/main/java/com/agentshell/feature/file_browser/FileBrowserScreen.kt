@@ -35,7 +35,9 @@ import com.agentshell.feature.alerts.AudioViewer
 import com.agentshell.feature.alerts.FileInfoDialog
 import com.agentshell.feature.alerts.HtmlViewer
 import com.agentshell.feature.alerts.ImageViewer
+import com.agentshell.feature.alerts.InlineFileViewer
 import com.agentshell.feature.alerts.MarkdownViewer
+import com.agentshell.feature.alerts.supportsInlineFilePreview
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,12 +94,14 @@ fun FileBrowserScreen(
             val filename = viewer.entry.name
             val dismiss = { viewModel.closeViewer() }
             when {
-                mime.startsWith("image/") -> ImageViewer(viewer.bytes, filename, dismiss)
-                mime.startsWith("audio/") -> AudioViewer(viewer.bytes, filename, mime, dismiss)
-                mime == "text/markdown" || filename.endsWith(".md") ->
-                    MarkdownViewer(viewer.bytes, filename, dismiss)
-                mime == "text/html" || filename.endsWith(".html") || filename.endsWith(".htm") ->
-                    HtmlViewer(viewer.bytes, filename, dismiss)
+                supportsInlineFilePreview(mime, filename) ->
+                    InlineFileViewer(
+                        fileBytes = viewer.bytes,
+                        filename = filename,
+                        mimeType = mime,
+                        size = viewer.entry.size,
+                        onDismiss = dismiss,
+                    )
                 mime.startsWith("text/") || isTextFile(filename) ->
                     TextFileViewer(
                         bytes = viewer.bytes,

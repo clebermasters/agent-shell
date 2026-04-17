@@ -266,32 +266,12 @@ private fun AlertDetailDialog(
                 activeFileBytes = null
             }
             when {
-                mime.startsWith("image/") -> {
-                    ImageViewer(
-                        imageBytes = bytes,
+                supportsInlineFilePreview(mime, filename) -> {
+                    InlineFileViewer(
+                        fileBytes = bytes,
                         filename = filename,
-                        onDismiss = dismissViewer,
-                    )
-                }
-                mime.startsWith("audio/") -> {
-                    AudioViewer(
-                        audioBytes = bytes,
-                        filename = filename,
-                        mimeType = mime,
-                        onDismiss = dismissViewer,
-                    )
-                }
-                mime == "text/markdown" || filename.endsWith(".md") -> {
-                    MarkdownViewer(
-                        markdownBytes = bytes,
-                        filename = filename,
-                        onDismiss = dismissViewer,
-                    )
-                }
-                mime == "text/html" || filename.endsWith(".html") || filename.endsWith(".htm") -> {
-                    HtmlViewer(
-                        htmlBytes = bytes,
-                        filename = filename,
+                        mimeType = file.mimeType,
+                        size = file.size,
                         onDismiss = dismissViewer,
                     )
                 }
@@ -334,10 +314,7 @@ private fun AlertDetailDialog(
                                     // For unsupported types, show info without downloading
                                     val mime = file.mimeType.lowercase()
                                     val fn = file.filename
-                                    val needsDownload = mime.startsWith("image/") ||
-                                        mime.startsWith("audio/") ||
-                                        mime == "text/markdown" || fn.endsWith(".md") ||
-                                        mime == "text/html" || fn.endsWith(".html") || fn.endsWith(".htm")
+                                    val needsDownload = supportsInlineFilePreview(mime, fn)
                                     if (needsDownload) {
                                         isDownloading = true
                                         coroutineScope.launch {

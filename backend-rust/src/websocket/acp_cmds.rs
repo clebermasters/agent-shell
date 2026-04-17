@@ -231,6 +231,7 @@ pub(crate) async fn ensure_acp_client(app_state: &Arc<AppState>) -> Result<(), S
                     let external_id =
                         external_session_id(DirectSessionProvider::Opencode, &session_id);
                     let session_key = session_key_for_external_id(&external_id);
+                    let external_id_for_log = external_id.clone();
                     let msg = match update {
                         crate::acp::SessionUpdate::AgentMessageChunk { content } => {
                             let text = content
@@ -347,6 +348,11 @@ pub(crate) async fn ensure_acp_client(app_state: &Arc<AppState>) -> Result<(), S
                         }
                         _ => continue,
                     };
+                    tracing::debug!(
+                        "Broadcasting ACP session update external_id={} session_key={} update_type=stream",
+                        external_id_for_log,
+                        session_key
+                    );
                     if let Err(e) = broadcast_tx.send(msg).await {
                         tracing::error!("Failed to broadcast ACP message: {}", e);
                     }
@@ -1448,8 +1454,20 @@ mod tests {
 
     #[test]
     fn test_write_acp_session_file() {
-        // Just ensure it doesn't panic
+        let dir = TempDir::new().unwrap();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", dir.path());
+
         write_acp_session_file("test-session-id", "/home/user/project");
+
+        let session_file = dir.path().join(".agentshell").join("acp_session");
+        assert!(session_file.exists());
+
+        if let Some(home) = old_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 
     #[tokio::test]

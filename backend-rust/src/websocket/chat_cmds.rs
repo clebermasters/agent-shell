@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -18,6 +19,19 @@ fn parse_direct_session_id(session_id: &str) -> (String, String) {
 
 fn session_key_for_external_id(external_id: &str) -> String {
     format!("acp_{external_id}")
+}
+
+fn resolve_chat_upload_target_dir(session_name: &str) -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        let _ = session_name;
+        None
+    }
+
+    #[cfg(not(test))]
+    {
+        crate::tmux::get_session_path(session_name)
+    }
 }
 
 async fn load_codex_history(
@@ -86,8 +100,8 @@ pub(crate) async fn handle(
             limit,
         } => {
             info!(
-                "Starting chat log watch for {}:{}",
-                session_name, window_index
+                "Starting chat log watch for client={} session={}:{}",
+                state.client_id, session_name, window_index
             );
             let message_tx = state.message_tx.clone();
             let chat_event_store = state.chat_event_store.clone();
@@ -100,7 +114,10 @@ pub(crate) async fn handle(
             {
                 let mut handle_guard = state.chat_log_handle.lock().await;
                 if let Some(handle) = handle_guard.take() {
-                    tracing::info!("Stopping previous chat log watcher");
+                    tracing::info!(
+                        "Stopping previous chat log watcher for client={} before starting session={}:{}",
+                        state.client_id, session_name, window_index
+                    );
                     handle.abort();
                 }
             }
@@ -465,7 +482,14 @@ pub(crate) async fn handle(
             let session_key = session_key_for_external_id(&session_id);
             let (provider, raw_session_id) = parse_direct_session_id(&session_id);
 
-            tracing::debug!("Starting ACP chat log watch for session: {}", session_id);
+            tracing::debug!(
+                "Starting ACP chat log watch for client={} session={} session_key={} window_index={} provider={}",
+                state.client_id,
+                session_id,
+                session_key,
+                window_index,
+                provider
+            );
 
             // Set current session for consistency
             *state.current_session.lock().await = Some(session_key.clone());
@@ -475,7 +499,10 @@ pub(crate) async fn handle(
             {
                 let mut handle_guard = state.chat_log_handle.lock().await;
                 if let Some(handle) = handle_guard.take() {
-                    tracing::info!("Stopping previous chat log watcher");
+                    tracing::info!(
+                        "Stopping previous chat log watcher for client={} before starting ACP session={} window_index={}",
+                        state.client_id, session_id, window_index
+                    );
                     handle.abort();
                 }
             }
@@ -836,7 +863,12 @@ pub(crate) async fn handle(
             }
         }
         WebSocketMessage::UnwatchChatLog => {
-            info!("Stopping chat log watch");
+            info!(
+                "Stopping chat log watch for client={} current_session={:?} current_window={:?}",
+                state.client_id,
+                *state.current_session.lock().await,
+                *state.current_window.lock().await
+            );
             let mut handle_guard = state.chat_log_handle.lock().await;
             if let Some(handle) = handle_guard.take() {
                 handle.abort();
@@ -1039,7 +1071,7 @@ pub(crate) async fn handle(
             );
 
             // Get tmux session working directory
-            let session_path = crate::tmux::get_session_path(&session_name);
+            let session_path = resolve_chat_upload_target_dir(&session_name);
 
             // Save file to session directory if we have a valid path
             let file_path_str = if let Some(ref session_path) = session_path {

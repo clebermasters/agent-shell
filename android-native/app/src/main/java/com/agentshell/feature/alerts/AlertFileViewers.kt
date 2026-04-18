@@ -1,6 +1,7 @@
 package com.agentshell.feature.alerts
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.graphics.pdf.PdfRenderer
@@ -9,6 +10,8 @@ import android.text.method.LinkMovementMethod
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
+import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -386,7 +389,32 @@ fun HtmlViewer(
     filename: String,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
     val htmlContent = remember(htmlBytes) { String(htmlBytes, Charsets.UTF_8) }
+
+    val openInBrowser: () -> Unit = remember(htmlBytes, filename) {
+        {
+            try {
+                val cacheDir = File(context.cacheDir, "file_previews")
+                cacheDir.mkdirs()
+                val file = File(cacheDir, filename)
+                file.writeBytes(htmlBytes)
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file,
+                )
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "text/html")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (_: Exception) {
+                Toast.makeText(context, "No browser available", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -412,6 +440,9 @@ fun HtmlViewer(
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
                     )
+                    TextButton(onClick = openInBrowser) {
+                        Text("Open in Browser", style = MaterialTheme.typography.labelSmall)
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
@@ -424,7 +455,7 @@ fun HtmlViewer(
                     factory = { ctx ->
                         WebView(ctx).apply {
                             webViewClient = WebViewClient()
-                            settings.javaScriptEnabled = false
+                            settings.javaScriptEnabled = true
                             settings.loadWithOverviewMode = true
                             settings.useWideViewPort = true
                         }

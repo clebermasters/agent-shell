@@ -428,15 +428,27 @@ fn list_files(path: &str) -> anyhow::Result<Vec<FileEntry>> {
     let mut entries: Vec<FileEntry> = std::fs::read_dir(path)?
         .filter_map(|res| res.ok())
         .map(|entry| {
-            let metadata = entry.metadata();
-            let is_directory = metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            let size = metadata
-                .as_ref()
+            let entry_path = entry.path();
+
+            // Use symlink_metadata to detect symlinks without following them
+            let sym_meta = entry_path.symlink_metadata().ok();
+            let is_symlink = sym_meta.as_ref().map(|m| m.is_symlink()).unwrap_or(false);
+
+            // Try metadata (follows symlinks) for actual type/size info
+            let followed_meta = entry_path.metadata().ok();
+
+            // Use followed metadata if available, fall back to symlink metadata
+            let effective_meta = followed_meta.as_ref().or(sym_meta.as_ref());
+
+            let is_directory = effective_meta
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
+
+            let size = effective_meta
                 .map(|m| if m.is_file() { m.len() } else { 0 })
                 .unwrap_or(0);
-            let modified = metadata
-                .as_ref()
-                .ok()
+
+            let modified = effective_meta
                 .and_then(|m| m.modified().ok())
                 .map(|t| {
                     let dt: chrono::DateTime<chrono::Utc> = t.into();
@@ -445,10 +457,11 @@ fn list_files(path: &str) -> anyhow::Result<Vec<FileEntry>> {
 
             FileEntry {
                 name: entry.file_name().to_string_lossy().to_string(),
-                path: entry.path().to_string_lossy().to_string(),
+                path: entry_path.to_string_lossy().to_string(),
                 is_directory,
                 size,
                 modified,
+                is_symlink,
             }
         })
         .collect();

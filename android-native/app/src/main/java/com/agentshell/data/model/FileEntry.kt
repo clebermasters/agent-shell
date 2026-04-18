@@ -8,5 +8,6 @@ data class FileEntry(
     val path: String,
     val isDirectory: Boolean,
     val size: Long,
-    val modified: String? = null
+    val modified: String? = null,
+    val isSymlink: Boolean = false,
 )

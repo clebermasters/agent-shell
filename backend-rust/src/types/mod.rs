@@ -795,6 +795,8 @@ pub struct FileEntry {
     pub is_directory: bool,
     pub size: u64,
     pub modified: Option<String>, // ISO 8601
+    #[serde(default)]
+    pub is_symlink: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

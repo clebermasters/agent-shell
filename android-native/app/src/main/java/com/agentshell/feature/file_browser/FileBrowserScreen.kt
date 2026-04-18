@@ -446,6 +446,7 @@ private fun FileBrowserEntry(
         name = entry.name,
         subtitle = subtitle.ifEmpty { null },
         isDirectory = entry.isDirectory,
+        isSymlink = entry.isSymlink,
         onTap = onTap,
         onLongPress = { showActions = true },
         isSelected = isSelected,
@@ -462,6 +463,7 @@ private fun ListTile(
     name: String,
     subtitle: String?,
     isDirectory: Boolean,
+    isSymlink: Boolean = false,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
     isSelected: Boolean,
@@ -482,7 +484,13 @@ private fun ListTile(
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(name, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(name, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (isSymlink) {
+                    Spacer(Modifier.width(4.dp))
+                    Text("@", fontSize = 11.sp, color = MaterialTheme.colorScheme.tertiary)
+                }
+            }
             subtitle?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline) }
         }
         if (isDirectory && !isCheckbox) {

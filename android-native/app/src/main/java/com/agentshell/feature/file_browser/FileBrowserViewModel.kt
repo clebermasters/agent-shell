@@ -316,6 +316,7 @@ class FileBrowserViewModel @Inject constructor(
             isDirectory = m["isDirectory"] as? Boolean ?: false,
             size = (m["size"] as? Number)?.toLong() ?: 0L,
             modified = m["modified"] as? String,
+            isSymlink = m["isSymlink"] as? Boolean ?: false,
         )
     }
 }

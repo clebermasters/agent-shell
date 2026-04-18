@@ -9,6 +9,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -19,6 +21,14 @@ import javax.inject.Singleton
 // Speech-to-text via OpenAI Whisper API.
 // Mirrors flutter/lib/data/services/whisper_service.dart.
 // ---------------------------------------------------------------------------
+
+/** Result of a transcription attempt. */
+sealed class TranscriptionResult {
+    data class Success(val text: String) : TranscriptionResult()
+    data class RetryableError(val message: String) : TranscriptionResult()
+    data class FatalError(val message: String) : TranscriptionResult()
+}
+
 @Singleton
 class WhisperService @Inject constructor() {
 
@@ -39,13 +49,13 @@ class WhisperService @Inject constructor() {
      *
      * @param audioFilePath Absolute path to the recorded .m4a file.
      * @param apiKey        OpenAI API key (Bearer token).
-     * @return The transcribed text string, or null on error.
+     * @return [TranscriptionResult] with the transcribed text or error details.
      */
-    suspend fun transcribe(audioFilePath: String, apiKey: String): String? =
+    suspend fun transcribe(audioFilePath: String, apiKey: String): TranscriptionResult =
         withContext(Dispatchers.IO) {
             try {
                 val file = File(audioFilePath)
-                if (!file.exists()) return@withContext null
+                if (!file.exists()) return@withContext TranscriptionResult.FatalError("Audio file not found")
 
                 val requestBody = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
@@ -64,13 +74,30 @@ class WhisperService @Inject constructor() {
                     .build()
 
                 val response = client.newCall(request).execute()
-                if (!response.isSuccessful) return@withContext null
 
-                val body = response.body?.string() ?: return@withContext null
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    val msg = response.body?.string()?.take(200) ?: "HTTP $code"
+                    // Auth errors (401/403) are not retryable; server/network errors are
+                    return@withContext if (code in 400..499 && code !in 500..599)
+                        TranscriptionResult.FatalError("API error: $msg")
+                    else
+                        TranscriptionResult.RetryableError("Server error ($code): $msg")
+                }
+
+                val body = response.body?.string()
+                    ?: return@withContext TranscriptionResult.RetryableError("Empty response from API")
+
                 val json = JSONObject(body)
-                json.optString("text").takeIf { it.isNotEmpty() }
-            } catch (_: Exception) {
-                null
+                val text = json.optString("text", "")
+                if (text.isEmpty()) TranscriptionResult.Success("")
+                else TranscriptionResult.Success(text)
+            } catch (e: SocketTimeoutException) {
+                TranscriptionResult.RetryableError("Request timed out: ${e.message}")
+            } catch (e: IOException) {
+                TranscriptionResult.RetryableError("Network error: ${e.message}")
+            } catch (e: Exception) {
+                TranscriptionResult.RetryableError("Unexpected error: ${e.message}")
             }
         }
 }

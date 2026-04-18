@@ -33,7 +33,8 @@ import com.agentshell.data.repository.ChatRepository
 import com.agentshell.data.repository.HostRepository
 import com.agentshell.data.services.AudioPlayerManager
 import com.agentshell.data.services.AudioService
-import com.agentshell.data.services.WhisperService
+import com.agentshell.data.services.TranscriptionQueueService
+import com.agentshell.data.services.TranscriptionSuccessEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -91,6 +92,8 @@ data class ChatUiState(
     val recordingDuration: Int = 0,
     val isTranscribing: Boolean = false,
     val transcribedText: String? = null,
+    val transcriptionError: String? = null,
+    val failedTranscriptionJobId: String? = null,
     val attachedFile: AttachedFile? = null,
     val isUploading: Boolean = false,
     val totalMessageCount: Int = 0,
@@ -117,7 +120,7 @@ class ChatViewModel @Inject constructor(
     private val hostRepository: HostRepository,
     private val dataStore: PreferencesDataStore,
     private val audioService: AudioService,
-    private val whisperService: WhisperService,
+    private val transcriptionQueue: TranscriptionQueueService,
     private val app: Application,
     private val systemRepository: SystemRepository,
     val audioPlayerManager: AudioPlayerManager,
@@ -319,6 +322,18 @@ class ChatViewModel @Inject constructor(
                 _uiState.update { it.copy(recordingDuration = seconds) }
             }
         }
+
+        // Observe transcription retry successes from the queue
+        viewModelScope.launch {
+            transcriptionQueue.successEvents.collect { event ->
+                if (event.source == com.agentshell.data.model.TranscriptionJob.Source.CHAT) {
+                    _uiState.update {
+                        it.copy(isTranscribing = false, transcribedText = event.text, transcriptionError = null)
+                    }
+                }
+            }
+        }
+
         observeConnectionRecovery()
         collectMessages()
         viewModelScope.launch {
@@ -568,10 +583,32 @@ class ChatViewModel @Inject constructor(
     fun stopVoiceRecording() {
         viewModelScope.launch {
             val path = audioService.stopRecording() ?: return@launch
-            _uiState.update { it.copy(isTranscribing = true) }
+            _uiState.update { it.copy(isTranscribing = true, transcriptionError = null) }
             val apiKey = dataStore.openaiApiKey.first()
-            val text = whisperService.transcribe(path, apiKey)
-            _uiState.update { it.copy(isTranscribing = false, transcribedText = text) }
+            transcriptionQueue.enqueue(path, apiKey, com.agentshell.data.model.TranscriptionJob.Source.CHAT)
+
+            // Observe pending result
+            transcriptionQueue.pendingResult.collect { result ->
+                if (result == null) return@collect
+                when (result) {
+                    is TranscriptionQueueService.PendingResult.Success -> {
+                        _uiState.update {
+                            it.copy(isTranscribing = false, transcribedText = result.text)
+                        }
+                        transcriptionQueue.clearPendingResult()
+                    }
+                    is TranscriptionQueueService.PendingResult.Failed -> {
+                        _uiState.update {
+                            it.copy(
+                                isTranscribing = false,
+                                transcriptionError = result.error,
+                                failedTranscriptionJobId = result.jobId,
+                            )
+                        }
+                        transcriptionQueue.clearPendingResult()
+                    }
+                }
+            }
         }
     }
 
@@ -581,6 +618,18 @@ class ChatViewModel @Inject constructor(
 
     fun clearTranscribedText() {
         _uiState.update { it.copy(transcribedText = null) }
+    }
+
+    fun retryTranscription(jobId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTranscribing = true, transcriptionError = null) }
+            val apiKey = dataStore.openaiApiKey.first()
+            transcriptionQueue.retryJob(jobId, apiKey)
+        }
+    }
+
+    fun dismissTranscriptionError() {
+        _uiState.update { it.copy(transcriptionError = null, failedTranscriptionJobId = null) }
     }
 
     suspend fun isVoiceAutoEnter(): Boolean = dataStore.voiceAutoEnter.first()

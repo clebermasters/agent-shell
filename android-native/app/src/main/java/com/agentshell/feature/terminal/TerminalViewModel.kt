@@ -12,7 +12,8 @@ import com.agentshell.data.remote.getSessionCwd
 import com.agentshell.data.remote.renameSession
 import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.TerminalService
-import com.agentshell.data.services.WhisperService
+import com.agentshell.data.services.TranscriptionQueueService
+import com.agentshell.data.services.TranscriptionSuccessEvent
 import com.agentshell.terminal.XTermController
 import android.app.Application
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -42,6 +43,8 @@ data class TerminalUiState(
     val isRecording: Boolean = false,
     val recordingDuration: Int = 0,
     val isTranscribing: Boolean = false,
+    val transcriptionError: String? = null,
+    val failedTranscriptionJobId: String? = null,
 )
 
 @HiltViewModel
@@ -50,7 +53,7 @@ class TerminalViewModel @Inject constructor(
     private val terminalService: TerminalService,
     private val webSocketService: WebSocketService,
     private val audioService: AudioService,
-    private val whisperService: WhisperService,
+    private val transcriptionQueue: TranscriptionQueueService,
     private val prefs: PreferencesDataStore,
     private val macroDao: CommandMacroDao,
 ) : ViewModel() {
@@ -116,6 +119,18 @@ class TerminalViewModel @Inject constructor(
         viewModelScope.launch {
             audioService.isRecording.collect { recording ->
                 _uiState.update { it.copy(isRecording = recording) }
+            }
+        }
+
+        // Observe transcription retry successes from the queue
+        viewModelScope.launch {
+            transcriptionQueue.successEvents.collect { event ->
+                if (event.source == com.agentshell.data.model.TranscriptionJob.Source.TERMINAL) {
+                    if (event.text.isNotBlank()) {
+                        terminalService.sendInput(event.text)
+                    }
+                    _uiState.update { it.copy(isTranscribing = false, transcriptionError = null) }
+                }
             }
         }
 
@@ -206,14 +221,46 @@ class TerminalViewModel @Inject constructor(
     fun stopRecording() {
         viewModelScope.launch {
             val path = audioService.stopRecording() ?: return@launch
-            _uiState.update { it.copy(isTranscribing = true) }
+            _uiState.update { it.copy(isTranscribing = true, transcriptionError = null) }
             val apiKey = prefs.openaiApiKey.first()
-            val text = whisperService.transcribe(path, apiKey)
-            _uiState.update { it.copy(isTranscribing = false) }
-            if (!text.isNullOrBlank()) {
-                terminalService.sendInput(text)
+            transcriptionQueue.enqueue(path, apiKey, com.agentshell.data.model.TranscriptionJob.Source.TERMINAL)
+
+            // Observe pending result
+            transcriptionQueue.pendingResult.collect { result ->
+                if (result == null) return@collect
+                when (result) {
+                    is TranscriptionQueueService.PendingResult.Success -> {
+                        if (result.text.isNotBlank()) {
+                            terminalService.sendInput(result.text)
+                        }
+                        _uiState.update { it.copy(isTranscribing = false) }
+                        transcriptionQueue.clearPendingResult()
+                    }
+                    is TranscriptionQueueService.PendingResult.Failed -> {
+                        _uiState.update {
+                            it.copy(
+                                isTranscribing = false,
+                                transcriptionError = result.error,
+                                failedTranscriptionJobId = result.jobId,
+                            )
+                        }
+                        transcriptionQueue.clearPendingResult()
+                    }
+                }
             }
         }
+    }
+
+    fun retryTranscription(jobId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTranscribing = true, transcriptionError = null) }
+            val apiKey = prefs.openaiApiKey.first()
+            transcriptionQueue.retryJob(jobId, apiKey)
+        }
+    }
+
+    fun dismissTranscriptionError() {
+        _uiState.update { it.copy(transcriptionError = null, failedTranscriptionJobId = null) }
     }
 
     fun cancelRecording() {

@@ -483,6 +483,18 @@ fun TerminalScreen(
                 )
             }
 
+            // Show transcription error with retry option
+            if (uiState.transcriptionError != null && uiState.failedTranscriptionJobId != null) {
+                val error = uiState.transcriptionError
+                val jobId = uiState.failedTranscriptionJobId
+                val ctx = LocalContext.current
+                LaunchedEffect(error, jobId) {
+                    android.widget.Toast
+                        .makeText(ctx, "Transcription failed: $error", android.widget.Toast.LENGTH_LONG)
+                        .show()
+                }
+            }
+
             // Swipe navigation dot indicator
             if (recentSessions.size > 1) {
                 Row(

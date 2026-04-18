@@ -248,24 +248,6 @@ fun SessionsScreen(
                 }
             }
         },
-        floatingActionButton = {
-            if (!uiState.isSelectionMode) {
-                FloatingActionButton(
-                    onClick = {
-                        if (selectedTabIndex == 2) {
-                            favoriteDraftToAdd = FavoriteDraft(
-                                title = "Add Favorite",
-                                initialName = "",
-                                initialPath = "",
-                            )
-                        }
-                        else showCreateDialog = true
-                    },
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "New")
-                }
-            }
-        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(

@@ -1,6 +1,7 @@
 package com.agentshell.data.repository
 
 import android.content.Context
+import android.os.SystemClock
 import com.agentshell.core.util.NotificationHelper
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.ChatMessage
@@ -162,15 +163,17 @@ class ChatActivityRepository @Inject constructor(
 
     private fun notifyReply(state: ChatReadState, preview: String, silent: Boolean = false): Boolean {
         if (!notificationsEnabled || isViewing(state.target) || state.unread.isEmpty()) return false
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         val coalesce = lastAlert[state.target.key]?.let { now - it < 5_000 } == true
-        NotificationHelper.showChat(context, state.target, preview.trim().take(300).ifBlank { "New reply" }, state.unread.size, silent || coalesce)
-        if (!silent && !coalesce) lastAlert[state.target.key] = now
-        return true
+        val requestSound = !silent && !coalesce
+        NotificationHelper.showChat(context, state.target, preview.trim().take(300).ifBlank { "New reply" }, state.unread.size, silent = !requestSound)
+        if (requestSound) lastAlert[state.target.key] = now
+        // A silent preview must not prevent an audible alert when the reply completes later.
+        return requestSound
     }
 
     @Suppress("UNCHECKED_CAST")
-    private suspend fun handleEvent(hostId: String, message: Map<String, Any?>, watchedTarget: ChatTarget? = null) {
+    internal suspend fun handleEvent(hostId: String, message: Map<String, Any?>, watchedTarget: ChatTarget? = null) {
         when (message["type"] as? String) {
             "sessions-list", "session_list" -> {
                 if (watchedTarget != null) return

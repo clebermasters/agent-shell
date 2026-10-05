@@ -3,6 +3,7 @@ package com.agentshell.data.repository
 import android.Manifest
 import android.app.Application
 import android.app.NotificationManager
+import android.app.Notification
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.test.core.app.ApplicationProvider
 import com.agentshell.core.util.NotificationHelper
@@ -34,6 +35,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
+import java.time.Duration
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -135,5 +140,56 @@ class ChatActivityRepositoryTest {
         repo.history(target, listOf(old, new))
         assertTrue(shadowOf(manager).allNotifications.isEmpty())
         assertEquals("new", repo.states.value.getValue(target.key).unread.single().id)
+    }
+
+    @Test fun aSecondChatRequestsSoundWhileTheFirstChatsNotificationRemainsUnread() = runTest {
+        val repo = repository()
+        val second = target.copy(sessionName = "second chat")
+        for (chat in listOf(target, second)) {
+            repo.register(chat)
+            repo.history(chat, listOf(old))
+        }
+        repo.history(target, listOf(old, new))
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(3))
+        repo.history(second, listOf(old, new))
+        val notifications = shadowOf(manager).allNotifications
+        assertEquals(2, notifications.size)
+        assertTrue(notifications.all { it.groupAlertBehavior == Notification.GROUP_ALERT_ALL })
+        assertTrue(notifications.all { it.flags and Notification.FLAG_ONLY_ALERT_ONCE == 0 })
+    }
+
+    @Test fun aSilentStreamingPreviewMustNotSuppressTheLaterAudibleCompletion() = runTest {
+        val repo = repository()
+        val acp = ChatTarget.create("host-a", "codex:background", isAcp = true)
+        for (chat in listOf(target, acp)) {
+            repo.register(chat)
+            repo.history(chat, listOf(old))
+            repo.history(chat, listOf(old, new))
+        }
+        repo.handleEvent("host-a", mapOf("type" to "acp-message-chunk", "sessionId" to acp.sessionName, "content" to "A new streamed reply"))
+        advanceTimeBy(800)
+        runCurrent()
+        fun acpNotification() = shadowOf(manager).allNotifications.single {
+            NotificationHelper.chatTarget(shadowOf(it.contentIntent).savedIntent) == acp
+        }
+        assertEquals(Notification.GROUP_ALERT_SUMMARY, acpNotification().groupAlertBehavior)
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(3))
+        repo.handleEvent("host-a", mapOf("type" to "acp-prompt-done", "sessionId" to acp.sessionName))
+        assertEquals(2, shadowOf(manager).allNotifications.size)
+        assertEquals(Notification.GROUP_ALERT_ALL, acpNotification().groupAlertBehavior)
+    }
+
+    @Test fun anAudibleStreamingPreviewKeepsItsCompletionUpdateSilent() = runTest {
+        val repo = repository()
+        val acp = ChatTarget.create("host-a", "codex:background", isAcp = true)
+        repo.register(acp)
+        repo.history(acp, listOf(old))
+        repo.handleEvent("host-a", mapOf("type" to "acp-message-chunk", "sessionId" to acp.sessionName, "content" to "A new streamed reply"))
+        advanceTimeBy(800)
+        runCurrent()
+        assertEquals(Notification.GROUP_ALERT_ALL, shadowOf(manager).allNotifications.single().groupAlertBehavior)
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(3))
+        repo.handleEvent("host-a", mapOf("type" to "acp-prompt-done", "sessionId" to acp.sessionName))
+        assertEquals(Notification.GROUP_ALERT_SUMMARY, shadowOf(manager).allNotifications.single().groupAlertBehavior)
     }
 }

@@ -12,6 +12,11 @@ import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatBlockType
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
+import com.agentshell.data.model.ChatMessageParser
+import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.ChatReadState
+import com.agentshell.data.model.ChatCursor
+import com.agentshell.data.repository.ChatActivityRepository
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.repository.SystemRepository
 import com.agentshell.data.remote.acpRespondPermission
@@ -107,6 +112,9 @@ data class ChatUiState(
     val detectedTool: String? = null,
     val contextWindowUsage: Double? = null,
     val modelName: String? = null,
+    val firstUnreadMessageId: String? = null,
+    val readTrackingReady: Boolean = false,
+    val isLocatingUnread: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------
@@ -117,6 +125,7 @@ data class ChatUiState(
 class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val chatRepository: ChatRepository,
+    private val chatActivityRepository: ChatActivityRepository,
     private val hostRepository: HostRepository,
     private val dataStore: PreferencesDataStore,
     private val audioService: AudioService,
@@ -157,6 +166,14 @@ class ChatViewModel @Inject constructor(
     private var acpChunkFlushJob: Job? = null
     private var hasSeenConnectedState = false
     private var shouldResubscribeOnReconnect = false
+    private var readTarget: ChatTarget? = null
+    private var readState: ChatReadState? = null
+    private var readHostServerUrl: String? = null
+    private var readStateJob: Job? = null
+    private var visitUnreadCursor: ChatCursor? = null
+    private val readOwner = UUID.randomUUID().toString()
+    private var screenActive = false
+    private var followingLive = false
 
     private fun newMessageList(messages: List<ChatMessage> = emptyList()): SnapshotStateList<ChatMessage> =
         mutableStateListOf<ChatMessage>().apply { addAll(messages) }
@@ -164,12 +181,109 @@ class ChatViewModel @Inject constructor(
     private fun replaceMessages(messages: List<ChatMessage>) {
         val target = _uiState.value.messages
         target.clear()
-        target.addAll(messages)
+        target.addAll(messages.distinctBy { it.id })
     }
 
     private fun prependMessages(messages: List<ChatMessage>) {
         if (messages.isEmpty()) return
-        _uiState.value.messages.addAll(0, messages)
+        val existing = _uiState.value.messages.mapTo(mutableSetOf()) { it.id }
+        _uiState.value.messages.addAll(0, messages.filter { it.id !in existing }.distinctBy { it.id })
+    }
+
+    private suspend fun prepareReadTracking(sessionName: String, windowIndex: Int, isAcp: Boolean, cwd: String = "") {
+        val host = hostRepository.getSelectedHostOnce()
+        if (host == null) {
+            _uiState.update { it.copy(readTrackingReady = true) }
+            return
+        }
+        readStateJob?.cancel()
+        chatActivityRepository.setViewing(readOwner, null, false)
+        val target = ChatTarget.create(host.id, sessionName, windowIndex, isAcp, cwd)
+        readHostServerUrl = "${host.wsUrl}/ws"
+        readTarget = target
+        visitUnreadCursor = null
+        readState = chatActivityRepository.register(target)
+        _uiState.update { it.copy(firstUnreadMessageId = null, readTrackingReady = true, isLocatingUnread = false) }
+        readStateJob = viewModelScope.launch {
+            chatActivityRepository.states.collect { states ->
+                readState = states[target.key]
+                updateUnreadBoundary()
+            }
+        }
+        chatActivityRepository.setViewing(readOwner, target, screenActive && followingLive)
+    }
+
+    private fun updateUnreadBoundary() {
+        val state = _uiState.value
+        if (state.firstUnreadMessageId != null && state.messages.any { it.id == state.firstUnreadMessageId }) return
+        if (state.firstUnreadMessageId != null) _uiState.update { it.copy(firstUnreadMessageId = null) }
+        val tracking = readState ?: return
+        val oldestLoaded = state.messages.firstOrNull()
+        if (tracking.unread.isNotEmpty() && tracking.lastRead != null && state.hasMoreMessages &&
+            oldestLoaded != null && oldestLoaded.timestamp > tracking.lastRead.timestamp &&
+            state.messages.none { it.id == tracking.lastRead.id }
+        ) {
+            _uiState.update { it.copy(isLocatingUnread = true) }
+            loadMore()
+            return
+        }
+        if (state.isLocatingUnread) {
+            val earlierCursor = tracking.unread.firstOrNull()
+            if (earlierCursor != null && (visitUnreadCursor == null || earlierCursor.timestamp < visitUnreadCursor!!.timestamp)) {
+                visitUnreadCursor = earlierCursor
+            }
+        }
+        val cursor = visitUnreadCursor ?: tracking.unread.firstOrNull() ?: return
+        visitUnreadCursor = cursor
+        if (state.isLoading || state.messages.isEmpty()) return
+        val index = tracking.copy(unread = listOf(cursor)).unreadIndex(state.messages, state.hasMoreMessages)
+        if (index != null) {
+            _uiState.update { it.copy(firstUnreadMessageId = state.messages[index].id, isLocatingUnread = false) }
+        } else if (state.hasMoreMessages) {
+            _uiState.update { it.copy(isLocatingUnread = true) }
+            loadMore()
+        } else {
+            _uiState.update { it.copy(isLocatingUnread = false) }
+        }
+    }
+
+    fun setScreenActive(active: Boolean) {
+        if (screenActive && !active) {
+            visitUnreadCursor = null
+            _uiState.update { it.copy(firstUnreadMessageId = null) }
+        }
+        screenActive = active
+        chatActivityRepository.setViewing(readOwner, readTarget, active && followingLive)
+        if (active) updateUnreadBoundary()
+    }
+
+    fun setFollowingLive(following: Boolean) {
+        followingLive = following
+        chatActivityRepository.setViewing(readOwner, readTarget, screenActive && following)
+    }
+
+    fun markReadThrough(messageId: String) {
+        if (!screenActive || !_uiState.value.readTrackingReady || _uiState.value.isLocatingUnread) return
+        val target = readTarget ?: return
+        val messages = _uiState.value.messages.toList()
+        val index = messages.indexOfFirst { it.id == messageId }
+        if (index < 0) return
+        viewModelScope.launch { chatActivityRepository.readThrough(target, messages.take(index + 1)) }
+    }
+
+    private fun reconcileReadHistory(messages: List<ChatMessage>) {
+        val target = readTarget
+        if (target == null) {
+            _uiState.update { it.copy(readTrackingReady = true) }
+            return
+        }
+        _uiState.update { it.copy(readTrackingReady = false) }
+        viewModelScope.launch {
+            chatActivityRepository.history(target, messages)
+            readState = chatActivityRepository.states.value[target.key]
+            updateUnreadBoundary()
+            _uiState.update { it.copy(readTrackingReady = true) }
+        }
     }
 
     private fun rawAcpSessionId(sessionName: String): String = sessionName.removePrefix("acp_")
@@ -373,8 +487,11 @@ class ChatViewModel @Inject constructor(
         logDebug("Initial TMUX chat watch session=$sessionName window=$windowIndex")
         hasSeenConnectedState = false
         restoreDraft(draftKey(sessionName, windowIndex))
-        webSocketService.watchChatLog(sessionName, windowIndex)
-        webSocketService.getSessionCwd(sessionName)
+        viewModelScope.launch {
+            prepareReadTracking(sessionName, windowIndex, false)
+            webSocketService.watchChatLog(sessionName, windowIndex)
+            webSocketService.getSessionCwd(sessionName)
+        }
     }
 
     /** Begin watching an ACP chat session. */
@@ -396,11 +513,14 @@ class ChatViewModel @Inject constructor(
         }
         logDebug("Initial ACP chat watch session=$sessionName backend=${directBackendForSession(sessionName)} cwd=${cwd.isNotBlank()}")
         hasSeenConnectedState = false
-        webSocketService.selectBackend(directBackendForSession(sessionName))
-        if (cwd.isNotBlank()) {
-            webSocketService.acpResumeSession(sessionName, cwd)
+        viewModelScope.launch {
+            prepareReadTracking(sessionName, 0, true, cwd)
+            webSocketService.selectBackend(directBackendForSession(sessionName))
+            if (cwd.isNotBlank()) {
+                webSocketService.acpResumeSession(sessionName, cwd)
+            }
+            webSocketService.watchAcpChatLog(sessionName, limit = 30)
         }
-        webSocketService.watchAcpChatLog(sessionName, limit = 30)
     }
 
     /** Stop watching the current chat log. */
@@ -676,6 +796,7 @@ class ChatViewModel @Inject constructor(
         messageCollectionJob?.cancel()
         messageCollectionJob = viewModelScope.launch {
             chatRepository.chatMessages.collect { message ->
+                if (readHostServerUrl != null && message["_sourceServerUrl"] != null && message["_sourceServerUrl"] != readHostServerUrl) return@collect
                 if (!chatRepository.isChatMessage(message)) return@collect
                 when (val type = message["type"] as? String) {
                     "chat-history"       -> handleChatHistory(message)
@@ -749,6 +870,7 @@ class ChatViewModel @Inject constructor(
             )
         }
         replaceMessages(parsed)
+        reconcileReadHistory(parsed)
 
         when (tool) {
             "claude" -> systemRepository.requestClaudeUsage()
@@ -774,7 +896,16 @@ class ChatViewModel @Inject constructor(
         val hasMore = message["hasMore"] as? Boolean ?: false
 
         prependMessages(newMessages)
-        _uiState.update { it.copy(isLoadingMore = false, hasMoreMessages = hasMore) }
+        _uiState.update { it.copy(readTrackingReady = false) }
+        viewModelScope.launch {
+            readTarget?.let { target ->
+                chatActivityRepository.olderHistory(target, newMessages)
+                readState = chatActivityRepository.states.value[target.key]
+            }
+            _uiState.update { it.copy(isLoadingMore = false, hasMoreMessages = hasMore) }
+            updateUnreadBoundary()
+            _uiState.update { it.copy(readTrackingReady = true) }
+        }
     }
 
     private fun handleChatEvent(message: Map<String, Any?>) {
@@ -798,18 +929,9 @@ class ChatViewModel @Inject constructor(
         if (msg.messageType == ChatMessageType.USER && source != "webhook") return
 
         val messages = _uiState.value.messages
-        if (messages.isNotEmpty() &&
-            messages.last().messageType == ChatMessageType.ASSISTANT &&
-            msg.messageType == ChatMessageType.ASSISTANT
-        ) {
-            val lastMsg = messages.last()
-            messages[messages.size - 1] = lastMsg.copy(
-                blocks = lastMsg.blocks + msg.blocks,
-                content = mergeContent(lastMsg.content, msg.content),
-            )
-        } else {
-            messages.add(msg)
-        }
+        val existingIndex = messages.indexOfFirst { it.id == msg.id }
+        if (existingIndex >= 0) messages[existingIndex] = msg else messages.add(msg)
+        updateUnreadBoundary()
     }
 
     private fun handleChatFileMessage(message: Map<String, Any?>) {
@@ -852,6 +974,8 @@ class ChatViewModel @Inject constructor(
         if (!matches) return
 
         if (success) {
+            visitUnreadCursor = null
+            readTarget?.let { target -> viewModelScope.launch { chatActivityRepository.clear(target) } }
             _uiState.update {
                 ChatUiState(
                     sessionName = it.sessionName,
@@ -861,6 +985,7 @@ class ChatViewModel @Inject constructor(
                     showToolCalls = it.showToolCalls,
                     fileBaseUrl = it.fileBaseUrl,
                     sessionCwd = it.sessionCwd,
+                    readTrackingReady = true,
                 )
             }
             _chatCleared.tryEmit(true)
@@ -937,6 +1062,7 @@ class ChatViewModel @Inject constructor(
         if (!state.isStreaming) {
             _uiState.update { it.copy(isStreaming = true) }
         }
+        updateUnreadBoundary()
     }
 
     private fun handleAcpToolCall(message: Map<String, Any?>) {
@@ -1063,96 +1189,14 @@ class ChatViewModel @Inject constructor(
 
         replaceMessages(parsed)
         _uiState.update { it.copy(isLoading = false, hasMoreMessages = hasMore) }
+        reconcileReadHistory(parsed)
     }
 
     // -------------------------------------------------------------------------
     // Parsing helpers
     // -------------------------------------------------------------------------
 
-    private fun parseMessage(data: Map<String, Any?>): ChatMessage {
-        val role = data["role"] as? String ?: "assistant"
-        val blocksData = data["blocks"] as? List<*> ?: emptyList<Any>()
-
-        val blocks = blocksData.mapNotNull { b ->
-            @Suppress("UNCHECKED_CAST")
-            val block = b as? Map<String, Any?> ?: return@mapNotNull null
-            val blockType = block["type"] as? String ?: "text"
-            when (blockType) {
-                "tool_call" -> ChatBlock(
-                    type = "tool_call",
-                    toolName = block["name"] as? String,
-                    summary = block["summary"] as? String,
-                    input = parseInputMap(block["input"]),
-                )
-                "tool_result" -> ChatBlock(
-                    type = "tool_result",
-                    toolName = block["toolName"] as? String,
-                    content = block["content"] as? String,
-                    summary = block["summary"] as? String,
-                )
-                "thinking" -> ChatBlock(
-                    type = "thinking",
-                    content = block["content"] as? String ?: "",
-                )
-                "image" -> ChatBlock(
-                    type = "image",
-                    id = block["id"] as? String ?: "",
-                    mimeType = block["mimeType"] as? String ?: "",
-                    altText = block["altText"] as? String,
-                )
-                "audio" -> ChatBlock(
-                    type = "audio",
-                    id = block["id"] as? String ?: "",
-                    mimeType = block["mimeType"] as? String ?: "",
-                    durationSeconds = (block["durationSeconds"] as? Number)?.toDouble(),
-                )
-                "file" -> ChatBlock(
-                    type = "file",
-                    id = block["id"] as? String ?: "",
-                    filename = block["filename"] as? String ?: "",
-                    mimeType = block["mimeType"] as? String ?: "",
-                    sizeBytes = (block["sizeBytes"] as? Number)?.toLong(),
-                )
-                else -> ChatBlock(type = "text", text = block["text"] as? String ?: "")
-            }
-        }
-
-        val content: String
-        val type: String
-
-        if (role == "user") {
-            content = blocks.filter { it.blockType == ChatBlockType.TEXT }
-                .joinToString("\n") { it.text ?: "" }
-            type = "user"
-        } else {
-            content = blocks.filter { it.blockType == ChatBlockType.TEXT }
-                .joinToString("\n") { it.text ?: "" }
-            type = when {
-                blocks.any { it.blockType == ChatBlockType.TOOL_CALL } -> "tool_call"
-                blocks.any { it.blockType == ChatBlockType.TOOL_RESULT } -> "tool_result"
-                else -> "assistant"
-            }
-        }
-
-        val timestampRaw = data["timestamp"] as? String
-        val timestamp = timestampRaw?.let {
-            runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull()
-        } ?: System.currentTimeMillis()
-
-        return ChatMessage(
-            id = UUID.randomUUID().toString(),
-            type = type,
-            content = content.ifEmpty { null },
-            timestamp = timestamp,
-            blocks = blocks,
-        )
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun parseInputMap(value: Any?): Map<String, String>? {
-        val map = value as? Map<*, *> ?: return null
-        return map.entries.associate { (k, v) -> k.toString() to v.toString() }
-    }
+    private fun parseMessage(data: Map<String, Any?>): ChatMessage = ChatMessageParser.parse(data)
 
     private fun buildUserMessage(text: String): ChatMessage = ChatMessage(
         id = UUID.randomUUID().toString(),
@@ -1161,16 +1205,6 @@ class ChatViewModel @Inject constructor(
         timestamp = System.currentTimeMillis(),
         blocks = listOf(ChatBlock(type = "text", text = text)),
     )
-
-    private fun mergeContent(left: String?, right: String?): String {
-        val a = left?.trim() ?: ""
-        val b = right?.trim() ?: ""
-        return when {
-            a.isEmpty() -> b
-            b.isEmpty() -> a
-            else -> "$a\n$b"
-        }
-    }
 
     private fun isDuplicateFileMessage(
         existing: List<ChatMessage>,
@@ -1190,6 +1224,7 @@ class ChatViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        chatActivityRepository.setViewing(readOwner, null, false)
         clearPendingAcpChunk()
         super.onCleared()
         messageCollectionJob?.cancel()

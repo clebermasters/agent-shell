@@ -1,0 +1,66 @@
+package com.agentshell.core.util
+
+import android.Manifest
+import android.app.Application
+import android.app.Notification
+import android.app.NotificationManager
+import android.content.Intent
+import androidx.test.core.app.ApplicationProvider
+import com.agentshell.data.model.ChatTarget
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [35])
+class ChatNotificationTest {
+    private lateinit var app: Application
+    private lateinit var manager: NotificationManager
+    private val first = ChatTarget.create("host-1", "project / special 名", 2)
+
+    @Before fun setup() {
+        app = ApplicationProvider.getApplicationContext()
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        manager = app.getSystemService(NotificationManager::class.java)
+        NotificationHelper.createChannel(app)
+    }
+
+    @Test fun chatChannelHasHighImportanceSoundAndVibration() {
+        val channel = manager.getNotificationChannel(NotificationHelper.CHAT_CHANNEL_ID)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, channel.importance)
+        assertNotNull(channel.sound)
+        assertTrue(channel.shouldVibrate())
+    }
+
+    @Test fun twoChatsHaveSeparateNotificationsAndCorrectTapTargets() {
+        val second = first.copy(windowIndex = 3)
+        NotificationHelper.showChat(app, first, "First reply", 1)
+        NotificationHelper.showChat(app, second, "Second reply", 2)
+        val notifications = shadowOf(manager).allNotifications
+        assertEquals(2, notifications.size)
+        val destinations = notifications.map { NotificationHelper.chatTarget(shadowOf(it.contentIntent).savedIntent) }.toSet()
+        assertEquals(setOf(first, second), destinations)
+        assertNotEquals(notifications[0].contentIntent, notifications[1].contentIntent)
+        assertTrue(notifications.all { it.flags and Notification.FLAG_AUTO_CANCEL != 0 })
+    }
+
+    @Test fun updatesReplaceOnlyThatChatsNotificationAndReadCancelsIt() {
+        val second = first.copy(hostId = "host-2")
+        NotificationHelper.showChat(app, first, "First", 1)
+        NotificationHelper.showChat(app, second, "Other server", 1)
+        NotificationHelper.showChat(app, first, "Updated", 2, silent = true)
+        assertEquals(2, shadowOf(manager).allNotifications.size)
+        NotificationHelper.cancelChat(app, first)
+        val remaining = shadowOf(manager).allNotifications.single()
+        assertEquals(second, NotificationHelper.chatTarget(shadowOf(remaining.contentIntent).savedIntent))
+    }
+
+    @Test fun malformedAndIncompleteNotificationDestinationsAreRejected() {
+        assertNull(NotificationHelper.chatTarget(Intent().putExtra(NotificationHelper.CHAT_TARGET_EXTRA, "invalid")))
+        assertNull(NotificationHelper.chatTarget(NotificationHelper.chatIntent(app, first.copy(hostId = ""))))
+    }
+}

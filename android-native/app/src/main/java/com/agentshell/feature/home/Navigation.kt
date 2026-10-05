@@ -1,20 +1,29 @@
 package com.agentshell.feature.home
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.agentshell.feature.cron.CronViewModel
@@ -34,6 +43,7 @@ import com.agentshell.feature.sessions.SessionsScreen
 import com.agentshell.feature.settings.SettingsScreen
 import com.agentshell.feature.system.SystemScreen
 import com.agentshell.feature.terminal.TerminalScreen
+import com.agentshell.data.model.ChatTarget
 
 object Routes {
     const val HOME = "home"
@@ -93,8 +103,41 @@ object Routes {
 fun AgentShellNavHost(
     pendingNotificationId: String? = null,
     onNotificationIntentConsumed: (String) -> Unit = {},
+    pendingChatTarget: ChatTarget? = null,
+    onChatIntentConsumed: (ChatTarget) -> Unit = {},
+    viewModel: NavigationViewModel = hiltViewModel(),
 ) {
     val navController = rememberNavController()
+    val context = LocalContext.current
+    var hasOpenedChatNotification by rememberSaveable { mutableStateOf(pendingChatTarget != null) }
+    val keepScreenOnEnabled by viewModel.keepScreenOn.collectAsStateWithLifecycle()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val keepScreenOn = keepScreenOnEnabled && when (backStackEntry?.destination?.route) {
+        Routes.TERMINAL, Routes.CHAT, Routes.SPLIT_SCREEN -> true
+        else -> false
+    }
+    val view = LocalView.current
+
+    // One owner for the whole navigation host avoids competing flags during screen transitions.
+    // Android only keeps the display awake while this view's window is visible.
+    DisposableEffect(view, keepScreenOn) {
+        view.keepScreenOn = keepScreenOn
+        onDispose { view.keepScreenOn = false }
+    }
+
+    LaunchedEffect(pendingChatTarget) {
+        val target = pendingChatTarget ?: return@LaunchedEffect
+        hasOpenedChatNotification = true
+        if (viewModel.prepareChatNotification(target)) {
+            navController.navigate(Routes.chat(target.sessionName, target.windowIndex, isAcp = target.isAcp, cwd = target.cwd)) {
+                popUpTo(Routes.HOME)
+                launchSingleTop = true
+            }
+        } else {
+            Toast.makeText(context, "This chat's server is no longer configured", Toast.LENGTH_LONG).show()
+        }
+        onChatIntentConsumed(target)
+    }
 
     LaunchedEffect(pendingNotificationId) {
         val notificationId = pendingNotificationId ?: return@LaunchedEffect
@@ -111,6 +154,7 @@ fun AgentShellNavHost(
         // ── Home shell (tabs: Sessions, Cron, Dotfiles, System) ──────────────
         composable(Routes.HOME) {
             HomeScreen(
+                allowAutoAttach = !hasOpenedChatNotification,
                 onNavigateToTerminal = { name -> navController.navigate(Routes.terminal(name)) },
                 onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
                 onNavigateToAcpChat = { id, cwd -> navController.navigate(Routes.chat(id, 0, isAcp = true, cwd = cwd)) },

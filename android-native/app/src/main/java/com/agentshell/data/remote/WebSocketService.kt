@@ -337,6 +337,7 @@ class WebSocketService @Inject constructor(
     // -------------------------------------------------------------------------
 
     private inner class Listener(private val id: Long) : WebSocketListener() {
+        private val sourceServerUrl = currentUrl?.substringBefore('?')
 
         /** Returns true if this listener has been superseded by a newer connection. */
         private fun isStale(): Boolean = id != activeListenerId
@@ -380,7 +381,7 @@ class WebSocketService @Inject constructor(
                     return
                 }
 
-                val messageMap = jsonObjectToMap(json)
+                val messageMap = jsonObjectToMap(json) + ("_sourceServerUrl" to sourceServerUrl)
                 scope.launch { _messages.emit(messageMap) }
             } catch (e: Exception) {
                 log("Failed to parse message: $e")

@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.agentshell.core.theme.AgentShellTheme
 import com.agentshell.feature.home.AgentShellNavHost
+import com.agentshell.core.util.NotificationHelper
+import com.agentshell.data.model.ChatTarget
 import dagger.hilt.android.AndroidEntryPoint
 
 /**
@@ -34,6 +36,7 @@ object VolumeKeyHandler {
 class MainActivity : ComponentActivity() {
 
     private var pendingNotificationId by mutableStateOf<String?>(null)
+    private var pendingChatTarget by mutableStateOf<ChatTarget?>(null)
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -42,12 +45,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingNotificationId = intent.extractNotificationId()
+        pendingChatTarget = NotificationHelper.chatTarget(intent)
         enableEdgeToEdge()
         requestNotificationPermission()
         setContent {
             AgentShellTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     AgentShellNavHost(
+                        pendingChatTarget = pendingChatTarget,
+                        onChatIntentConsumed = { target ->
+                            if (pendingChatTarget == target) {
+                                pendingChatTarget = null
+                                intent.removeExtra(NotificationHelper.CHAT_TARGET_EXTRA)
+                            }
+                        },
                         pendingNotificationId = pendingNotificationId,
                         onNotificationIntentConsumed = { consumedId ->
                             if (pendingNotificationId == consumedId) {
@@ -64,6 +75,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         pendingNotificationId = intent.extractNotificationId()
+        pendingChatTarget = NotificationHelper.chatTarget(intent)
     }
 
     private fun requestNotificationPermission() {

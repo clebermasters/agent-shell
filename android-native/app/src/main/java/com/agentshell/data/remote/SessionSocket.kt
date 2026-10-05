@@ -1,4 +1,4 @@
-package com.agentshell.feature.splitscreen
+package com.agentshell.data.remote
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,9 +22,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-private const val MAX_PANEL_PENDING_MESSAGES = 32
+private const val MAX_SESSION_PENDING_MESSAGES = 32
 
-class SplitPanelSocket(
+class SessionSocket(
     baseClient: OkHttpClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -74,7 +74,7 @@ class SplitPanelSocket(
 
         synchronized(pendingQueueLock) {
             pendingQueue.addLast(payload)
-            while (pendingQueue.size > MAX_PANEL_PENDING_MESSAGES) {
+            while (pendingQueue.size > MAX_SESSION_PENDING_MESSAGES) {
                 pendingQueue.removeFirstOrNull()
             }
         }
@@ -83,7 +83,7 @@ class SplitPanelSocket(
     fun dispose() {
         intentionalClose = true
         connectJob?.cancel()
-        webSocket?.close(1000, "Split panel disposed")
+        webSocket?.close(1000, "Session socket disposed")
         webSocket = null
         _isConnected.value = false
         synchronized(pendingQueueLock) {

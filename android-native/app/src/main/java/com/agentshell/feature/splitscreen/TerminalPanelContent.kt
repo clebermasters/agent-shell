@@ -1,5 +1,7 @@
 package com.agentshell.feature.splitscreen
 
+import com.agentshell.data.remote.SessionSocket
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -32,7 +34,7 @@ fun TerminalPanelContent(
     val services = rememberSplitScreenServices()
     val webSocketUrl = services.webSocketService().currentWebSocketUrl
     val controller = rememberXTermController()
-    val panelSocket = remember(panelId) { SplitPanelSocket(services.okHttpClient()) }
+    val panelSocket = remember(panelId) { SessionSocket(services.okHttpClient()) }
     val isSocketConnected by panelSocket.isConnected.collectAsStateWithLifecycle()
 
     var isReady by remember { mutableStateOf(false) }

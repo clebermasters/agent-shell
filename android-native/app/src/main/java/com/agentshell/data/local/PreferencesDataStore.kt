@@ -39,6 +39,9 @@ class PreferencesDataStore @Inject constructor(
         val VOICE_BUTTON_POS_Y = floatPreferencesKey("voice_button_pos_y")
         val LAST_SESSION_NAME = stringPreferencesKey("last_session_name")
         val AUTO_ATTACH_ENABLED = booleanPreferencesKey("auto_attach_enabled")
+        val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
+        val CHAT_NOTIFICATIONS_ENABLED = booleanPreferencesKey("chat_notifications_enabled")
+        val CHAT_READ_STATES = stringPreferencesKey("chat_read_states")
     }
 
     // ─── selectedHostId ──────────────────────────────────────────────────────
@@ -244,6 +247,29 @@ class PreferencesDataStore @Inject constructor(
 
     suspend fun setAutoAttachEnabled(value: Boolean) {
         dataStore.edit { it[Keys.AUTO_ATTACH_ENABLED] = value }
+    }
+
+    // ─── screen timeout ─────────────────────────────────────────────────────
+
+    val keepScreenOn: Flow<Boolean>
+        get() = dataStore.data.map { it[Keys.KEEP_SCREEN_ON] ?: false }
+
+    suspend fun setKeepScreenOn(value: Boolean) {
+        dataStore.edit { it[Keys.KEEP_SCREEN_ON] = value }
+    }
+
+    val chatNotificationsEnabled: Flow<Boolean>
+        get() = dataStore.data.map { it[Keys.CHAT_NOTIFICATIONS_ENABLED] ?: true }
+
+    suspend fun setChatNotificationsEnabled(value: Boolean) {
+        dataStore.edit { it[Keys.CHAT_NOTIFICATIONS_ENABLED] = value }
+    }
+
+    val chatReadStates: Flow<String>
+        get() = dataStore.data.map { it[Keys.CHAT_READ_STATES] ?: "{}" }
+
+    suspend fun setChatReadStates(value: String) {
+        dataStore.edit { it[Keys.CHAT_READ_STATES] = value }
     }
 
     // ─── audio playback position ──────────────────────────────────────────────

@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -118,6 +119,7 @@ fun ChatScreen(
     val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
     val codexUsage by viewModel.codexUsage.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+    val isDragging by listState.interactionSource.collectIsDraggedAsState()
     val coroutineScope = rememberCoroutineScope()
     var showScrollButton by remember { mutableStateOf(false) }
     var autoScroll by remember { mutableStateOf(true) }
@@ -132,6 +134,8 @@ fun ChatScreen(
     val chatKey = if (isAcp) "acp:$sessionName" else "tmux:$sessionName\u0000$windowIndex"
     var recentChatSessions by remember { mutableStateOf<List<String>>(emptyList()) }
     var hasSkippedInitialResume by remember(chatKey) { mutableStateOf(false) }
+    var initialScrollComplete by remember(chatKey) { mutableStateOf(false) }
+    var screenActive by remember(chatKey) { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
 
     LaunchedEffect(chatKey) {
         if (!isSwipeNavigation) {
@@ -220,32 +224,59 @@ fun ChatScreen(
     }
 
     DisposableEffect(lifecycleOwner, chatKey) {
+        viewModel.setScreenActive(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                screenActive = true
+                viewModel.setScreenActive(true)
                 if (!hasSkippedInitialResume) {
                     hasSkippedInitialResume = true
                 } else {
                     viewModel.refreshActiveChat("screen-resume")
                 }
+            } else if (event == Lifecycle.Event.ON_PAUSE) {
+                screenActive = false
+                viewModel.setScreenActive(false)
+                initialScrollComplete = false
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            viewModel.setScreenActive(false)
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
-    // Auto-scroll when new messages arrive and user is near the bottom
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.totalItemsCount }
-            .distinctUntilChanged()
-            .collect {
-                if (autoScroll && it > 0) {
-                    coroutineScope.launch {
-                        listState.animateScrollToItem(it - 1)
-                    }
-                }
-            }
+    // Restore the unread boundary before following live replies at the bottom.
+    LaunchedEffect(chatKey, screenActive, initialScrollComplete, uiState.isLoading, uiState.readTrackingReady, uiState.isLocatingUnread, uiState.firstUnreadMessageId, uiState.messages.size) {
+        if (!screenActive || uiState.isLoading || !uiState.readTrackingReady || uiState.isLocatingUnread || uiState.messages.isEmpty()) return@LaunchedEffect
+        if (!initialScrollComplete) {
+            val unreadIndex = uiState.messages.indexOfFirst { it.id == uiState.firstUnreadMessageId }
+            listState.scrollToItem(if (unreadIndex >= 0) unreadIndex else uiState.messages.lastIndex)
+            autoScroll = unreadIndex < 0
+            initialScrollComplete = true
+        } else if (autoScroll && !listState.isScrollInProgress) {
+            listState.animateScrollToItem(uiState.messages.lastIndex)
+        }
+    }
+
+    LaunchedEffect(isDragging) {
+        if (isDragging) autoScroll = false
+    }
+
+    // A reply is read only when its row has actually entered the foreground viewport.
+    LaunchedEffect(listState, lifecycleOwner, chatKey, screenActive, initialScrollComplete, uiState.readTrackingReady) {
+        if (!screenActive || !initialScrollComplete || !uiState.readTrackingReady) return@LaunchedEffect
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val visibleKeys = layout.visibleItemsInfo.map { it.key }.toSet()
+            val lastVisibleMessage = uiState.messages.lastOrNull { it.id in visibleKeys }?.id
+            val viewingLatest = lastVisibleMessage != null && lastVisibleMessage == uiState.messages.lastOrNull()?.id
+            lastVisibleMessage to viewingLatest
+        }.distinctUntilChanged().collect { (messageId, viewingLatest) ->
+            viewModel.setFollowingLive(viewingLatest)
+            messageId?.let(viewModel::markReadThrough)
+        }
     }
 
     // Load more when near the top
@@ -267,7 +298,7 @@ fun ChatScreen(
             lastVisible < (info.totalItemsCount - 2)
         }.distinctUntilChanged().collect { notAtBottom ->
             showScrollButton = notAtBottom
-            if (!notAtBottom) autoScroll = true
+            if (initialScrollComplete && !notAtBottom) autoScroll = true
         }
     }
 
@@ -403,15 +434,18 @@ fun ChatScreen(
                             items = uiState.messages,
                             key = { it.id },
                         ) { message ->
-                            MessageBubble(
-                                message = message,
-                                showThinking = uiState.showThinking,
-                                showToolCalls = uiState.showToolCalls,
-                                fileBaseUrl = uiState.fileBaseUrl,
-                                audioPlayerManager = viewModel.audioPlayerManager,
-                                serverPathBase = uiState.sessionCwd.ifBlank { null },
-                                onOpenServerPath = onOpenServerPath,
-                            )
+                            Column {
+                                if (message.id == uiState.firstUnreadMessageId) UnreadDivider()
+                                MessageBubble(
+                                    message = message,
+                                    showThinking = uiState.showThinking,
+                                    showToolCalls = uiState.showToolCalls,
+                                    fileBaseUrl = uiState.fileBaseUrl,
+                                    audioPlayerManager = viewModel.audioPlayerManager,
+                                    serverPathBase = uiState.sessionCwd.ifBlank { null },
+                                    onOpenServerPath = onOpenServerPath,
+                                )
+                            }
                         }
 
                         if (uiState.isStreaming) {

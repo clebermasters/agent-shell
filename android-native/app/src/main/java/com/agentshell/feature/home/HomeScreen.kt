@@ -86,6 +86,7 @@ fun HomeScreen(
     onNavigateToAlerts: () -> Unit,
     onNavigateToHosts: () -> Unit,
     onNavigateToSplitScreen: (layoutId: String?) -> Unit = {},
+    allowAutoAttach: Boolean = true,
     sessionsContent: @Composable (Boolean) -> Unit,
     cronContent: @Composable (Boolean) -> Unit,
     dotfilesContent: @Composable (Boolean) -> Unit,
@@ -98,9 +99,9 @@ fun HomeScreen(
     var showPalette by rememberSaveable { mutableStateOf(false) }
 
     // Auto-attach to last session on app open
-    LaunchedEffect(Unit) {
+    LaunchedEffect(allowAutoAttach) {
         viewModel.autoAttachSession.collect { sessionName ->
-            onNavigateToTerminal(sessionName)
+            if (allowAutoAttach) onNavigateToTerminal(sessionName)
         }
     }
 

@@ -6,6 +6,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.repository.ChatRepository
+import com.agentshell.data.repository.ChatActivityRepository
+import com.agentshell.data.repository.HostRepository
 import com.agentshell.data.services.TerminalService
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -20,6 +22,8 @@ interface SplitScreenEntryPoint {
     fun terminalService(): TerminalService
     fun webSocketService(): WebSocketService
     fun chatRepository(): ChatRepository
+    fun chatActivityRepository(): ChatActivityRepository
+    fun hostRepository(): HostRepository
 }
 
 @Composable

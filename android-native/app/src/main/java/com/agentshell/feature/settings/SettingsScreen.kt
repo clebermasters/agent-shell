@@ -27,6 +27,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.agentshell.core.config.AppConfig
 import com.agentshell.data.local.PreferencesDataStore
+import com.agentshell.core.util.NotificationHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +47,8 @@ data class SettingsUiState(
     val showThinking: Boolean = false,
     val showToolCalls: Boolean = false,
     val autoAttachEnabled: Boolean = false,
+    val keepScreenOn: Boolean = false,
+    val chatNotificationsEnabled: Boolean = true,
     val isSaving: Boolean = false,
     val savedMessage: String? = null,
     val appVersion: String = "1.0.0",
@@ -79,6 +82,12 @@ class SettingsViewModel @Inject constructor(
         }
         viewModelScope.launch {
             dataStore.autoAttachEnabled.collect { v -> _state.update { it.copy(autoAttachEnabled = v) } }
+        }
+        viewModelScope.launch {
+            dataStore.keepScreenOn.collect { v -> _state.update { it.copy(keepScreenOn = v) } }
+        }
+        viewModelScope.launch {
+            dataStore.chatNotificationsEnabled.collect { v -> _state.update { it.copy(chatNotificationsEnabled = v) } }
         }
     }
 
@@ -125,6 +134,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { dataStore.setAutoAttachEnabled(enabled) }
         _state.update { it.copy(autoAttachEnabled = enabled) }
     }
+
+    fun toggleKeepScreenOn(enabled: Boolean) {
+        viewModelScope.launch { dataStore.setKeepScreenOn(enabled) }
+        _state.update { it.copy(keepScreenOn = enabled) }
+    }
+
+    fun toggleChatNotifications(enabled: Boolean) {
+        viewModelScope.launch { dataStore.setChatNotificationsEnabled(enabled) }
+        _state.update { it.copy(chatNotificationsEnabled = enabled) }
+    }
 }
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
@@ -137,6 +156,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var obscureApiKey by remember { mutableStateOf(true) }
+    val context = LocalContext.current
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Settings") }) },
@@ -216,6 +236,54 @@ fun SettingsScreen(
                             }
                         }
                     }
+                }
+            }
+
+            SectionHeader("Notifications")
+
+            Card {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Chat notifications", style = MaterialTheme.typography.bodyMedium)
+                            Text("Alert me about unread replies in other chats", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = state.chatNotificationsEnabled, onCheckedChange = viewModel::toggleChatNotifications)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            launchSettingsIntent(context, Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                putExtra(Settings.EXTRA_CHANNEL_ID, NotificationHelper.CHAT_CHANNEL_ID)
+                            })
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Notification sound and alerts") }
+                }
+            }
+
+            // ── Display ───────────────────────────────────────────────────────
+            SectionHeader("Display")
+
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Keep screen on", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Prevent screen timeout in terminal, chat, and split screen. Uses more battery.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = state.keepScreenOn, onCheckedChange = { viewModel.toggleKeepScreenOn(it) })
                 }
             }
 

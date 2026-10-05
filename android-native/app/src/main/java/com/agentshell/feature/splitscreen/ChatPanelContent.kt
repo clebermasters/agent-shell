@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
@@ -16,11 +17,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatBlockType
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
+import com.agentshell.data.model.ChatMessageParser
+import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.ChatCursor
+import com.agentshell.data.remote.SessionSocket
 import com.agentshell.feature.chat.MarkdownText
+import com.agentshell.feature.chat.UnreadDivider
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -40,15 +50,55 @@ fun ChatPanelContent(
     isFocused: Boolean,
 ) {
     val services = rememberSplitScreenServices()
+    val activityRepository = services.chatActivityRepository()
+    val selectedHost by remember(services) { services.hostRepository().getSelectedHost() }.collectAsStateWithLifecycle(initialValue = null)
+    val target = remember(selectedHost?.id, sessionName, windowIndex, isAcp) {
+        selectedHost?.let { ChatTarget.create(it.id, sessionName, windowIndex, isAcp) }
+    }
+    val readStates by activityRepository.states.collectAsStateWithLifecycle()
+    val readOwner = "split-chat:$panelId"
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var screenActive by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
+    var readReady by remember(target?.key) { mutableStateOf(false) }
+    var historyReady by remember(target?.key) { mutableStateOf(false) }
+    var initialScrollComplete by remember(target?.key) { mutableStateOf(false) }
+    var firstUnreadId by remember(target?.key) { mutableStateOf<String?>(null) }
+    var visitUnreadCursor by remember(target?.key) { mutableStateOf<ChatCursor?>(null) }
+    var followLive by remember(target?.key) { mutableStateOf(true) }
     val webSocketUrl = services.webSocketService().currentWebSocketUrl
-    val panelSocket = remember(panelId) { SplitPanelSocket(services.okHttpClient()) }
+    val panelSocket = remember(panelId) { SessionSocket(services.okHttpClient()) }
     val isSocketConnected by panelSocket.isConnected.collectAsStateWithLifecycle()
 
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val isDragging by listState.interactionSource.collectIsDraggedAsState()
     val coroutineScope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(target?.key) {
+        val chat = target ?: return@LaunchedEffect
+        visitUnreadCursor = activityRepository.register(chat).unread.firstOrNull()
+        readReady = true
+    }
+
+    DisposableEffect(lifecycleOwner, target?.key) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) screenActive = true
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                screenActive = false
+                initialScrollComplete = false
+                firstUnreadId = null
+                visitUnreadCursor = null
+                activityRepository.setViewing(readOwner, null, false)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            activityRepository.setViewing(readOwner, null, false)
+        }
+    }
 
     LaunchedEffect(webSocketUrl) {
         if (!webSocketUrl.isNullOrEmpty()) {
@@ -99,6 +149,8 @@ fun ChatPanelContent(
                         messages.clear()
                         messages.addAll(parsed)
                     }
+                    target?.let { activityRepository.history(it, parsed) }
+                    historyReady = true
                 }
                 "chat-history-chunk" -> {
                     if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp)) return@collect
@@ -117,18 +169,8 @@ fun ChatPanelContent(
                     // Skip echoed user messages from backend (already added locally)
                     if (parsed.messageType == ChatMessageType.USER && source != "webhook") return@collect
                     withContext(Dispatchers.Main) {
-                        // Merge consecutive assistant messages
-                        if (messages.isNotEmpty() &&
-                            messages.last().messageType == ChatMessageType.ASSISTANT &&
-                            parsed.messageType == ChatMessageType.ASSISTANT
-                        ) {
-                            val last = messages.last()
-                            val mergedContent = listOfNotNull(last.content, parsed.content).joinToString("")
-                            val mergedBlocks = last.blocks + parsed.blocks
-                            messages[messages.size - 1] = last.copy(content = mergedContent, blocks = mergedBlocks)
-                        } else {
-                            messages.add(parsed)
-                        }
+                        val existing = messages.indexOfFirst { it.id == parsed.id }
+                        if (existing >= 0) messages[existing] = parsed else messages.add(parsed)
                     }
                 }
                 "acp-message-chunk" -> {
@@ -188,6 +230,8 @@ fun ChatPanelContent(
                         messages.clear()
                         messages.addAll(parsed)
                     }
+                    target?.let { activityRepository.history(it, parsed) }
+                    historyReady = true
                 }
                 "acp-tool-call" -> {
                     if (!isAcp) return@collect
@@ -233,10 +277,44 @@ fun ChatPanelContent(
         }
     }
 
-    // Auto-scroll on new messages
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    LaunchedEffect(isDragging) { if (isDragging) followLive = false }
+
+    LaunchedEffect(messages.size, readStates[target?.key], historyReady, readReady, screenActive) {
+        val chat = target ?: return@LaunchedEffect
+        if (!readReady || !historyReady || messages.isEmpty() || !screenActive) return@LaunchedEffect
+        val state = readStates[chat.key]
+        if ((firstUnreadId == null || messages.none { it.id == firstUnreadId }) && state != null) {
+            visitUnreadCursor = visitUnreadCursor ?: state.unread.firstOrNull()
+            visitUnreadCursor?.let { cursor ->
+                val index = state.copy(unread = listOf(cursor)).unreadIndex(messages, hasMore = false)
+                firstUnreadId = index?.let { messages[it].id }
+            }
+        }
+        if (!initialScrollComplete) {
+            val unreadIndex = messages.indexOfFirst { it.id == firstUnreadId }
+            listState.scrollToItem(if (unreadIndex >= 0) unreadIndex else messages.lastIndex)
+            followLive = unreadIndex < 0
+            initialScrollComplete = true
+        } else if (followLive && !listState.isScrollInProgress) {
+            listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
+    LaunchedEffect(target?.key, initialScrollComplete, screenActive) {
+        val chat = target ?: return@LaunchedEffect
+        if (!initialScrollComplete || !screenActive) return@LaunchedEffect
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val visibleKeys = layout.visibleItemsInfo.map { it.key }.toSet()
+            val lastVisible = messages.lastOrNull { it.id in visibleKeys }?.id
+            val lastItem = layout.visibleItemsInfo.lastOrNull()
+            val atBottom = lastItem != null && lastItem.index == layout.totalItemsCount - 1 && lastItem.offset + lastItem.size <= layout.viewportEndOffset
+            Triple(lastVisible, atBottom, lastVisible != null && lastVisible == messages.lastOrNull()?.id)
+        }.distinctUntilChanged().collect { (messageId, atBottom, viewingLatest) ->
+            activityRepository.setViewing(readOwner, chat, viewingLatest)
+            if (atBottom) followLive = true
+            val index = messages.indexOfFirst { it.id == messageId }
+            if (index >= 0) activityRepository.readThrough(chat, messages.take(index + 1))
         }
     }
 
@@ -256,7 +334,10 @@ fun ChatPanelContent(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             items(messages.toList(), key = { it.id }) { msg ->
-                CompactMessageBubble(msg)
+                Column {
+                    if (msg.id == firstUnreadId) UnreadDivider()
+                    CompactMessageBubble(msg)
+                }
             }
         }
 
@@ -449,85 +530,4 @@ private fun parseMessageList(raw: Any?): List<ChatMessage> {
     }
 }
 
-/**
- * Parses a raw message map to [ChatMessage], matching the logic in
- * ChatViewModel.parseMessage exactly.
- */
-@Suppress("UNCHECKED_CAST")
-private fun parseMessage(data: Map<String, Any?>): ChatMessage? {
-    val role = data["role"] as? String ?: data["type"] as? String ?: "assistant"
-    val blocksData = data["blocks"] as? List<*> ?: emptyList<Any>()
-
-    val blocks = blocksData.mapNotNull { b ->
-        val block = b as? Map<String, Any?> ?: return@mapNotNull null
-        val blockType = block["type"] as? String ?: "text"
-        when (blockType) {
-            "tool_call" -> ChatBlock(
-                type = "tool_call",
-                toolName = block["name"] as? String,
-                summary = block["summary"] as? String,
-            )
-            "tool_result" -> ChatBlock(
-                type = "tool_result",
-                toolName = block["toolName"] as? String,
-                content = block["content"] as? String,
-                summary = block["summary"] as? String,
-            )
-            "thinking" -> ChatBlock(
-                type = "thinking",
-                content = block["content"] as? String ?: "",
-            )
-            "image" -> ChatBlock(
-                type = "image",
-                id = block["id"] as? String ?: "",
-                mimeType = block["mimeType"] as? String ?: "",
-                altText = block["altText"] as? String,
-            )
-            "audio" -> ChatBlock(
-                type = "audio",
-                id = block["id"] as? String ?: "",
-                mimeType = block["mimeType"] as? String ?: "",
-                durationSeconds = (block["durationSeconds"] as? Number)?.toDouble(),
-            )
-            "file" -> ChatBlock(
-                type = "file",
-                id = block["id"] as? String ?: "",
-                filename = block["filename"] as? String ?: "",
-                mimeType = block["mimeType"] as? String ?: "",
-                sizeBytes = (block["sizeBytes"] as? Number)?.toLong(),
-            )
-            else -> ChatBlock(type = "text", text = block["text"] as? String ?: "")
-        }
-    }
-
-    // Derive content from text blocks
-    val textContent = blocks
-        .filter { it.blockType == ChatBlockType.TEXT }
-        .joinToString("\n") { it.text ?: "" }
-
-    // Derive message type
-    val type = when {
-        role == "user" -> "user"
-        blocks.any { it.blockType == ChatBlockType.TOOL_CALL } -> "tool_call"
-        blocks.any { it.blockType == ChatBlockType.TOOL_RESULT } -> "tool_result"
-        else -> "assistant"
-    }
-
-    // Also handle raw content field (for simple messages without blocks)
-    val rawContent = data["content"] as? String ?: data["text"] as? String
-
-    val timestampRaw = data["timestamp"] as? String
-    val timestamp = timestampRaw?.let {
-        runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull()
-    } ?: (data["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
-
-    val finalContent = textContent.ifEmpty { rawContent }
-
-    return ChatMessage(
-        id = (data["id"] as? String) ?: UUID.randomUUID().toString(),
-        type = type,
-        content = finalContent?.ifEmpty { null },
-        timestamp = timestamp,
-        blocks = blocks,
-    )
-}
+private fun parseMessage(data: Map<String, Any?>): ChatMessage = ChatMessageParser.parse(data)

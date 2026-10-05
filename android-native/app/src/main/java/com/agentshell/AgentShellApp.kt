@@ -8,6 +8,7 @@ import android.os.Bundle
 import com.agentshell.core.service.ConnectionService
 import com.agentshell.core.util.NotificationHelper
 import com.agentshell.data.remote.WebSocketService
+import com.agentshell.data.repository.ChatActivityRepository
 import com.agentshell.data.services.AudioPlayerManager
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -28,6 +29,7 @@ class AgentShellApp : Application() {
     interface AppEntryPoint {
         fun webSocketService(): WebSocketService
         fun audioPlayerManager(): AudioPlayerManager
+        fun chatActivityRepository(): ChatActivityRepository
     }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -40,6 +42,7 @@ class AgentShellApp : Application() {
         val entryPoint = EntryPointAccessors.fromApplication(this, AppEntryPoint::class.java)
         wsService = entryPoint.webSocketService()
         entryPoint.audioPlayerManager().connect()
+        entryPoint.chatActivityRepository().start()
 
         observeNotificationEvents()
         manageForegroundService()

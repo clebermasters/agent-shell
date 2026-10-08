@@ -14,6 +14,7 @@ import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
 import com.agentshell.data.model.ChatMessageParser
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.ChatReadState
 import com.agentshell.data.model.ChatCursor
 import com.agentshell.data.repository.ChatActivityRepository
@@ -89,6 +90,7 @@ data class ChatUiState(
     val isLoading: Boolean = true,
     val isLoadingMore: Boolean = false,
     val isStreaming: Boolean = false,
+    val agentActivity: AgentActivity = AgentActivity(),
     val pendingPermission: PendingPermission? = null,
     val sessionName: String = "",
     val windowIndex: Int = 0,
@@ -170,6 +172,7 @@ class ChatViewModel @Inject constructor(
     private var readState: ChatReadState? = null
     private var readHostServerUrl: String? = null
     private var readStateJob: Job? = null
+    private var agentActivityJob: Job? = null
     private var visitUnreadCursor: ChatCursor? = null
     private val readOwner = UUID.randomUUID().toString()
     private var screenActive = false
@@ -197,6 +200,7 @@ class ChatViewModel @Inject constructor(
             return
         }
         readStateJob?.cancel()
+        agentActivityJob?.cancel()
         chatActivityRepository.setViewing(readOwner, null, false)
         val target = ChatTarget.create(host.id, sessionName, windowIndex, isAcp, cwd)
         readHostServerUrl = "${host.wsUrl}/ws"
@@ -208,6 +212,11 @@ class ChatViewModel @Inject constructor(
             chatActivityRepository.states.collect { states ->
                 readState = states[target.key]
                 updateUnreadBoundary()
+            }
+        }
+        agentActivityJob = viewModelScope.launch {
+            chatActivityRepository.agentActivities.collect { activities ->
+                _uiState.update { it.copy(agentActivity = activities[target.key] ?: AgentActivity()) }
             }
         }
         chatActivityRepository.setViewing(readOwner, target, screenActive && followingLive)
@@ -471,6 +480,7 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching a TMUX chat log. */
     fun watchChatLog(sessionName: String, windowIndex: Int) {
+        agentActivityJob?.cancel()
         clearPendingAcpChunk()
         shouldResubscribeOnReconnect = false
         _uiState.update {
@@ -478,6 +488,7 @@ class ChatViewModel @Inject constructor(
                 sessionName = sessionName,
                 windowIndex = windowIndex,
                 isAcp = false,
+                agentActivity = AgentActivity(),
                 isLoading = true,
                 messages = newMessageList(),
                 error = null,
@@ -496,6 +507,7 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching an ACP chat session. */
     fun startAcpChat(sessionName: String, cwd: String) {
+        agentActivityJob?.cancel()
         clearPendingAcpChunk()
         shouldResubscribeOnReconnect = false
         val sessionKey = "acp_$sessionName"
@@ -504,6 +516,7 @@ class ChatViewModel @Inject constructor(
                 sessionName = sessionKey,
                 windowIndex = 0,
                 isAcp = true,
+                agentActivity = AgentActivity(),
                 isLoading = true,
                 messages = newMessageList(),
                 error = null,

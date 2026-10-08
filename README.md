@@ -51,6 +51,8 @@ The **maintained and feature-complete client is the native Android app** (`andro
 - **Codex direct mode**: app-server based sessions via the same ACP transport shape
 - Kiro session detection and parsing in tmux chat logs
 - Context-window updates and tool call timeline tracking
+- Chat and split-screen Chat show Working, Waiting for you, Idle, Failed, or Unknown with elapsed time. Terminal estimates are labeled Estimated; unsupported or stale observations stay Unknown.
+- Tmux activity observation is read-only and shared per pane. Codex/Claude lifecycle logs and direct-agent protocol events provide stronger evidence when available. Silence alone never marks a turn finished.
 
 ### Session Management
 - tmux sessions + favorite sessions in local app store
@@ -202,6 +204,7 @@ Current high-level message families:
   - `list-sessions`, `create-session`, `attach-session`, `kill-session`, `list-windows`, `select-window`, `input`, `resize`
 - Chat logs:
   - `watch-chat-log`, `watch-acp-chat-log`, `load-more-chat-history`, `clear-chat-log`
+  - Watches also receive `chat-activity` snapshots on subscription and periodic updates. These include `sessionName`, `windowIndex`, `paneId`, and a `state` with status, source, confidence, timestamps, observer ID, and sequence. Android expires observations after 15 seconds without a fresh update.
 - ACP/direct sessions:
   - `select-backend`, `acp-create-session`, `acp-resume-session`, `acp-fork-session`, `acp-list-sessions`, `acp-send-prompt`, `acp-load-history`, `acp-clear-history`, `acp-delete-session`
 - Attachments:

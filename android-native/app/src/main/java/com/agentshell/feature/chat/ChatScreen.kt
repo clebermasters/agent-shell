@@ -386,6 +386,7 @@ fun ChatScreen(
                 .padding(innerPadding),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
+                AgentActivityBar(uiState.agentActivity)
                 // Provider usage banner for tmux-backed AI chats
                 if (uiState.detectedTool == "claude" || uiState.detectedTool == "codex") {
                     val usage = when (uiState.detectedTool) {

@@ -65,11 +65,30 @@ fun FileBrowserScreen(
             }
         }
     }
+    val uploadLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+        viewModel::uploadFrom,
+    )
+    val uploadFile: () -> Unit = {
+        if (viewModel.prepareUpload()) {
+            try {
+                uploadLauncher.launch(arrayOf("*/*"))
+            } catch (_: ActivityNotFoundException) {
+                viewModel.uploadPickerUnavailable()
+            }
+        }
+    }
 
     LaunchedEffect(state.downloadMessage) {
         state.downloadMessage?.let { message ->
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             viewModel.clearDownloadMessage()
+        }
+    }
+    LaunchedEffect(state.uploadMessage) {
+        state.uploadMessage?.let { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            viewModel.clearUploadMessage()
         }
     }
     var showSortSheet by remember { mutableStateOf(false) }
@@ -155,6 +174,34 @@ fun FileBrowserScreen(
             },
             confirmButton = {
                 TextButton(onClick = { viewModel.cancelDownload() }) { Text("Cancel") }
+            },
+        )
+    }
+
+    state.uploadingFile?.let { filename ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Uploading") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(filename)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {},
+        )
+    }
+
+    state.uploadConflict?.let { filename ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissUploadConflict,
+            title = { Text("Replace existing file?") },
+            text = { Text("$filename already exists in this folder. Uploading will replace its contents.") },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmUpload) { Text("Replace") }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissUploadConflict) { Text("Cancel") }
             },
         )
     }
@@ -402,6 +449,15 @@ fun FileBrowserScreen(
                 )
             }
         },
+        floatingActionButton = {
+            if (!state.isSelectionMode) {
+                ExtendedFloatingActionButton(
+                    onClick = uploadFile,
+                    icon = { Icon(Icons.Default.UploadFile, contentDescription = null) },
+                    text = { Text("Upload") },
+                )
+            }
+        },
     ) { paddingValues ->
         Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
             // Clipboard banner
@@ -450,7 +506,10 @@ fun FileBrowserScreen(
                         color = MaterialTheme.colorScheme.outline,
                     )
                 }
-                else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+                else -> LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 88.dp),
+                ) {
                     items(filtered, key = { it.path }) { entry ->
                         val isSelected = state.selectedPaths.contains(entry.path)
                         FileBrowserEntry(

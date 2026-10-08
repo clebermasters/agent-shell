@@ -11,6 +11,7 @@ import com.agentshell.data.local.HostDao
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.AgentActivityStatus
 import com.agentshell.data.model.Host
 import com.agentshell.data.remote.WebSocketService
 import java.io.File
@@ -86,6 +87,45 @@ class ChatActivityRepositoryTest {
     private fun repository() = ChatActivityRepository(
         app, preferences, HostRepository(hostDao, preferences), WebSocketService(client), client,
     ).also { repositories.add(it); it.start() }
+
+    private fun activity(session: String, window: Int, status: String, sequence: Long = 1) = mapOf(
+        "type" to "chat-activity", "sessionName" to session, "windowIndex" to window, "paneId" to "%1",
+        "state" to mapOf("status" to status, "source" to "tmux-status", "confidence" to "inferred", "observerId" to "one", "sequence" to sequence, "observedAt" to 1000L),
+    )
+
+    @Test fun activityIsScopedToItsHostAndWindow() = runTest {
+        val repo = repository()
+        repo.handleAgentActivity("host-a", activity("session", 1, "working"))
+        repo.handleAgentActivity("host-b", activity("session", 1, "idle"))
+        repo.handleAgentActivity("host-a", activity("session", 2, "waiting"))
+        assertEquals(AgentActivityStatus.WORKING, repo.agentActivities.value.getValue(target.key).status)
+        assertEquals(AgentActivityStatus.IDLE, repo.agentActivities.value.getValue(target.copy(hostId = "host-b").key).status)
+        assertEquals(AgentActivityStatus.WAITING, repo.agentActivities.value.getValue(target.copy(windowIndex = 2).key).status)
+    }
+
+    @Test fun panelAndBackgroundSocketsCannotAttributeAnotherPanesEventToTheirTarget() = runTest {
+        val repo = repository()
+        repo.handleAgentActivity("host-a", activity("other", 1, "working"), target)
+        assertTrue(repo.agentActivities.value.isEmpty())
+    }
+
+    @Test fun disconnectClearsWorkingAndReconnectSnapshotRestoresIt() = runTest {
+        val repo = repository()
+        repo.handleAgentActivity("host-a", activity("session", 1, "working"))
+        repo.invalidateActivity(target)
+        assertEquals(AgentActivityStatus.UNKNOWN, repo.agentActivities.value.getValue(target.key).status)
+        repo.handleAgentActivity("host-a", activity("session", 1, "working", 2))
+        assertEquals(AgentActivityStatus.WORKING, repo.agentActivities.value.getValue(target.key).status)
+    }
+
+    @Test fun legacyDirectProtocolProvidesFallbackAndCompletion() = runTest {
+        val repo = repository()
+        val direct = ChatTarget.create("host-a", "codex:one", isAcp = true)
+        repo.handleAgentActivity("host-a", mapOf("type" to "acp-message-chunk", "sessionId" to "codex:one"))
+        assertEquals(AgentActivityStatus.WORKING, repo.agentActivities.value.getValue(direct.key).status)
+        repo.handleAgentActivity("host-a", mapOf("type" to "acp-prompt-done", "sessionId" to "codex:one", "stopReason" to "completed"))
+        assertEquals(AgentActivityStatus.IDLE, repo.agentActivities.value.getValue(direct.key).status)
+    }
 
     @Test fun unreadReplyPersistsAcrossRepositoryRestartWithoutRealertingOnHistoryReplay() = runTest {
         val first = repository()

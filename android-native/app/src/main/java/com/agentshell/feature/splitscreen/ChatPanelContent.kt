@@ -26,6 +26,9 @@ import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
 import com.agentshell.data.model.ChatMessageParser
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.AgentActivity
+import com.agentshell.data.model.ConnectionStatus
+import com.agentshell.feature.chat.AgentActivityBar
 import com.agentshell.data.model.ChatCursor
 import com.agentshell.data.remote.SessionSocket
 import com.agentshell.feature.chat.MarkdownText
@@ -56,6 +59,7 @@ fun ChatPanelContent(
         selectedHost?.let { ChatTarget.create(it.id, sessionName, windowIndex, isAcp) }
     }
     val readStates by activityRepository.states.collectAsStateWithLifecycle()
+    val agentActivities by activityRepository.agentActivities.collectAsStateWithLifecycle()
     val readOwner = "split-chat:$panelId"
     val lifecycleOwner = LocalLifecycleOwner.current
     var screenActive by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
@@ -65,8 +69,11 @@ fun ChatPanelContent(
     var firstUnreadId by remember(target?.key) { mutableStateOf<String?>(null) }
     var visitUnreadCursor by remember(target?.key) { mutableStateOf<ChatCursor?>(null) }
     var followLive by remember(target?.key) { mutableStateOf(true) }
-    val webSocketUrl = services.webSocketService().currentWebSocketUrl
-    val panelSocket = remember(panelId) { SessionSocket(services.okHttpClient()) }
+    val mainConnection by services.webSocketService().connectionStatus.collectAsStateWithLifecycle()
+    val webSocketUrl = services.webSocketService().currentWebSocketUrl?.takeIf {
+        mainConnection == ConnectionStatus.CONNECTED && it.substringBefore('?') == selectedHost?.let { host -> "${host.wsUrl}/ws" }
+    }
+    val panelSocket = remember(panelId, target?.hostId) { SessionSocket(services.okHttpClient()) }
     val isSocketConnected by panelSocket.isConnected.collectAsStateWithLifecycle()
 
     val messages = remember { mutableStateListOf<ChatMessage>() }
@@ -100,13 +107,13 @@ fun ChatPanelContent(
         }
     }
 
-    LaunchedEffect(webSocketUrl) {
+    LaunchedEffect(webSocketUrl, panelSocket) {
         if (!webSocketUrl.isNullOrEmpty()) {
             panelSocket.connect(webSocketUrl)
         }
     }
 
-    DisposableEffect(panelId) {
+    DisposableEffect(panelSocket) {
         onDispose {
             panelSocket.dispose()
         }
@@ -135,11 +142,12 @@ fun ChatPanelContent(
     }
 
     // Collect messages — runs once on composition, filters by session
-    LaunchedEffect(panelId, sessionName, windowIndex, isAcp) {
+    LaunchedEffect(panelId, target?.key, panelSocket, sessionName, windowIndex, isAcp) {
         messages.clear()
         if (sessionName.isEmpty()) return@LaunchedEffect
 
         panelSocket.messages.collect { message ->
+            target?.let { activityRepository.handleAgentActivity(it.hostId, message, it) }
             val type = message["type"] as? String ?: return@collect
             when (type) {
                 "chat-history" -> {
@@ -326,6 +334,7 @@ fun ChatPanelContent(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        AgentActivityBar(agentActivities[target?.key] ?: AgentActivity(), isSocketConnected)
         // Messages
         LazyColumn(
             state = listState,

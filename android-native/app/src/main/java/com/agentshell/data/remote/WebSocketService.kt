@@ -195,6 +195,15 @@ class WebSocketService @Inject constructor(
         }
     }
 
+    /** Send a transfer only to its original server; never queue it for a later connection. */
+    fun sendIfConnected(message: Map<String, Any?>, expectedServerUrl: String): Boolean {
+        val socket = webSocket ?: return false
+        if (!_isConnected || currentUrl != expectedServerUrl) return false
+        val json = mapToJson(message).toString()
+        if (!_isConnected || currentUrl != expectedServerUrl || webSocket !== socket) return false
+        return socket.send(json)
+    }
+
     /**
      * Check connection health: if disconnected, force reconnect immediately;
      * if connected, send a ping to verify the connection is still alive.

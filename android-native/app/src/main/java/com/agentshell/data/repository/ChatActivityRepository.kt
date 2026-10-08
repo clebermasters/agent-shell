@@ -8,6 +8,8 @@ import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageParser
 import com.agentshell.data.model.ChatReadState
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.AgentActivity
+import com.agentshell.data.model.AgentActivityStatus
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.model.Host
 import com.agentshell.data.remote.SessionSocket
@@ -49,6 +51,8 @@ class ChatActivityRepository @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val _states = MutableStateFlow<Map<String, ChatReadState>>(emptyMap())
     val states: StateFlow<Map<String, ChatReadState>> = _states.asStateFlow()
+    private val _agentActivities = MutableStateFlow<Map<String, AgentActivity>>(emptyMap())
+    val agentActivities: StateFlow<Map<String, AgentActivity>> = _agentActivities.asStateFlow()
     private val viewers = mutableMapOf<String, String>() // owner -> chat key
     private val monitors = mutableMapOf<String, Pair<SessionSocket, CoroutineScope>>()
     private val lastAlert = mutableMapOf<String, Long>()
@@ -94,7 +98,10 @@ class ChatActivityRepository @Inject constructor(
                 }
             }
             launch {
-                webSocket.connectionStatus.collect { if (it == ConnectionStatus.CONNECTED) syncMonitors() }
+                webSocket.connectionStatus.collect { status ->
+                    if (status == ConnectionStatus.CONNECTED) syncMonitors()
+                    else selectedHost?.id?.let { invalidateHostActivity(it) }
+                }
             }
             launch { webSocket.keepAliveEnabled.collect { syncMonitors() } }
             webSocket.messages.collect { message ->
@@ -174,6 +181,7 @@ class ChatActivityRepository @Inject constructor(
 
     @Suppress("UNCHECKED_CAST")
     internal suspend fun handleEvent(hostId: String, message: Map<String, Any?>, watchedTarget: ChatTarget? = null) {
+        handleAgentActivity(hostId, message, watchedTarget)
         when (message["type"] as? String) {
             "sessions-list", "session_list" -> {
                 if (watchedTarget != null) return
@@ -244,6 +252,47 @@ class ChatActivityRepository @Inject constructor(
         }
     }
 
+    internal fun handleAgentActivity(hostId: String, message: Map<String, Any?>, watchedTarget: ChatTarget? = null) {
+        val target = eventTarget(hostId, message) ?: return
+        if (watchedTarget != null && target.key != watchedTarget.key) return
+        val current = _agentActivities.value[target.key] ?: AgentActivity()
+        val now = SystemClock.elapsedRealtime()
+        val next = if (message["type"] == "chat-activity") {
+            AgentActivity.parse(message, now)?.takeIf { current.accepts(it) } ?: return
+        } else {
+            // Older servers can still report direct-agent work through existing protocol events.
+            if (!target.isAcp || (current.backendSnapshot && !current.expired(now))) return
+            val status = when (message["type"]) {
+                "acp-message-chunk", "acp-tool-call" -> AgentActivityStatus.WORKING
+                "acp-permission-request" -> AgentActivityStatus.WAITING
+                "acp-prompt-done" -> if (message["stopReason"] == "failed") AgentActivityStatus.FAILED else AgentActivityStatus.IDLE
+                "acp-error" -> AgentActivityStatus.FAILED
+                else -> return
+            }
+            AgentActivity(
+                status = status, detail = when (status) {
+                    AgentActivityStatus.WORKING -> "Agent is working"
+                    AgentActivityStatus.WAITING -> "Waiting for your approval"
+                    AgentActivityStatus.IDLE -> "Agent turn ended"
+                    AgentActivityStatus.FAILED -> "Agent encountered an error"
+                    else -> "Agent status is not available"
+                }, source = "agent-protocol", confidence = "reported",
+                startedAt = if (status == AgentActivityStatus.WORKING) current.startedAt ?: System.currentTimeMillis() else null,
+                observedAt = System.currentTimeMillis(), receivedAt = now,
+            )
+        }
+        _agentActivities.value = _agentActivities.value + (target.key to next)
+    }
+
+    internal fun invalidateActivity(target: ChatTarget) {
+        val current = _agentActivities.value[target.key] ?: return
+        _agentActivities.value = _agentActivities.value + (target.key to current.unknown("Connection unavailable"))
+    }
+
+    private fun invalidateHostActivity(hostId: String) {
+        _states.value.values.filter { it.target.hostId == hostId }.forEach { invalidateActivity(it.target) }
+    }
+
     private fun eventTarget(hostId: String, message: Map<String, Any?>): ChatTarget? {
         val session = (message["sessionName"] ?: message["session-name"] ?: message["sessionId"]) as? String ?: return null
         val isAcp = message.containsKey("sessionId") || session.startsWith("acp_")
@@ -273,6 +322,7 @@ class ChatActivityRepository @Inject constructor(
             monitorScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 socket.isConnected.collect { connected ->
                     if (connected) socket.send(mapOf("type" to "watch-chat-log", "sessionName" to target.sessionName, "windowIndex" to target.windowIndex, "limit" to 50))
+                    else invalidateActivity(target)
                 }
             }
             socket.connect(url!!)

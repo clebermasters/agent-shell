@@ -25,6 +25,7 @@ class ChatRepository @Inject constructor(
             "chat-history",
             "chat-history-chunk",
             "chat-event",
+            "chat-activity",
             "chat-log-error",
             "chat-log-cleared",
             "chat-file-message",

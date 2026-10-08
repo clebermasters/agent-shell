@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.FileEntry
 import com.agentshell.data.repository.FileBrowserRepository
+import com.agentshell.data.repository.FileUploadSource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -57,6 +58,9 @@ data class FileBrowserUiState(
     val pasteConflicts: List<PasteConflict> = emptyList(),
     val downloadingFile: String? = null,
     val downloadMessage: String? = null,
+    val uploadingFile: String? = null,
+    val uploadConflict: String? = null,
+    val uploadMessage: String? = null,
 ) {
     val sortedEntries: List<FileEntry>
         get() {
@@ -84,6 +88,8 @@ class FileBrowserViewModel @Inject constructor(
     private val _state = MutableStateFlow(FileBrowserUiState())
     val state: StateFlow<FileBrowserUiState> = _state.asStateFlow()
     private var downloadJob: Job? = null
+    private var uploadJob: Job? = null
+    private var pendingUpload: FileUploadSource? = null
 
     init {
         observeEvents()
@@ -254,7 +260,9 @@ class FileBrowserViewModel @Inject constructor(
     }
 
     fun prepareDownload(entry: FileEntry): Boolean {
-        if (entry.isDirectory || downloadJob?.isActive == true || savedStateHandle.contains("downloadPath")) return false
+        if (entry.isDirectory || downloadJob?.isActive == true || uploadJob?.isActive == true ||
+            pendingUpload != null || savedStateHandle.contains("downloadPath")
+        ) return false
         savedStateHandle["downloadPath"] = entry.path
         savedStateHandle["downloadName"] = entry.name
         return true
@@ -292,6 +300,90 @@ class FileBrowserViewModel @Inject constructor(
 
     fun clearDownloadMessage() {
         _state.update { it.copy(downloadMessage = null) }
+    }
+
+    fun prepareUpload(): Boolean {
+        val state = _state.value
+        if (state.isLoading || state.error != null || uploadJob?.isActive == true ||
+            pendingUpload != null || savedStateHandle.contains("uploadDirectory")
+        ) return false
+        val serverUrl = try {
+            repository.uploadServerUrl()
+        } catch (e: Exception) {
+            _state.update { it.copy(uploadMessage = e.message ?: "Connect to the server and try again") }
+            return false
+        }
+        // Keep the target folder and server stable while Android's picker is open.
+        savedStateHandle["uploadDirectory"] = state.currentPath
+        savedStateHandle["uploadServerUrl"] = serverUrl
+        savedStateHandle["uploadExistingFiles"] = ArrayList(state.entries.filter { !it.isDirectory }.map { it.name })
+        savedStateHandle["uploadExistingDirectories"] = ArrayList(state.entries.filter { it.isDirectory }.map { it.name })
+        return true
+    }
+
+    fun uploadFrom(uri: Uri?) {
+        val directory = savedStateHandle.remove<String>("uploadDirectory") ?: return
+        val serverUrl = savedStateHandle.remove<String>("uploadServerUrl")
+        val existingFiles = savedStateHandle.remove<ArrayList<String>>("uploadExistingFiles").orEmpty()
+        val existingDirectories = savedStateHandle.remove<ArrayList<String>>("uploadExistingDirectories").orEmpty()
+        if (uri == null || serverUrl == null) return
+        launchUpload("Selected file") {
+            val source = repository.prepareUpload(uri, directory, serverUrl)
+            if (source.name in existingDirectories) {
+                throw java.io.IOException("A directory named ${source.name} already exists. Rename the file and try again")
+            }
+            if (source.name in existingFiles) {
+                pendingUpload = source
+                _state.update { it.copy(uploadConflict = source.name) }
+            } else {
+                performUpload(source)
+            }
+        }
+    }
+
+    fun confirmUpload() {
+        val source = pendingUpload ?: return
+        pendingUpload = null
+        _state.update { it.copy(uploadConflict = null) }
+        launchUpload(source.name) { performUpload(source) }
+    }
+
+    fun dismissUploadConflict() {
+        pendingUpload = null
+        _state.update { it.copy(uploadConflict = null) }
+    }
+
+    fun uploadPickerUnavailable() {
+        uploadFrom(null)
+        _state.update { it.copy(uploadMessage = "No file picker is available to choose a file") }
+    }
+
+    fun clearUploadMessage() {
+        _state.update { it.copy(uploadMessage = null) }
+    }
+
+    private fun launchUpload(name: String, operation: suspend () -> Unit) {
+        _state.update { it.copy(uploadingFile = name, uploadMessage = null) }
+        uploadJob = viewModelScope.launch {
+            try {
+                operation()
+            } catch (_: TimeoutCancellationException) {
+                _state.update { it.copy(uploadMessage = "Upload timed out. Refresh the folder to check whether the file was saved") }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(uploadMessage = "Upload failed: ${e.message ?: "Unable to upload the file"}") }
+            } finally {
+                _state.update { it.copy(uploadingFile = null) }
+            }
+        }
+    }
+
+    private suspend fun performUpload(source: FileUploadSource) {
+        _state.update { it.copy(uploadingFile = source.name) }
+        repository.uploadFile(source)
+        _state.update { it.copy(uploadMessage = "Uploaded ${source.name}") }
+        repository.listDirectory(_state.value.currentPath)
     }
 
     fun saveFile(path: String, content: String) {
@@ -394,6 +486,9 @@ class FileBrowserViewModel @Inject constructor(
     }
 
     private fun handleFileWritten(msg: Map<String, Any?>) {
+        val viewer = _state.value.viewer ?: return
+        // Upload acknowledgements share this event with saves from the text editor.
+        if (!viewer.isSaving || msg["path"] != viewer.entry?.path) return
         val success = msg["success"] as? Boolean ?: false
         val error = msg["error"] as? String
         if (success) {

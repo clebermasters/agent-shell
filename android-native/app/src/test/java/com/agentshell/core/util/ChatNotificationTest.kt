@@ -7,6 +7,8 @@ import android.app.NotificationManager
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.AgentSignal
+import com.agentshell.data.model.AgentSignalKind
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -36,6 +38,27 @@ class ChatNotificationTest {
         assertEquals(NotificationManager.IMPORTANCE_HIGH, channel.importance)
         assertNotNull(channel.sound)
         assertTrue(channel.shouldVibrate())
+    }
+
+    @Test fun finishedAndQuietAlertsUseIndependentChannelsAndTapTargets() {
+        NotificationHelper.showChat(app, first, "A reply", 1)
+        NotificationHelper.showAgentSignal(app, first, AgentSignal(AgentSignalKind.FINISHED, 120))
+        val notifications = shadowOf(manager).allNotifications
+        assertEquals(2, notifications.size)
+        val finished = notifications.single { it.channelId == NotificationHelper.FINISHED_CHANNEL_ID }
+        assertEquals(first, NotificationHelper.chatTarget(shadowOf(finished.contentIntent).savedIntent))
+        assertNotNull(manager.getNotificationChannel(NotificationHelper.FINISHED_CHANNEL_ID).sound)
+        NotificationHelper.showAgentSignal(app, first, AgentSignal(AgentSignalKind.QUIET))
+        assertEquals(2, shadowOf(manager).allNotifications.size)
+        assertTrue(shadowOf(manager).allNotifications.any { it.channelId == NotificationHelper.QUIET_CHANNEL_ID })
+        assertNotNull(manager.getNotificationChannel(NotificationHelper.QUIET_CHANNEL_ID).sound)
+    }
+
+    @Test fun anotherFinishedTurnCanAlertWhilePreviousNoticeIsUnread() {
+        NotificationHelper.showAgentSignal(app, first, AgentSignal(AgentSignalKind.FINISHED))
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(3))
+        NotificationHelper.showAgentSignal(app, first, AgentSignal(AgentSignalKind.FINISHED))
+        assertEquals(0, shadowOf(manager).allNotifications.single().flags and Notification.FLAG_ONLY_ALERT_ONCE)
     }
 
     @Test fun twoChatsHaveSeparateNotificationsAndCorrectTapTargets() {

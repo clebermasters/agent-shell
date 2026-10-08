@@ -344,6 +344,7 @@ async fn handle_message(
 
         // Chat handlers — delegated to chat_cmds
         WebSocketMessage::WatchChatLog { .. }
+        | WebSocketMessage::GetAgentActivities
         | WebSocketMessage::WatchAcpChatLog { .. }
         | WebSocketMessage::LoadMoreChatHistory { .. }
         | WebSocketMessage::UnwatchChatLog

@@ -97,6 +97,8 @@ import com.agentshell.data.model.AcpSession
 import com.agentshell.data.model.FavoriteSession
 import com.agentshell.data.model.SessionTag
 import com.agentshell.data.model.TmuxSession
+import com.agentshell.data.model.AgentActivity
+import androidx.lifecycle.compose.LifecycleStartEffect
 import com.agentshell.core.util.timeAgo
 
 private data class FavoriteDraft(
@@ -123,6 +125,10 @@ fun SessionsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    LifecycleStartEffect(viewModel) {
+        viewModel.setListVisible(true)
+        onStopOrDispose { viewModel.setListVisible(false) }
+    }
 
     var selectedTabIndex by rememberSaveable { mutableStateOf(0) }
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
@@ -309,6 +315,8 @@ fun SessionsScreen(
                 when (selectedTabIndex) {
                     0 -> TmuxSessionList(
                         sessions = displayedSessions,
+                        activities = uiState.tmuxActivities,
+                        activityNow = uiState.activityNow,
                         isLoading = uiState.isLoading,
                         onTap = { session -> onNavigateToTerminal(session.name) },
                         onChat = { session -> onNavigateToChat(session.name, 0) },
@@ -346,6 +354,8 @@ fun SessionsScreen(
                     )
                     1 -> AcpSessionList(
                         sessions = uiState.acpSessions,
+                        activities = uiState.directActivities,
+                        activityNow = uiState.activityNow,
                         isLoading = uiState.isLoading,
                         isSelectionMode = uiState.isSelectionMode,
                         selectedIds = uiState.selectedSessionIds,
@@ -808,6 +818,8 @@ private fun FavoriteDialog(
 @Composable
 private fun TmuxSessionList(
     sessions: List<TmuxSession>,
+    activities: Map<String, AgentActivity> = emptyMap(),
+    activityNow: Long = 0,
     isLoading: Boolean,
     onTap: (TmuxSession) -> Unit,
     onChat: (TmuxSession) -> Unit,
@@ -837,6 +849,8 @@ private fun TmuxSessionList(
         items(sessions, key = { it.name }) { session ->
             TmuxSessionCard(
                 session = session,
+                rawActivity = activities[session.name],
+                activityNow = activityNow,
                 tags = sessionTagMap[session.name] ?: emptyList(),
                 onTap = { onTap(session) },
                 onChat = { onChat(session) },
@@ -853,6 +867,8 @@ private fun TmuxSessionList(
 @Composable
 private fun TmuxSessionCard(
     session: TmuxSession,
+    rawActivity: AgentActivity? = null,
+    activityNow: Long = 0,
     tags: List<SessionTag> = emptyList(),
     onTap: () -> Unit,
     onChat: () -> Unit,
@@ -863,28 +879,29 @@ private fun TmuxSessionCard(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showKillDialog by remember { mutableStateOf(false) }
+    val activity = rawActivity?.let { if (it.expired(activityNow)) it.unknown("Live status is unavailable") else it }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 3.dp)
+            .then(sessionActivityBorder(activity))
             .combinedClickable(onClick = onTap, onLongClick = { showMenu = true }),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Icon(
+            SessionActivityEmblem(
                 Icons.Default.Terminal,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = if (session.attached) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant,
+                activity,
+                baseTint = if (session.attached) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(session.name, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Text(session.name, fontWeight = FontWeight.Medium, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    "${session.windows} win${if (session.attached) " • Active" else ""}",
+                    "${session.windows} win${if (session.attached) " • Attached" else ""}",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.outline,
                 )
@@ -982,6 +999,9 @@ private fun TmuxSessionCard(
                 }
             }
         }
+        Box(Modifier.fillMaxWidth().padding(start = 60.dp, end = 12.dp, bottom = 8.dp)) {
+            SessionActivityBadge(activity, activityNow)
+        }
     }
 
     if (showKillDialog) {
@@ -1005,6 +1025,8 @@ private fun TmuxSessionCard(
 @Composable
 private fun AcpSessionList(
     sessions: List<AcpSession>,
+    activities: Map<String, AgentActivity> = emptyMap(),
+    activityNow: Long = 0,
     isLoading: Boolean,
     isSelectionMode: Boolean,
     selectedIds: Set<String>,
@@ -1066,6 +1088,8 @@ private fun AcpSessionList(
                 items(providerSessions, key = { it.sessionId }) { session ->
                     AcpSessionCard(
                         session = session,
+                        rawActivity = activities[session.sessionId],
+                        activityNow = activityNow,
                         providerLabel = providerLabel,
                         isSelectionMode = isSelectionMode,
                         isSelected = selectedIds.contains(session.sessionId),
@@ -1185,6 +1209,8 @@ private fun AcpProviderBadge(
 @Composable
 private fun AcpSessionCard(
     session: AcpSession,
+    rawActivity: AgentActivity? = null,
+    activityNow: Long = 0,
     providerLabel: String,
     isSelectionMode: Boolean,
     isSelected: Boolean,
@@ -1196,6 +1222,7 @@ private fun AcpSessionCard(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    val activity = rawActivity?.let { if (it.expired(activityNow)) it.unknown("Live status is unavailable") else it }
 
     val displayTitle = session.title.ifBlank { session.cwd.substringAfterLast('/') }
     val pathLine = acpCompactPath(session.cwd)
@@ -1205,6 +1232,7 @@ private fun AcpSessionCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
+            .then(sessionActivityBorder(activity))
         .combinedClickable(onClick = onTap, onLongClick = onLongPress),
         colors = if (isSelected) {
             CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
@@ -1217,7 +1245,7 @@ private fun AcpSessionCard(
                 if (isSelectionMode) {
                     Checkbox(checked = isSelected, onCheckedChange = { onTap() })
                 } else {
-                    Icon(Icons.Default.SmartToy, contentDescription = null)
+                    SessionActivityEmblem(Icons.Default.SmartToy, activity)
                 }
             },
             headlineContent = { Text(displayTitle, fontWeight = FontWeight.Medium) },
@@ -1240,6 +1268,7 @@ private fun AcpSessionCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                     )
+                    SessionActivityBadge(activity, activityNow)
                 }
             },
             trailingContent = {

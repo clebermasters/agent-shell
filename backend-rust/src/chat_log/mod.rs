@@ -105,9 +105,32 @@ pub enum ChatLogEvent {
     },
 }
 
+/// Keep byte-limited summaries valid UTF-8 even when the limit splits an accent or emoji.
+pub(crate) fn truncate_utf8(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &text[..end])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncation_keeps_ascii_limits_and_never_splits_unicode() {
+        assert_eq!(truncate_utf8("abcdef", 3), "abc...");
+        assert_eq!(truncate_utf8("Olá", 4), "Olá");
+        assert_eq!(truncate_utf8("Olá mundo", 3), "Ol...");
+        assert_eq!(truncate_utf8("👋 hello", 2), "...");
+        assert_eq!(truncate_utf8("👋 hello", 4), "👋...");
+        assert_eq!(truncate_utf8("abc", 0), "...");
+        assert_eq!(truncate_utf8("", 0), "");
+    }
 
     #[test]
     fn test_content_block_text_roundtrip() {

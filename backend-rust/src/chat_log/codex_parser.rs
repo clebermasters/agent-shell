@@ -516,11 +516,7 @@ fn format_command(parts: &[String]) -> String {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max])
-    }
+    super::truncate_utf8(s, max)
 }
 
 fn summarize_output(text: &str) -> String {
@@ -576,6 +572,35 @@ fn generate_tool_summary(name: &str, input: Option<&serde_json::Value>) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_tool_input_is_safe_when_unicode_crosses_the_500_byte_limit() {
+        let input = format!("{}• command", "x".repeat(499));
+        let line = serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"unicode-call","input":input}});
+        let message = parse_line(&line.to_string()).unwrap();
+        let ContentBlock::ToolCall {
+            input: Some(input), ..
+        } = &message.blocks[0]
+        else {
+            panic!("expected tool call")
+        };
+        assert_eq!(input["input"], format!("{}...", "x".repeat(499)));
+    }
+
+    #[test]
+    fn single_line_tool_output_is_safe_at_a_unicode_boundary() {
+        let output = format!("{}👋 finished", "x".repeat(119));
+        let line = serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"unicode-output","output":output}});
+        let message = parse_line(&line.to_string()).unwrap();
+        let ContentBlock::ToolResult {
+            summary, content, ..
+        } = &message.blocks[0]
+        else {
+            panic!("expected result")
+        };
+        assert_eq!(summary, &format!("{}...", "x".repeat(119)));
+        assert_eq!(content.as_deref(), Some(output.as_str()));
+    }
 
     #[test]
     fn parse_user_message() {

@@ -9,6 +9,9 @@ import com.agentshell.data.model.FavoriteSession
 import com.agentshell.data.model.SessionTag
 import com.agentshell.data.model.SessionTagAssignment
 import com.agentshell.data.model.TmuxSession
+import com.agentshell.data.model.AgentActivity
+import com.agentshell.data.repository.ChatActivityRepository
+import com.agentshell.data.repository.HostRepository
 import com.agentshell.data.remote.WebSocketService
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -81,6 +84,9 @@ data class SessionsUiState(
     val activeTagFilter: String? = null,
     /** Maps favoriteId → list of tag IDs assigned to that favorite. */
     val favoriteTagMap: Map<String, List<String>> = emptyMap(),
+    val tmuxActivities: Map<String, AgentActivity> = emptyMap(),
+    val directActivities: Map<String, AgentActivity> = emptyMap(),
+    val activityNow: Long = 0,
 )
 
 /** Emitted when a new ACP session is created so the UI can navigate to it. */
@@ -107,6 +113,8 @@ class SessionsViewModel @Inject constructor(
     private val wsService: WebSocketService,
     private val favoriteSessionDao: FavoriteSessionDao,
     private val sessionTagDao: SessionTagDao,
+    private val activityRepository: ChatActivityRepository,
+    private val hostRepository: HostRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionsUiState())
@@ -118,13 +126,34 @@ class SessionsViewModel @Inject constructor(
     private var pendingTagSnapshot = PendingTagSnapshot()
     private val sessionCwdCache = linkedMapOf<String, String>()
     private var scheduledSessionRefreshJob: Job? = null
+    private var activityTicker: Job? = null
 
     init {
         observeCachedFavorites()
         observeCachedTags()
         observeMessages()
         observeConnection()
+        viewModelScope.launch {
+            combine(activityRepository.agentActivities, activityRepository.states, hostRepository.getSelectedHost()) { activities, states, host ->
+                val now = android.os.SystemClock.elapsedRealtime()
+                val byTarget = states.values.filter { it.target.hostId == host?.id }.mapNotNull { state ->
+                    activities[state.target.key]?.let { state.target to if (it.expired(now)) it.unknown("Live status is unavailable") else it }
+                }
+                val tmux = byTarget.filter { !it.first.isAcp }.groupBy { it.first.sessionName }.mapValues { (_, values) -> values.maxBy { activityPriority(it.second) }.second }
+                val direct = byTarget.filter { it.first.isAcp }.associate { it.first.sessionName to it.second }
+                tmux to direct
+            }.collect { (tmux, direct) -> _uiState.update { it.copy(tmuxActivities = tmux, directActivities = direct) } }
+        }
     }
+
+    fun setListVisible(visible: Boolean) {
+        activityRepository.setListViewing("sessions-list", visible)
+        if (visible && activityTicker?.isActive != true) activityTicker = viewModelScope.launch {
+            while (true) { _uiState.update { it.copy(activityNow = android.os.SystemClock.elapsedRealtime()) }; delay(1000) }
+        }
+        if (!visible) { activityTicker?.cancel(); activityTicker = null }
+    }
+    override fun onCleared() { activityRepository.setListViewing("sessions-list", false); super.onCleared() }
 
     private fun observeCachedFavorites() {
         viewModelScope.launch {

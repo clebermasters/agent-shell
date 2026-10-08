@@ -356,6 +356,7 @@ pub enum WebSocketMessage {
     },
     GetDotfileTemplates,
     // Chat log watching
+    GetAgentActivities,
     WatchChatLog {
         #[serde(rename = "sessionName")]
         session_name: String,
@@ -1155,6 +1156,8 @@ pub enum ServerMessage {
         stop_reason: String,
         #[serde(rename = "totalTokens")]
         total_tokens: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        activity: Option<crate::chat_activity::ActivityState>,
     },
     AcpPermissionRequest {
         #[serde(rename = "requestId")]

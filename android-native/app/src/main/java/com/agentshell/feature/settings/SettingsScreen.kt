@@ -49,6 +49,8 @@ data class SettingsUiState(
     val autoAttachEnabled: Boolean = false,
     val keepScreenOn: Boolean = false,
     val chatNotificationsEnabled: Boolean = true,
+    val agentFinishedEnabled: Boolean = true,
+    val agentQuietEnabled: Boolean = true,
     val isSaving: Boolean = false,
     val savedMessage: String? = null,
     val appVersion: String = "1.0.0",
@@ -89,6 +91,8 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             dataStore.chatNotificationsEnabled.collect { v -> _state.update { it.copy(chatNotificationsEnabled = v) } }
         }
+        viewModelScope.launch { dataStore.agentFinishedEnabled.collect { v -> _state.update { it.copy(agentFinishedEnabled = v) } } }
+        viewModelScope.launch { dataStore.agentQuietEnabled.collect { v -> _state.update { it.copy(agentQuietEnabled = v) } } }
     }
 
     fun setApiKey(key: String) { _state.update { it.copy(openaiApiKey = key) } }
@@ -139,6 +143,9 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { dataStore.setKeepScreenOn(enabled) }
         _state.update { it.copy(keepScreenOn = enabled) }
     }
+
+    fun toggleAgentFinished(enabled: Boolean) { viewModelScope.launch { dataStore.setAgentFinishedEnabled(enabled) }; _state.update { it.copy(agentFinishedEnabled = enabled) } }
+    fun toggleAgentQuiet(enabled: Boolean) { viewModelScope.launch { dataStore.setAgentQuietEnabled(enabled) }; _state.update { it.copy(agentQuietEnabled = enabled) } }
 
     fun toggleChatNotifications(enabled: Boolean) {
         viewModelScope.launch { dataStore.setChatNotificationsEnabled(enabled) }
@@ -262,7 +269,29 @@ fun SettingsScreen(
                             })
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Notification sound and alerts") }
+                    ) { Text("Chat message sound and alerts") }
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Agent finished", style = MaterialTheme.typography.bodyMedium)
+                            Text("Alert when an agent confirms its turn is complete", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = state.agentFinishedEnabled, onCheckedChange = viewModel::toggleAgentFinished)
+                    }
+                    OutlinedButton(onClick = { launchSettingsIntent(context, Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName); putExtra(Settings.EXTRA_CHANNEL_ID, NotificationHelper.FINISHED_CHANNEL_ID)
+                    }) }, modifier = Modifier.fillMaxWidth()) { Text("Agent finished sound and alerts") }
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Agent became quiet", style = MaterialTheme.typography.bodyMedium)
+                            Text("Alert after 10 seconds without terminal activity; completion is estimated", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = state.agentQuietEnabled, onCheckedChange = viewModel::toggleAgentQuiet)
+                    }
+                    OutlinedButton(onClick = { launchSettingsIntent(context, Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName); putExtra(Settings.EXTRA_CHANNEL_ID, NotificationHelper.QUIET_CHANNEL_ID)
+                    }) }, modifier = Modifier.fillMaxWidth()) { Text("Agent became quiet sound and alerts") }
                 }
             }
 

@@ -2,13 +2,14 @@
 mod lifecycle;
 mod protocol;
 mod terminal;
+pub(crate) use protocol::direct_state;
+pub(crate) use protocol::{direct_snapshots, report_direct_completion, start_direct_broadcast};
 pub(crate) use protocol::{invalidate_provider, report_direct, start_direct_watch};
 
 use crate::{types::ServerMessage, websocket::BroadcastMessage};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    hash::{Hash, Hasher},
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 use tokio::{
@@ -21,6 +22,7 @@ use tokio::{
 #[serde(rename_all = "kebab-case")]
 pub enum ActivityStatus {
     Working,
+    RecentActivity,
     Waiting,
     Idle,
     Failed,
@@ -40,6 +42,9 @@ pub struct ActivityState {
     pub observer_id: String,
     pub sequence: u64,
     pub turn_id: Option<String>,
+    pub finished_at: Option<i64>,
+    pub completion_reason: Option<String>,
+    pub quiet_at: Option<i64>,
 }
 
 impl ActivityState {
@@ -55,6 +60,9 @@ impl ActivityState {
             observer_id: uuid::Uuid::new_v4().to_string(),
             sequence: 0,
             turn_id: None,
+            finished_at: None,
+            completion_reason: None,
+            quiet_at: None,
         }
     }
 }
@@ -152,9 +160,7 @@ impl Tracker {
         }
     }
     fn observe(&mut self, pane: &Pane, text: &str, now: i64) {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        text.hash(&mut hasher);
-        let hash = hasher.finish();
+        let hash = terminal::activity_fingerprint(text);
         let dimensions = (pane.width, pane.height);
         let changed = self
             .previous_screen
@@ -168,6 +174,10 @@ impl Tracker {
         self.dimensions = Some(dimensions);
         self.state.observed_at = now;
         self.state.sequence += 1;
+        self.state.finished_at = None;
+        self.state.completion_reason = None;
+        self.state.quiet_at = None;
+        self.state.turn_id = None;
         let signal = terminal::classify(text, &pane.command);
         self.state.status = if pane.dead {
             ActivityStatus::Failed
@@ -202,8 +212,23 @@ impl Tracker {
         } else if self.state.status != ActivityStatus::Waiting {
             self.state.started_at = None;
         }
-        if self.state.status == ActivityStatus::Unknown && changed && !pane.in_mode {
-            self.state.detail = "Recent terminal activity".into();
+        if self.state.status == ActivityStatus::Unknown && !pane.in_mode && !pane.dead {
+            if let Some(last) = self.state.last_activity_at {
+                if now - last < 10_000 {
+                    self.state.status = ActivityStatus::RecentActivity;
+                    self.state.detail = "Recent terminal activity".into();
+                } else {
+                    self.state.detail = "No recent terminal activity".into();
+                    self.state.quiet_at = Some(last + 10_000);
+                }
+            }
+        }
+        if self.state.status == ActivityStatus::Idle && !pane.in_mode {
+            self.state.quiet_at = self
+                .state
+                .last_activity_at
+                .filter(|last| now - last >= 10_000)
+                .map(|last| last + 10_000);
         }
     }
     fn unavailable(&mut self) {
@@ -214,6 +239,9 @@ impl Tracker {
         self.state.observed_at = chrono::Utc::now().timestamp_millis();
         self.state.sequence += 1;
         self.state.started_at = None;
+        self.state.quiet_at = None;
+        self.state.finished_at = None;
+        self.state.completion_reason = None;
     }
 }
 
@@ -343,6 +371,42 @@ mod tests {
         tracker.observe(&pane(), "output", 1000);
         tracker.observe(&pane(), "output", 100_000);
         assert_eq!(tracker.state.status, ActivityStatus::Unknown);
+    }
+
+    #[test]
+    fn activity_holds_for_ten_seconds_then_emits_one_stable_quiet_marker() {
+        let mut tracker = Tracker::new();
+        tracker.observe(&pane(), "baseline", 1000);
+        tracker.observe(&pane(), "new output", 2000);
+        assert_eq!(tracker.state.status, ActivityStatus::RecentActivity);
+        tracker.observe(&pane(), "new output", 11_000);
+        assert_eq!(tracker.state.status, ActivityStatus::RecentActivity);
+        tracker.observe(&pane(), "new output", 12_000);
+        assert_eq!(tracker.state.status, ActivityStatus::Unknown);
+        assert_eq!(tracker.state.quiet_at, Some(12_000));
+        tracker.observe(&pane(), "new output", 20_000);
+        assert_eq!(tracker.state.quiet_at, Some(12_000));
+        tracker.observe(&pane(), "another output", 21_000);
+        assert_eq!(tracker.state.status, ActivityStatus::RecentActivity);
+        assert_eq!(tracker.state.quiet_at, None);
+    }
+
+    #[test]
+    fn reconnect_failure_is_not_a_recent_activity_or_quiet_transition() {
+        let mut tracker = Tracker::new();
+        tracker.observe(
+            &pane(),
+            "• Reconnect failed — waiting for feedback (13h 58m 49s)",
+            1000,
+        );
+        tracker.observe(
+            &pane(),
+            "• Reconnect failed — waiting for feedback (13h 58m 50s)",
+            2000,
+        );
+        assert_eq!(tracker.state.status, ActivityStatus::Failed);
+        assert_eq!(tracker.state.last_activity_at, None);
+        assert_eq!(tracker.state.quiet_at, None);
     }
     #[test]
     fn resizing_is_not_agent_activity() {

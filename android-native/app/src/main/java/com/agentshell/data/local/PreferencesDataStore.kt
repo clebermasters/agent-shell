@@ -42,6 +42,9 @@ class PreferencesDataStore @Inject constructor(
         val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
         val CHAT_NOTIFICATIONS_ENABLED = booleanPreferencesKey("chat_notifications_enabled")
         val CHAT_READ_STATES = stringPreferencesKey("chat_read_states")
+        val AGENT_FINISHED_ENABLED = booleanPreferencesKey("agent_finished_enabled")
+        val AGENT_QUIET_ENABLED = booleanPreferencesKey("agent_quiet_enabled")
+        val AGENT_SIGNAL_LEDGERS = stringPreferencesKey("agent_signal_ledgers")
     }
 
     // ─── selectedHostId ──────────────────────────────────────────────────────
@@ -264,6 +267,13 @@ class PreferencesDataStore @Inject constructor(
     suspend fun setChatNotificationsEnabled(value: Boolean) {
         dataStore.edit { it[Keys.CHAT_NOTIFICATIONS_ENABLED] = value }
     }
+
+    val agentFinishedEnabled: Flow<Boolean> get() = dataStore.data.map { it[Keys.AGENT_FINISHED_ENABLED] ?: true }
+    val agentQuietEnabled: Flow<Boolean> get() = dataStore.data.map { it[Keys.AGENT_QUIET_ENABLED] ?: true }
+    val agentSignalLedgers: Flow<String> get() = dataStore.data.map { it[Keys.AGENT_SIGNAL_LEDGERS] ?: "{}" }
+    suspend fun setAgentFinishedEnabled(value: Boolean) { dataStore.edit { it[Keys.AGENT_FINISHED_ENABLED] = value } }
+    suspend fun setAgentQuietEnabled(value: Boolean) { dataStore.edit { it[Keys.AGENT_QUIET_ENABLED] = value } }
+    suspend fun setAgentSignalLedgers(value: String) { dataStore.edit { it[Keys.AGENT_SIGNAL_LEDGERS] = value } }
 
     val chatReadStates: Flow<String>
         get() = dataStore.data.map { it[Keys.CHAT_READ_STATES] ?: "{}" }

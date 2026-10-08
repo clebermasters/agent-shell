@@ -308,11 +308,7 @@ fn generate_result_summary(content: Option<&str>) -> String {
         return format!("{line_count} lines");
     }
 
-    if text.len() > 120 {
-        format!("{}...", &text[..120])
-    } else {
-        text.to_string()
-    }
+    super::truncate_utf8(text, 120)
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +318,15 @@ fn generate_result_summary(content: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_result_summary_preserves_utf8_at_the_byte_limit() {
+        let result = format!("{}á terminado", "x".repeat(119));
+        assert_eq!(
+            generate_result_summary(Some(&result)),
+            format!("{}...", "x".repeat(119))
+        );
+    }
 
     #[test]
     fn parse_user_text_message() {

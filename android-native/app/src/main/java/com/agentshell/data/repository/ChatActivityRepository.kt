@@ -10,6 +10,8 @@ import com.agentshell.data.model.ChatReadState
 import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.AgentActivityStatus
+import com.agentshell.data.model.AgentSignalLedger
+import com.agentshell.data.model.AgentSignalKind
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.model.Host
 import com.agentshell.data.remote.SessionSocket
@@ -59,6 +61,12 @@ class ChatActivityRepository @Inject constructor(
     private var selectedHost: Host? = null
     private var availableSessions: Set<String>? = null
     private var notificationsEnabled = true
+    private var finishedEnabled = true
+    private var quietEnabled = true
+    private val signalMutex = Mutex()
+    private var signalLedgers: Map<String, AgentSignalLedger> = emptyMap()
+    private val listViewers = mutableSetOf<String>()
+    private val knownWindows = mutableMapOf<String, Set<Int>>()
     private var started = false
 
     private data class StreamReply(
@@ -78,6 +86,9 @@ class ChatActivityRepository @Inject constructor(
             _states.value = runCatching { json.decodeFromString<Map<String, ChatReadState>>(preferences.chatReadStates.first()) }
                 .getOrDefault(emptyMap())
             notificationsEnabled = preferences.chatNotificationsEnabled.first()
+            finishedEnabled = preferences.agentFinishedEnabled.first()
+            quietEnabled = preferences.agentQuietEnabled.first()
+            signalLedgers = runCatching { json.decodeFromString<Map<String, AgentSignalLedger>>(preferences.agentSignalLedgers.first()) }.getOrDefault(emptyMap())
             ready.complete(Unit)
             launch {
                 preferences.chatNotificationsEnabled.collect { enabled ->
@@ -90,6 +101,7 @@ class ChatActivityRepository @Inject constructor(
                 hosts.getSelectedHost().collect { host ->
                     if (host?.id != selectedHost?.id) {
                         availableSessions = null
+                        knownWindows.clear()
                         streams.values.forEach { it.alertJob?.cancel() }
                         streams.clear()
                     }
@@ -99,11 +111,16 @@ class ChatActivityRepository @Inject constructor(
             }
             launch {
                 webSocket.connectionStatus.collect { status ->
-                    if (status == ConnectionStatus.CONNECTED) syncMonitors()
+                    if (status == ConnectionStatus.CONNECTED) {
+                        webSocket.send(mapOf("type" to "get-agent-activities"))
+                        syncMonitors()
+                    }
                     else selectedHost?.id?.let { invalidateHostActivity(it) }
                 }
             }
             launch { webSocket.keepAliveEnabled.collect { syncMonitors() } }
+            launch { preferences.agentFinishedEnabled.collect { finishedEnabled = it; syncMonitors() } }
+            launch { preferences.agentQuietEnabled.collect { quietEnabled = it; syncMonitors() } }
             webSocket.messages.collect { message ->
                 val host = selectedHost ?: return@collect
                 // Never attribute events from a previous server to the newly selected host.
@@ -126,6 +143,12 @@ class ChatActivityRepository @Inject constructor(
 
     fun setViewing(owner: String, target: ChatTarget?, viewing: Boolean) {
         if (viewing && target != null) viewers[owner] = target.key else viewers.remove(owner)
+        if (viewing && target != null) NotificationHelper.cancelAgentSignal(context, target)
+    }
+
+    fun setListViewing(owner: String, viewing: Boolean) {
+        if (viewing) listViewers.add(owner) else listViewers.remove(owner)
+        syncMonitors()
     }
 
     private fun isViewing(target: ChatTarget) = target.key in viewers.values
@@ -189,10 +212,24 @@ class ChatActivityRepository @Inject constructor(
                 availableSessions = sessions.mapNotNull { it["name"] as? String }.toSet()
                 for (session in sessions) {
                     val name = session["name"] as? String ?: continue
-                    if ((session["tool"] as? String).isNullOrBlank()) continue
-                    register(ChatTarget.create(hostId, name))
+                    if ((session["tool"] as? String).isNullOrBlank() && !quietEnabled && listViewers.isEmpty()) continue
+                    for (index in knownWindows[name] ?: setOf(0)) register(ChatTarget.create(hostId, name, index))
+                    val existing = monitors.entries.firstOrNull { _states.value[it.key]?.target?.sessionName == name }
+                    existing?.value?.first?.send(mapOf("type" to "list-windows", "sessionName" to name))
                 }
                 syncMonitors()
+            }
+            "windows-list" -> {
+                val name = message["sessionName"] as? String ?: return
+                if (watchedTarget == null || watchedTarget.sessionName != name || watchedTarget.hostId != hostId) return
+                val indexes = (message["windows"] as? List<Map<String, Any?>>).orEmpty().mapNotNull { (it["index"] as? Number)?.toInt() }.toSet()
+                if (indexes.isEmpty() || knownWindows[name] == indexes) return
+                scope.launch {
+                    if (selectedHost?.id != hostId) return@launch
+                    knownWindows[name] = indexes
+                    for (index in indexes) update(ChatTarget.create(hostId, name, index)) { it }
+                    syncMonitors()
+                }
             }
             "chat-history", "acp-history-loaded" -> {
                 val target = eventTarget(hostId, message) ?: watchedTarget ?: return
@@ -257,11 +294,17 @@ class ChatActivityRepository @Inject constructor(
         if (watchedTarget != null && target.key != watchedTarget.key) return
         val current = _agentActivities.value[target.key] ?: AgentActivity()
         val now = SystemClock.elapsedRealtime()
-        val next = if (message["type"] == "chat-activity") {
-            AgentActivity.parse(message, now)?.takeIf { current.accepts(it) } ?: return
+        val next = if (message["type"] == "chat-activity" || (message["type"] == "acp-prompt-done" && message["activity"] is Map<*, *>)) {
+            val input = if (message["type"] == "chat-activity") message else message + ("state" to message["activity"])
+            val parsed = AgentActivity.parse(input, now) ?: return
+            if (!current.accepts(parsed)) {
+                if (message["type"] == "acp-prompt-done") processAgentSignal(target, parsed)
+                return
+            }
+            parsed
         } else {
             // Older servers can still report direct-agent work through existing protocol events.
-            if (!target.isAcp || (current.backendSnapshot && !current.expired(now))) return
+            if (!target.isAcp || (message["type"] != "acp-prompt-done" && current.backendSnapshot && !current.expired(now))) return
             val status = when (message["type"]) {
                 "acp-message-chunk", "acp-tool-call" -> AgentActivityStatus.WORKING
                 "acp-permission-request" -> AgentActivityStatus.WAITING
@@ -279,10 +322,33 @@ class ChatActivityRepository @Inject constructor(
                 }, source = "agent-protocol", confidence = "reported",
                 startedAt = if (status == AgentActivityStatus.WORKING) current.startedAt ?: System.currentTimeMillis() else null,
                 observedAt = System.currentTimeMillis(), receivedAt = now,
+                turnId = current.turnId,
+                finishedAt = if (message["type"] == "acp-prompt-done") System.currentTimeMillis() else null,
+                completionReason = if (message["type"] == "acp-prompt-done") when (message["stopReason"]) { "failed" -> "failed"; "cancelled", "interrupted" -> "interrupted"; else -> "completed" } else null,
             )
         }
         _agentActivities.value = _agentActivities.value + (target.key to next)
+        processAgentSignal(target, next)
     }
+
+    private fun processAgentSignal(target: ChatTarget, next: AgentActivity) {
+        scope.launch {
+            ready.await()
+            signalMutex.withLock {
+                val ledger = signalLedgers[target.key] ?: AgentSignalLedger()
+                val (updated, signal) = ledger.observe(next)
+                if (updated != ledger) {
+                    signalLedgers = (signalLedgers - target.key).entries.toList().takeLast(255).associate { it.toPair() } + (target.key to updated)
+                    preferences.setAgentSignalLedgers(json.encodeToString(signalLedgers))
+                }
+                if (signal != null && !isViewing(target) && ((signal.kind == AgentSignalKind.FINISHED && finishedEnabled) || (signal.kind == AgentSignalKind.QUIET && quietEnabled))) {
+                    NotificationHelper.showAgentSignal(context, target, signal)
+                }
+            }
+        }
+    }
+
+    internal suspend fun awaitAgentSignals() { ready.await(); signalMutex.withLock { } }
 
     internal fun invalidateActivity(target: ChatTarget) {
         val current = _agentActivities.value[target.key] ?: return
@@ -304,9 +370,10 @@ class ChatActivityRepository @Inject constructor(
     private fun syncMonitors() {
         val host = selectedHost
         val url = webSocket.currentWebSocketUrl
-        val canWatch = notificationsEnabled && webSocket.keepAliveEnabled.value && host != null && url?.substringBefore('?') == "${host.wsUrl}/ws"
+        val canWatch = (notificationsEnabled || finishedEnabled || quietEnabled || listViewers.isNotEmpty()) && webSocket.keepAliveEnabled.value && host != null && url?.substringBefore('?') == "${host.wsUrl}/ws"
         val desired = if (canWatch) _states.value.values.map { it.target }.filter {
             it.hostId == host!!.id && !it.isAcp && (availableSessions == null || it.sessionName in availableSessions!!)
+                && (knownWindows[it.sessionName]?.contains(it.windowIndex) != false)
         }.associateBy { it.key } else emptyMap()
         for (key in monitors.keys.toList()) {
             if (key !in desired) monitors.remove(key)?.let { (socket, monitorScope) -> socket.dispose(); monitorScope.cancel() }
@@ -321,7 +388,10 @@ class ChatActivityRepository @Inject constructor(
             }
             monitorScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 socket.isConnected.collect { connected ->
-                    if (connected) socket.send(mapOf("type" to "watch-chat-log", "sessionName" to target.sessionName, "windowIndex" to target.windowIndex, "limit" to 50))
+                    if (connected) {
+                        socket.send(mapOf("type" to "list-windows", "sessionName" to target.sessionName))
+                        socket.send(mapOf("type" to "watch-chat-log", "sessionName" to target.sessionName, "windowIndex" to target.windowIndex, "limit" to 50))
+                    }
                     else invalidateActivity(target)
                 }
             }

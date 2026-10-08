@@ -1,4 +1,5 @@
 use super::ActivityStatus;
+use std::hash::{Hash, Hasher};
 pub(super) struct Signal {
     pub status: ActivityStatus,
     pub detail: &'static str,
@@ -12,21 +13,57 @@ fn signal(status: ActivityStatus, detail: &'static str) -> Signal {
     }
 }
 
+fn is_failure_line(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    [
+        "• stream failed",
+        "• conversation failed",
+        "• task failed",
+        "• reconnect failed",
+        "• reconnecting",
+        "■ stream disconnected",
+    ]
+    .iter()
+    .any(|prefix| lower.starts_with(prefix))
+}
+
+/// A failure timer is a UI refresh, rather than new agent output. Preserve the error text.
+pub(super) fn activity_fingerprint(text: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let line_count = text.lines().count();
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim_end();
+        let meaningful =
+            if index + 12 >= line_count && is_failure_line(trimmed) && trimmed.ends_with(')') {
+                trimmed
+                    .rfind('(')
+                    .and_then(|start| {
+                        let timer = &trimmed[start + 1..trimmed.len() - 1];
+                        let tokens: Vec<_> = timer.split_whitespace().collect();
+                        let duration_only = !tokens.is_empty()
+                            && tokens.iter().all(|token| {
+                                token.len() > 1
+                                    && matches!(token.as_bytes().last(), Some(b'h' | b'm' | b's'))
+                                    && token[..token.len() - 1]
+                                        .bytes()
+                                        .all(|byte| byte.is_ascii_digit())
+                            });
+                        duration_only.then_some(trimmed[..start].trim_end())
+                    })
+                    .unwrap_or(line)
+            } else {
+                line
+            };
+        meaningful.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 // Restrict recognition to the active footer; transcript text is not a runtime status.
 pub(super) fn classify(text: &str, command: &str) -> Signal {
     let lines: Vec<_> = text.lines().rev().take(12).map(str::trim).collect();
     for line in &lines {
-        let lower = line.to_ascii_lowercase();
-        if [
-            "• stream failed",
-            "• conversation failed",
-            "• task failed",
-            "• reconnecting",
-            "■ stream disconnected",
-        ]
-        .iter()
-        .any(|prefix| lower.starts_with(prefix))
-        {
+        if is_failure_line(line) {
             return signal(
                 ActivityStatus::Failed,
                 "Agent encountered a connection or task error",
@@ -138,6 +175,67 @@ mod tests {
             )
             .status,
             ActivityStatus::Failed
+        );
+    }
+
+    #[test]
+    fn reconnect_failure_takes_precedence_over_an_idle_prompt() {
+        assert_eq!(
+            classify(
+                "• Reconnect failed — waiting for feedback (13h 58m 50s)\n›\n? for shortcuts",
+                "node"
+            )
+            .status,
+            ActivityStatus::Failed
+        );
+    }
+
+    #[test]
+    fn failure_timer_ticks_do_not_change_the_activity_fingerprint() {
+        assert_eq!(
+            activity_fingerprint(
+                "response\n• Reconnect failed — waiting for feedback (13h 58m 49s)"
+            ),
+            activity_fingerprint(
+                "response\n• Reconnect failed — waiting for feedback (13h 58m 50s)"
+            )
+        );
+    }
+
+    #[test]
+    fn real_output_and_error_changes_remain_activity() {
+        let previous = "response\n• Reconnect failed — waiting for feedback (13h 58m 49s)";
+        assert_ne!(
+            activity_fingerprint(previous),
+            activity_fingerprint(
+                "new response\n• Reconnect failed — waiting for feedback (13h 58m 50s)"
+            )
+        );
+        assert_ne!(
+            activity_fingerprint(previous),
+            activity_fingerprint("response\n• Reconnect failed — a different error (13h 58m 50s)")
+        );
+        assert_ne!(
+            activity_fingerprint("• Working (1s • esc to interrupt)"),
+            activity_fingerprint("• Working (2s • esc to interrupt)")
+        );
+    }
+
+    #[test]
+    fn transcript_timers_and_error_codes_are_not_discarded() {
+        assert_ne!(
+            activity_fingerprint(&format!(
+                "• Reconnect failed (1s)\n{}",
+                "output\n".repeat(20)
+            )),
+            activity_fingerprint(&format!(
+                "• Reconnect failed (2s)\n{}",
+                "output\n".repeat(20)
+            ))
+        );
+        assert_ne!(
+            activity_fingerprint("• Stream failed (HTTP 429)"),
+            activity_fingerprint("• Stream failed (HTTP 500)")
         );
     }
     #[test]

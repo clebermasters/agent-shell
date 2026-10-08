@@ -1,4 +1,5 @@
 use super::{forward_state, ActivityState, ActivityStatus};
+use crate::types::ServerMessage;
 use crate::websocket::BroadcastMessage;
 use std::{
     collections::HashMap,
@@ -8,6 +9,11 @@ use tokio::{
     sync::{mpsc, watch},
     task::JoinHandle,
 };
+
+fn changed() -> &'static tokio::sync::Notify {
+    static CHANGED: OnceLock<tokio::sync::Notify> = OnceLock::new();
+    CHANGED.get_or_init(tokio::sync::Notify::new)
+}
 
 type Sessions = Mutex<HashMap<String, watch::Sender<ActivityState>>>;
 fn sessions() -> &'static Sessions {
@@ -53,6 +59,9 @@ pub(crate) fn report_direct(
                 || turn_id.is_some() && turn_id != state.turn_id)
         {
             state.started_at = Some(now);
+            state.turn_id = turn_id
+                .clone()
+                .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
         }
         if !matches!(status, ActivityStatus::Working | ActivityStatus::Waiting) {
             state.started_at = None;
@@ -67,7 +76,72 @@ pub(crate) fn report_direct(
         if turn_id.is_some() {
             state.turn_id = turn_id;
         }
+        if matches!(status, ActivityStatus::Working | ActivityStatus::Waiting) {
+            state.finished_at = None;
+            state.completion_reason = None;
+            state.quiet_at = None;
+        }
     });
+    changed().notify_one();
+}
+
+pub(crate) fn report_direct_completion(id: &str, reason: &str, detail: &str) {
+    report_direct(
+        id,
+        if reason == "failed" {
+            ActivityStatus::Failed
+        } else {
+            ActivityStatus::Idle
+        },
+        detail,
+        None,
+    );
+    sender(id).send_modify(|state| {
+        state.finished_at = Some(chrono::Utc::now().timestamp_millis());
+        state.completion_reason = Some(reason.into());
+        state.sequence += 1;
+    });
+    changed().notify_one();
+}
+
+pub(crate) fn direct_snapshots() -> Vec<ServerMessage> {
+    let entries = sessions().lock().unwrap_or_else(|e| e.into_inner());
+    entries
+        .iter()
+        .map(|(id, sender)| {
+            let mut state = sender.borrow().clone();
+            state.observed_at = chrono::Utc::now().timestamp_millis();
+            ServerMessage::ChatActivity {
+                session_name: format!("acp_{id}"),
+                window_index: 0,
+                pane_id: None,
+                state,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn direct_state(id: &str) -> ActivityState {
+    sender(id).borrow().clone()
+}
+
+pub(crate) async fn start_direct_broadcast(
+    tx: mpsc::Sender<ServerMessage>,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => return,
+            _ = changed().notified() => {},
+            _ = heartbeat.tick() => {},
+        }
+        for snapshot in direct_snapshots() {
+            if tx.send(snapshot).await.is_err() {
+                return;
+            }
+        }
+    }
 }
 
 pub(crate) fn invalidate_provider(prefix: &str) {
@@ -86,6 +160,7 @@ pub(crate) fn invalidate_provider(prefix: &str) {
             state.sequence += 1;
         });
     }
+    changed().notify_one();
 }
 
 pub(crate) fn start_direct_watch(

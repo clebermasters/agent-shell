@@ -413,14 +413,18 @@ pub(crate) async fn ensure_acp_client(app_state: &Arc<AppState>) -> Result<(), S
                 } => {
                     let external_id =
                         external_session_id(DirectSessionProvider::Opencode, &session_id);
-                    crate::chat_activity::report_direct(
+                    crate::chat_activity::report_direct_completion(
                         &external_id,
-                        crate::chat_activity::ActivityStatus::Idle,
+                        if matches!(stop_reason.as_str(), "cancelled" | "interrupted") {
+                            "interrupted"
+                        } else {
+                            "completed"
+                        },
                         "Agent turn ended",
-                        None,
                     );
                     let _ = broadcast_tx
                         .send(ServerMessage::AcpPromptDone {
+                            activity: Some(crate::chat_activity::direct_state(&external_id)),
                             session_id: external_id,
                             stop_reason,
                             total_tokens,
@@ -614,9 +618,9 @@ pub(crate) async fn ensure_codex_client(app_state: &Arc<AppState>) -> Result<(),
                     } else {
                         crate::chat_activity::ActivityStatus::Idle
                     };
-                    crate::chat_activity::report_direct(
+                    crate::chat_activity::report_direct_completion(
                         &session_id,
-                        status,
+                        &stop_reason,
                         if status == crate::chat_activity::ActivityStatus::Failed {
                             "Agent turn failed"
                         } else if stop_reason == "interrupted" {
@@ -624,9 +628,9 @@ pub(crate) async fn ensure_codex_client(app_state: &Arc<AppState>) -> Result<(),
                         } else {
                             "Agent turn ended"
                         },
-                        None,
                     );
                     let msg = ServerMessage::AcpPromptDone {
+                        activity: Some(crate::chat_activity::direct_state(&session_id)),
                         session_id,
                         stop_reason,
                         total_tokens,

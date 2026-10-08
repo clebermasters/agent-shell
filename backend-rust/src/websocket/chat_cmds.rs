@@ -94,6 +94,11 @@ pub(crate) async fn handle(
     app_state: Arc<AppState>,
 ) -> anyhow::Result<()> {
     match msg {
+        WebSocketMessage::GetAgentActivities => {
+            for snapshot in crate::chat_activity::direct_snapshots() {
+                send_message(&state.message_tx, snapshot).await?;
+            }
+        }
         WebSocketMessage::WatchChatLog {
             session_name,
             window_index,

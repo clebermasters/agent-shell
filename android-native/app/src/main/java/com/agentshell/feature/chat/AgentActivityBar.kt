@@ -30,6 +30,7 @@ fun AgentActivityBar(activity: AgentActivity, connected: Boolean = true) {
     }
     val label = when (current.status) {
         AgentActivityStatus.WORKING -> "Working"
+        AgentActivityStatus.RECENT_ACTIVITY -> "Recent activity"
         AgentActivityStatus.WAITING -> "Waiting for you"
         AgentActivityStatus.IDLE -> "Idle"
         AgentActivityStatus.FAILED -> "Failed"
@@ -38,12 +39,12 @@ fun AgentActivityBar(activity: AgentActivity, connected: Boolean = true) {
     val elapsed = if (current.status == AgentActivityStatus.WORKING) current.elapsedSeconds(now) else null
     val color = when (current.status) {
         AgentActivityStatus.FAILED -> MaterialTheme.colorScheme.error
-        AgentActivityStatus.WORKING, AgentActivityStatus.WAITING -> MaterialTheme.colorScheme.primary
+        AgentActivityStatus.WORKING, AgentActivityStatus.RECENT_ACTIVITY, AgentActivityStatus.WAITING -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (current.status == AgentActivityStatus.WORKING) {
+            if (current.status in setOf(AgentActivityStatus.WORKING, AgentActivityStatus.RECENT_ACTIVITY)) {
                 CircularProgressIndicator(Modifier.size(14.dp), color = color, strokeWidth = 2.dp)
             } else {
                 val icon = when (current.status) {

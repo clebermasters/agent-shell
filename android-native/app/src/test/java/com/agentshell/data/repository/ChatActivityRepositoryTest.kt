@@ -93,6 +93,52 @@ class ChatActivityRepositoryTest {
         "state" to mapOf("status" to status, "source" to "tmux-status", "confidence" to "inferred", "observerId" to "one", "sequence" to sequence, "observedAt" to 1000L),
     )
 
+    private fun signalActivity(status: String, sequence: Long, finished: Boolean = false, quiet: Boolean = false) = mapOf(
+        "type" to "chat-activity", "sessionName" to target.sessionName, "windowIndex" to target.windowIndex,
+        "state" to mapOf("status" to status, "source" to if (quiet || status == "recent-activity") "tmux-activity" else "codex-log", "confidence" to if (quiet || status == "recent-activity") "estimated" else "reported",
+            "observerId" to "signal", "sequence" to sequence, "observedAt" to 61_000L, "startedAt" to if (status == "working") 1000L else null,
+            "turnId" to "turn-one", "finishedAt" to if (finished) 61_000L else null, "completionReason" to if (finished) "completed" else null, "quietAt" to if (quiet) 61_000L else null),
+    )
+
+    @Test fun finishedAlertIsDurableAndDoesNotRepeatAfterReconnectOrRestart() = runTest {
+        val repo = repository(); repo.register(target)
+        repo.handleAgentActivity(target.hostId, signalActivity("working", 1))
+        repo.handleAgentActivity(target.hostId, signalActivity("idle", 2, finished = true))
+        repo.awaitAgentSignals()
+        assertEquals(NotificationHelper.FINISHED_CHANNEL_ID, shadowOf(manager).allNotifications.single().channelId)
+        manager.cancelAll()
+        repo.handleAgentActivity(target.hostId, signalActivity("idle", 3, finished = true))
+        repo.awaitAgentSignals()
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+        repo.close()
+        val restored = repository(); restored.register(target)
+        restored.handleAgentActivity(target.hostId, signalActivity("idle", 4, finished = true))
+        restored.awaitAgentSignals()
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
+    @Test fun quietTransitionUsesItsOwnChannelOnce() = runTest {
+        val repo = repository(); repo.register(target)
+        repo.handleAgentActivity(target.hostId, signalActivity("recent-activity", 1))
+        repo.handleAgentActivity(target.hostId, signalActivity("unknown", 2, quiet = true))
+        repo.awaitAgentSignals()
+        assertEquals(NotificationHelper.QUIET_CHANNEL_ID, shadowOf(manager).allNotifications.single().channelId)
+        manager.cancelAll()
+        repo.handleAgentActivity(target.hostId, signalActivity("unknown", 3, quiet = true))
+        repo.awaitAgentSignals()
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
+    @Test fun initialQuietSnapshotAndDisabledCompletionDoNotAlert() = runTest {
+        preferences.setAgentFinishedEnabled(false)
+        val repo = repository(); repo.register(target)
+        repo.handleAgentActivity(target.hostId, signalActivity("unknown", 1, quiet = true))
+        repo.handleAgentActivity(target.hostId, signalActivity("working", 2))
+        repo.handleAgentActivity(target.hostId, signalActivity("idle", 3, finished = true))
+        repo.awaitAgentSignals()
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
     @Test fun activityIsScopedToItsHostAndWindow() = runTest {
         val repo = repository()
         repo.handleAgentActivity("host-a", activity("session", 1, "working"))
@@ -199,6 +245,7 @@ class ChatActivityRepositoryTest {
     }
 
     @Test fun aSilentStreamingPreviewMustNotSuppressTheLaterAudibleCompletion() = runTest {
+        preferences.setAgentFinishedEnabled(false)
         val repo = repository()
         val acp = ChatTarget.create("host-a", "codex:background", isAcp = true)
         for (chat in listOf(target, acp)) {
@@ -220,6 +267,7 @@ class ChatActivityRepositoryTest {
     }
 
     @Test fun anAudibleStreamingPreviewKeepsItsCompletionUpdateSilent() = runTest {
+        preferences.setAgentFinishedEnabled(false)
         val repo = repository()
         val acp = ChatTarget.create("host-a", "codex:background", isAcp = true)
         repo.register(acp)

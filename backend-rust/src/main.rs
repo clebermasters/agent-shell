@@ -133,6 +133,12 @@ async fn main() -> Result<()> {
     };
 
     // Initialize CRON manager
+    let activity_broadcast = app_state.broadcast_tx.clone();
+    let activity_shutdown = app_state.shutdown_token.clone();
+    tokio::spawn(crate::chat_activity::start_direct_broadcast(
+        activity_broadcast,
+        activity_shutdown,
+    ));
     if let Err(e) = crate::cron::CRON_MANAGER.initialize().await {
         error!("Failed to initialize CRON manager: {}", e);
     }

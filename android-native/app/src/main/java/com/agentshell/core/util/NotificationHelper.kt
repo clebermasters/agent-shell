@@ -14,6 +14,8 @@ import androidx.core.app.NotificationManagerCompat
 import com.agentshell.R
 import com.agentshell.MainActivity
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.AgentSignal
+import com.agentshell.data.model.AgentSignalKind
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -22,6 +24,8 @@ object NotificationHelper {
     const val CHANNEL_ID = "agentshell_alerts"
     private const val CHANNEL_NAME = "Alerts"
     const val CHAT_CHANNEL_ID = "agentshell_chat_messages"
+    const val FINISHED_CHANNEL_ID = "agentshell_agent_finished"
+    const val QUIET_CHANNEL_ID = "agentshell_agent_quiet"
     const val CHAT_TARGET_EXTRA = "chat_target"
     private const val CHAT_NOTIFICATION_ID = 2002
 
@@ -46,6 +50,16 @@ object NotificationHelper {
                     )
                 }
             )
+            for ((id, name, description) in listOf(
+                Triple(FINISHED_CHANNEL_ID, "Agent finished", "Confirmed completion of agent turns"),
+                Triple(QUIET_CHANNEL_ID, "Agent became quiet", "Terminal activity stopped after detected work; completion is estimated"),
+            )) {
+                manager.createNotificationChannel(NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH).apply {
+                    this.description = description
+                    enableVibration(true)
+                    setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).build())
+                })
+            }
         }
     }
 
@@ -87,6 +101,31 @@ object NotificationHelper {
 
     fun cancelChat(context: Context, target: ChatTarget) {
         NotificationManagerCompat.from(context).cancel("chat:${target.key}", CHAT_NOTIFICATION_ID)
+    }
+
+    fun showAgentSignal(context: Context, target: ChatTarget, signal: AgentSignal) {
+        val finished = signal.kind == AgentSignalKind.FINISHED
+        val channel = if (finished) FINISHED_CHANNEL_ID else QUIET_CHANNEL_ID
+        val title = if (finished) "Agent finished" else "Agent became quiet"
+        val duration = signal.durationSeconds?.let { " · ${it / 60}m ${it % 60}s" }.orEmpty()
+        val body = if (finished) "Agent turn completed$duration" else "No recent terminal activity detected. The agent may have finished."
+        val intent = PendingIntent.getActivity(context, 0, chatIntent(context, target), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(context, channel)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$title · ${target.displayName}")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setAutoCancel(true)
+            .setContentIntent(intent)
+            .build()
+        try { NotificationManagerCompat.from(context).notify("agent:${target.key}", 2003, notification) } catch (_: SecurityException) { }
+    }
+
+    fun cancelAgentSignal(context: Context, target: ChatTarget) {
+        NotificationManagerCompat.from(context).cancel("agent:${target.key}", 2003)
     }
 
     fun show(context: Context, title: String, body: String, notificationId: String) {

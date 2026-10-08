@@ -50,9 +50,22 @@ async def activity(socket, session, window=0, ready=True):
         return msg
 
 
+async def history(socket, session, window=0):
+    deadline = asyncio.get_running_loop().time() + 15
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        msg = json.loads(await asyncio.wait_for(socket.recv(), timeout=max(remaining, 0.001)))
+        if msg.get("type") == "chat-log-error":
+            raise AssertionError("Chat history initialization returned an error")
+        if msg.get("type") == "chat-history" and msg.get("sessionName") == session and msg.get("windowIndex") == window:
+            assert msg.get("messages"), "Expected nonempty chat history"
+            return len(msg["messages"])
+
+
 async def verify(url, args, before):
     async with websockets.connect(url, max_size=16 * 1024 * 1024) as first, websockets.connect(url, max_size=16 * 1024 * 1024) as second:
         await watch(first, args.session, args.window)
+        history_count = await history(first, args.session, args.window) if args.require_history else None
         one = await activity(first, args.session, args.window)
         if one["state"]["status"] == "working":
             started = one["state"]["startedAt"]
@@ -88,6 +101,7 @@ async def verify(url, args, before):
             "shared_observer": True, "peer_unsubscribe": True, "reconnect_snapshot": True,
             "separate_panes": bool(other), "missing_pane_fallback": True,
             "observed_status": one["state"]["status"], "observed_source": one["state"]["source"],
+            "history_messages": history_count,
         }))
 
 
@@ -97,6 +111,7 @@ def main():
     parser.add_argument("--session", default="agentShell")
     parser.add_argument("--window", type=int, default=0)
     parser.add_argument("--expected-source")
+    parser.add_argument("--require-history", action="store_true", help="Also require successful initial chat history delivery")
     args = parser.parse_args()
     before = tmux_snapshot()
     token = secrets.token_urlsafe(32)

@@ -53,6 +53,9 @@ The **maintained and feature-complete client is the native Android app** (`andro
 - Context-window updates and tool call timeline tracking
 - Chat and split-screen Chat show Working, Waiting for you, Idle, Failed, or Unknown with elapsed time. Terminal estimates are labeled Estimated; unsupported or stale observations stay Unknown.
 - Tmux activity observation is read-only and shared per pane. Codex/Claude lifecycle logs and direct-agent protocol events provide stronger evidence when available. Silence alone never marks a turn finished.
+- The terminal and direct-session lists show the same live state with animated working rings, a subtle pulse, elapsed time, and separate Waiting, Recent activity, Idle, and Quiet labels. “Attached” describes a tmux client connection, independently of agent work.
+- Android Settings has independent Chat messages, Agent finished, and Agent became quiet notification categories, each with its own sound controls. Completion receipts survive reconnects and app restarts; opening an already-finished session does not create a historical alert.
+- For agents observed through terminal activity, Recent activity stays active for ten seconds after the last change. A subsequent quiet transition can produce an estimated-completion alert in Agent became quiet; it does not claim that the task succeeded.
 
 ### Session Management
 - tmux sessions + favorite sessions in local app store
@@ -205,6 +208,7 @@ Current high-level message families:
 - Chat logs:
   - `watch-chat-log`, `watch-acp-chat-log`, `load-more-chat-history`, `clear-chat-log`
   - Watches also receive `chat-activity` snapshots on subscription and periodic updates. These include `sessionName`, `windowIndex`, `paneId`, and a `state` with status, source, confidence, timestamps, observer ID, and sequence. Android expires observations after 15 seconds without a fresh update.
+  - `finishedAt` and `completionReason` identify explicit lifecycle completion; `quietAt` identifies a stable terminal quiet episode. Direct-agent snapshots are broadcast on changes and every five seconds, and can be requested with `get-agent-activities` without starting or resuming an agent.
 - ACP/direct sessions:
   - `select-backend`, `acp-create-session`, `acp-resume-session`, `acp-fork-session`, `acp-list-sessions`, `acp-send-prompt`, `acp-load-history`, `acp-clear-history`, `acp-delete-session`
 - Attachments:

@@ -20,6 +20,7 @@ pub(super) struct Evidence {
     pub started_at: Option<i64>,
     pub turn_id: Option<String>,
     pub source: &'static str,
+    pub completion_reason: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -207,6 +208,11 @@ fn parse(tool: &str, value: &Value, previous: Option<&Evidence>) -> Option<Evide
             },
             turn_id,
             source: "codex-log",
+            completion_reason: match kind {
+                "task_complete" => Some("completed"),
+                "turn_aborted" => Some("interrupted"),
+                _ => None,
+            },
         });
     }
     if tool == "claude" && value.get("isSidechain") != Some(&Value::Bool(true)) {
@@ -239,12 +245,17 @@ fn parse(tool: &str, value: &Value, previous: Option<&Evidence>) -> Option<Evide
                 },
                 changed_at,
                 started_at: if is_input { Some(changed_at) } else { None },
-                turn_id: value
-                    .get("promptId")
-                    .or_else(|| value.get("uuid"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                turn_id: if completed {
+                    previous.and_then(|p| p.turn_id.clone())
+                } else {
+                    value
+                        .get("promptId")
+                        .or_else(|| value.get("uuid"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                },
                 source: "claude-log",
+                completion_reason: if completed { Some("completed") } else { None },
             });
         }
     }
@@ -270,6 +281,9 @@ pub(super) fn apply(state: &mut ActivityState, native: &Evidence) {
     state.turn_id = native.turn_id.clone();
     state.source = native.source.into();
     state.confidence = "reported".into();
+    state.finished_at = native.completion_reason.map(|_| native.changed_at);
+    state.completion_reason = native.completion_reason.map(str::to_owned);
+    state.quiet_at = None;
 }
 
 #[cfg(test)]
@@ -314,6 +328,18 @@ mod tests {
                 .detail,
             "Agent turn interrupted"
         );
+    }
+
+    #[test]
+    fn confirmed_completion_has_stable_identity_timestamp_and_reason() {
+        let start = parse("codex", &codex("task_started", "one"), None).unwrap();
+        let done = parse("codex", &codex("task_complete", "one"), Some(&start)).unwrap();
+        let mut state = ActivityState::unknown("Checking");
+        apply(&mut state, &done);
+        assert_eq!(state.finished_at, Some(done.changed_at));
+        assert_eq!(state.completion_reason.as_deref(), Some("completed"));
+        assert_eq!(state.turn_id.as_deref(), Some("one"));
+        assert_eq!(state.quiet_at, None);
     }
     #[test]
     fn another_turn_cannot_finish_current_work() {

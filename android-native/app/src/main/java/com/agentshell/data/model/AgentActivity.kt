@@ -1,6 +1,6 @@
 package com.agentshell.data.model
 
-enum class AgentActivityStatus { WORKING, WAITING, IDLE, FAILED, UNKNOWN }
+enum class AgentActivityStatus { WORKING, RECENT_ACTIVITY, WAITING, IDLE, FAILED, UNKNOWN }
 
 /** Runtime state is not persisted: a saved busy flag is not a live observation. */
 data class AgentActivity(
@@ -15,9 +15,14 @@ data class AgentActivity(
     val sequence: Long = 0,
     val paneId: String? = null,
     val backendSnapshot: Boolean = false,
+    val turnId: String? = null,
+    val lastActivityAt: Long? = null,
+    val finishedAt: Long? = null,
+    val completionReason: String? = null,
+    val quietAt: Long? = null,
 ) {
     fun expired(now: Long): Boolean = receivedAt > 0 && now - receivedAt > 15_000
-    fun unknown(reason: String) = copy(status = AgentActivityStatus.UNKNOWN, detail = reason, startedAt = null, source = "none", confidence = "unknown")
+    fun unknown(reason: String) = copy(status = AgentActivityStatus.UNKNOWN, detail = reason, startedAt = null, source = "none", confidence = "unknown", quietAt = null)
     fun elapsedSeconds(now: Long): Long? = startedAt?.let {
         ((observedAt - it).coerceAtLeast(0) + (now - receivedAt).coerceAtLeast(0)) / 1000
     }
@@ -31,7 +36,7 @@ data class AgentActivity(
         fun parse(message: Map<String, Any?>, receivedAt: Long): AgentActivity? {
             val state = message["state"] as? Map<String, Any?> ?: return null
             val rawStatus = state["status"] as? String ?: return null
-            val status = AgentActivityStatus.entries.firstOrNull { it.name.equals(rawStatus, true) } ?: AgentActivityStatus.UNKNOWN
+            val status = AgentActivityStatus.entries.firstOrNull { it.name.equals(rawStatus.replace('-', '_'), true) } ?: AgentActivityStatus.UNKNOWN
             return AgentActivity(
                 status = status, detail = (state["detail"] as? String)?.take(200) ?: "Agent status is not available",
                 source = state["source"] as? String ?: "none", confidence = state["confidence"] as? String ?: "unknown",
@@ -39,6 +44,11 @@ data class AgentActivity(
                 receivedAt = receivedAt, observerId = state["observerId"] as? String ?: "",
                 sequence = (state["sequence"] as? Number)?.toLong() ?: 0, paneId = message["paneId"] as? String,
                 backendSnapshot = true,
+                turnId = state["turnId"] as? String,
+                lastActivityAt = (state["lastActivityAt"] as? Number)?.toLong(),
+                finishedAt = (state["finishedAt"] as? Number)?.toLong(),
+                completionReason = state["completionReason"] as? String,
+                quietAt = (state["quietAt"] as? Number)?.toLong(),
             )
         }
     }

@@ -1,0 +1,239 @@
+diff --git a/backend-rust/src/chat_log/codex_parser.rs b/backend-rust/src/chat_log/codex_parser.rs
+index 0fb1b663..f48c1679 100644
+--- a/backend-rust/src/chat_log/codex_parser.rs
++++ b/backend-rust/src/chat_log/codex_parser.rs
+@@ -53,12 +53,56 @@ fn parse_event_msg(
+     match event_type {
+         "user_message" => parse_user_message(payload, timestamp),
+         "agent_message" => parse_agent_message(payload, timestamp),
++        "item_completed" => parse_completed_message(payload, timestamp),
+         "exec_command_end" => parse_exec_command_end(payload, timestamp),
+         "patch_apply_end" => parse_patch_apply_end(payload, timestamp),
+         _ => None,
+     }
+ }
+ 
++/// Newer Codex rollouts wrap conversation messages in typed completion events.
++/// Use those events rather than raw `response_item/message` records: the latter
++/// duplicate conversation text and also include injected prompt instructions.
++fn parse_completed_message(
++    payload: &serde_json::Value,
++    timestamp: Option<DateTime<Utc>>,
++) -> Option<ChatMessage> {
++    let item = payload.get("item")?;
++    let role = match item.get("type")?.as_str()? {
++        "UserMessage" => "user",
++        "AgentMessage" => "assistant",
++        _ => return None,
++    };
++    let blocks: Vec<ContentBlock> = item
++        .get("content")?
++        .as_array()?
++        .iter()
++        .filter_map(|content| {
++            match content.get("type")?.as_str()? {
++                "text" | "Text" => {}
++                _ => return None,
++            }
++            let text = content.get("text")?.as_str()?;
++            if text.trim().is_empty() {
++                return None;
++            }
++            Some(ContentBlock::Text {
++                text: text.to_string(),
++            })
++        })
++        .collect();
++
++    if blocks.is_empty() {
++        return None;
++    }
++
++    Some(ChatMessage {
++        role: role.to_string(),
++        timestamp,
++        blocks,
++    })
++}
++
+ fn parse_user_message(
+     payload: &serde_json::Value,
+     timestamp: Option<DateTime<Utc>>,
+@@ -559,6 +603,124 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn parse_completed_user_message() {
++        let line = serde_json::json!({
++            "timestamp": "2026-09-10T17:15:28.123Z",
++            "type": "event_msg",
++            "payload": {
++                "type": "item_completed",
++                "thread_id": "thread-1",
++                "turn_id": "turn-1",
++                "item": {
++                    "type": "UserMessage",
++                    "id": "user-1",
++                    "client_id": null,
++                    "content": [
++                        {"type": "text", "text": "Please explain this.", "text_elements": []},
++                        {"type": "image", "url": "https://example.invalid/image.png"},
++                        {"type": "text", "text": "Keep the answer short.", "text_elements": []}
++                    ]
++                }
++            }
++        });
++        let msg = parse_line(&line.to_string()).expect("completed user message should parse");
++        assert_eq!(msg.role, "user");
++        assert!(msg.timestamp.is_some());
++        assert_eq!(
++            serde_json::to_value(&msg.blocks).unwrap(),
++            serde_json::json!([
++                {"type": "text", "text": "Please explain this."},
++                {"type": "text", "text": "Keep the answer short."}
++            ])
++        );
++    }
++
++    #[test]
++    fn parse_completed_agent_commentary_and_final_answer() {
++        for phase in ["commentary", "final_answer"] {
++            let line = serde_json::json!({
++                "timestamp": "2026-09-10T17:15:29.456Z",
++                "type": "event_msg",
++                "payload": {
++                    "type": "item_completed",
++                    "thread_id": "thread-1",
++                    "turn_id": "turn-1",
++                    "item": {
++                        "type": "AgentMessage",
++                        "id": "assistant-1",
++                        "phase": phase,
++                        "content": [{"type": "Text", "text": "Hello!\n\nOlá 👋"}]
++                    }
++                }
++            });
++            let msg = parse_line(&line.to_string()).expect("completed agent message should parse");
++            assert_eq!(
++                serde_json::to_value(msg).unwrap(),
++                serde_json::json!({
++                    "role": "assistant",
++                    "timestamp": "2026-09-10T17:15:29.456Z",
++                    "blocks": [{"type": "text", "text": "Hello!\n\nOlá 👋"}]
++                })
++            );
++        }
++    }
++
++    #[test]
++    fn completed_messages_do_not_duplicate_raw_response_items() {
++        // Rollouts also contain raw model input, including injected instructions.
++        // Only the conversation events should reach the Android chat history.
++        let lines = [
++            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions"}]}}),
++            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"Internal instructions"}]}}),
++            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}}),
++            serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"user-1","content":[{"type":"text","text":"Hello","text_elements":[]}]}}}),
++            serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"assistant-1","phase":"final_answer","content":[{"type":"Text","text":"Hi!"}]}}}),
++            serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hi!"}]}}),
++        ];
++        let messages: Vec<_> = lines
++            .iter()
++            .filter_map(|line| parse_line(&line.to_string()))
++            .collect();
++        assert_eq!(messages.len(), 2);
++        assert_eq!(messages[0].role, "user");
++        assert_eq!(messages[1].role, "assistant");
++    }
++
++    #[test]
++    fn legacy_messages_do_not_duplicate_raw_response_items() {
++        let lines = [
++            r#"{"type":"event_msg","payload":{"type":"user_message","message":"Hello"}}"#,
++            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}}"#,
++            r#"{"type":"event_msg","payload":{"type":"agent_message","message":"Hi!"}}"#,
++            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi!"}]}}"#,
++        ];
++        let messages: Vec<_> = lines.iter().filter_map(|line| parse_line(line)).collect();
++        assert_eq!(messages.len(), 2);
++        assert_eq!(messages[0].role, "user");
++        assert_eq!(messages[1].role, "assistant");
++    }
++
++    #[test]
++    fn skip_non_message_and_malformed_completed_items() {
++        for item in [
++            serde_json::Value::Null,
++            serde_json::json!({"type":"CommandExecution","content":[{"type":"Text","text":"tool output"}]}),
++            serde_json::json!({"type":"AgentMessage"}),
++            serde_json::json!({"type":"AgentMessage","content":"not an array"}),
++            serde_json::json!({"type":"AgentMessage","content":[]}),
++            serde_json::json!({"type":"AgentMessage","content":[{"type":"Text","text":"  "}]}),
++            serde_json::json!({"type":"AgentMessage","content":[{"type":"Text","text":42}]}),
++            serde_json::json!({"type":"UserMessage","content":[{"type":"image","url":"https://example.invalid/image.png"}]}),
++        ] {
++            let line = serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":item}});
++            assert!(
++                parse_line(&line.to_string()).is_none(),
++                "unexpected message for {line}"
++            );
++        }
++    }
++
+     #[test]
+     fn parse_exec_command_end_with_output() {
+         let line = r#"{"timestamp":"2025-05-07T17:24:23.789Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"call_abc123","command":["/bin/bash","-lc","npm test"],"aggregated_output":"All tests passed","exit_code":0}}"#;
+diff --git a/backend-rust/src/chat_log/watcher.rs b/backend-rust/src/chat_log/watcher.rs
+index 97688fb4..8c68c605 100644
+--- a/backend-rust/src/chat_log/watcher.rs
++++ b/backend-rust/src/chat_log/watcher.rs
+@@ -1117,6 +1117,48 @@ mod tests {
+         assert!(pos > pos_after_first);
+     }
+ 
++    #[test]
++    fn codex_completed_messages_reach_history_and_live_updates() {
++        use std::io::Write;
++
++        let dir = tempfile::TempDir::new().unwrap();
++        let path = dir.path().join("rollout.jsonl");
++        let user = r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"Hello"}]}}}"#;
++        std::fs::write(&path, format!("{user}\n")).unwrap();
++        let mut reader = BufReader::new(File::open(&path).unwrap());
++        let history = read_all_messages(&mut reader, &AiTool::Codex);
++        assert_eq!(history.len(), 1);
++        assert_eq!(history[0].role, "user");
++        let mut pos = reader.stream_position().unwrap();
++
++        let assistant = r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","phase":"final_answer","content":[{"type":"Text","text":"Hi!"}]}}}"#;
++        let raw = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi!"}]}}"#;
++        let mut file = std::fs::OpenOptions::new()
++            .append(true)
++            .open(&path)
++            .unwrap();
++        writeln!(file, "{assistant}\n{raw}").unwrap();
++        let live = read_new_lines(&path, &mut pos, &AiTool::Codex).unwrap();
++        assert_eq!(live.len(), 1);
++        assert_eq!(live[0].role, "assistant");
++        assert_eq!(
++            serde_json::to_value(&live[0].blocks).unwrap(),
++            serde_json::json!([
++                {"type":"text","text":"Hi!"}
++            ])
++        );
++        assert!(read_new_lines(&path, &mut pos, &AiTool::Codex)
++            .unwrap()
++            .is_empty());
++
++        // Reopening the chat should replay each conversation message once.
++        let mut reader = BufReader::new(File::open(&path).unwrap());
++        let history = read_all_messages(&mut reader, &AiTool::Codex);
++        assert_eq!(history.len(), 2);
++        assert_eq!(history[0].role, "user");
++        assert_eq!(history[1].role, "assistant");
++    }
++
+     #[test]
+     fn test_find_claude_log_nonexistent_dir() {
+         let result = find_claude_log(std::path::Path::new("/nonexistent/path/xyz_abc_123"));

@@ -12,6 +12,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.agentshell.feature.splitscreen.model.PanelState
 import com.agentshell.feature.splitscreen.model.PanelType
@@ -97,34 +103,51 @@ fun SplitScreenScreen(
 
     Scaffold(
         topBar = {
+            var showOverflow by remember { mutableStateOf(false) }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(horizontal = 4.dp, vertical = 0.dp),
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
             ) {
                 IconButton(onClick = {
                     if (state.maximizedPanelId != null) viewModel.restoreFromMaximize()
                     else onNavigateBack()
-                }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(20.dp))
+                }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
                 }
                 Text(
                     text = state.layoutName.ifEmpty { "Split Screen" },
                     style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f).padding(start = 4.dp),
+                    modifier = Modifier.weight(1f).padding(start = 2.dp),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
-                IconButton(onClick = { viewModel.toggleEditing() }, modifier = Modifier.size(36.dp)) {
+                IconButton(onClick = { viewModel.toggleEditing() }, modifier = Modifier.size(32.dp)) {
                     Icon(
                         if (state.isEditing) Icons.Default.Check else Icons.Default.Edit,
                         contentDescription = if (state.isEditing) "Done" else "Edit",
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(18.dp),
                         tint = if (state.isEditing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     )
                 }
-                IconButton(onClick = { viewModel.openLayoutEditor() }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Save, contentDescription = "Save", modifier = Modifier.size(20.dp))
-                }
-                IconButton(onClick = { viewModel.openLayoutList() }, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.ViewList, contentDescription = "Layouts", modifier = Modifier.size(20.dp))
+                Box {
+                    IconButton(onClick = { showOverflow = true }, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More", modifier = Modifier.size(18.dp))
+                    }
+                    DropdownMenu(expanded = showOverflow, onDismissRequest = { showOverflow = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Save layout") },
+                            leadingIcon = { Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            onClick = { showOverflow = false; viewModel.openLayoutEditor() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Load layout") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.ViewList, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                            onClick = { showOverflow = false; viewModel.openLayoutList() },
+                        )
+                    }
                 }
             }
         },

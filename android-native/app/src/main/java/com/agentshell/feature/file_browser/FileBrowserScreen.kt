@@ -1,5 +1,9 @@
 package com.agentshell.feature.file_browser
 
+import android.content.ActivityNotFoundException
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
@@ -31,12 +36,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.agentshell.data.model.FileEntry
-import com.agentshell.feature.alerts.AudioViewer
 import com.agentshell.feature.alerts.FileInfoDialog
-import com.agentshell.feature.alerts.HtmlViewer
-import com.agentshell.feature.alerts.ImageViewer
 import com.agentshell.feature.alerts.InlineFileViewer
-import com.agentshell.feature.alerts.MarkdownViewer
 import com.agentshell.feature.alerts.supportsInlineFilePreview
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -50,6 +51,27 @@ fun FileBrowserScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val downloadLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+        viewModel::downloadTo,
+    )
+    val downloadFile: (FileEntry) -> Unit = { entry ->
+        if (viewModel.prepareDownload(entry)) {
+            try {
+                downloadLauncher.launch(entry.name)
+            } catch (_: ActivityNotFoundException) {
+                viewModel.downloadPickerUnavailable()
+            }
+        }
+    }
+
+    LaunchedEffect(state.downloadMessage) {
+        state.downloadMessage?.let { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            viewModel.clearDownloadMessage()
+        }
+    }
     var showSortSheet by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
     var deleteTargets by remember { mutableStateOf<List<FileEntry>>(emptyList()) }
@@ -101,6 +123,7 @@ fun FileBrowserScreen(
                         mimeType = mime,
                         size = viewer.entry.size,
                         onDismiss = dismiss,
+                        onDownload = { downloadFile(viewer.entry) },
                     )
                 mime.startsWith("text/") || isTextFile(filename) ->
                     TextFileViewer(
@@ -110,10 +133,30 @@ fun FileBrowserScreen(
                         isSaving = viewer.isSaving,
                         saveError = viewer.saveError,
                         onSave = { content -> viewModel.saveFile(viewer.entry!!.path, content) },
+                        onDownload = { downloadFile(viewer.entry) },
                     )
-                else -> FileInfoDialog(filename, viewer.entry.size, mime.ifEmpty { "unknown" }, dismiss)
+                else -> FileInfoDialog(
+                    filename, viewer.entry.size, mime.ifEmpty { "unknown" }, dismiss,
+                    onDownload = { downloadFile(viewer.entry) },
+                )
             }
         }
+    }
+
+    state.downloadingFile?.let { filename ->
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelDownload() },
+            title = { Text("Downloading") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(filename)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cancelDownload() }) { Text("Cancel") }
+            },
+        )
     }
 
     val breadcrumbs = buildBreadcrumbs(state.currentPath)
@@ -223,6 +266,59 @@ fun FileBrowserScreen(
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { deleteTargets = emptyList() }) { Text("Cancel") } },
+        )
+    }
+
+    // Paste override confirmation dialog
+    if (state.pasteConflicts.isNotEmpty()) {
+        val count = state.pasteConflicts.size
+        val opLabel = if (state.clipboardMode == ClipboardMode.CUT) "move" else "copy"
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissPasteConflicts() },
+            title = { Text("Replace existing ${if (count == 1) "item" else "items"}?") },
+            text = {
+                Column {
+                    Text(
+                        "The following ${if (count == 1) "item already" else "items already"} exist at the destination:",
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (count <= 5) {
+                        state.pasteConflicts.forEach { conflict ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (conflict.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(conflict.fileName, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    } else {
+                        Text("$count items will be replaced", fontSize = 13.sp)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        color = Color(0xFFF97316).copy(alpha = 0.1f),
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFF97316), modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Existing ${if (count == 1) "item" else "items"} will be overwritten by the $opLabel", fontSize = 12.sp, color = Color(0xFFF97316))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmPaste() }) {
+                    Text("Replace", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissPasteConflicts() }) { Text("Cancel") }
+            },
         )
     }
 
@@ -376,6 +472,7 @@ fun FileBrowserScreen(
                             onCopyPath = { clipboard.setText(AnnotatedString(entry.path)) },
                             onCopyFile = { viewModel.copySingle(entry.path) },
                             onCutFile = { viewModel.cutSingle(entry.path) },
+                            onDownload = { downloadFile(entry) },
                             onRename = { renameTarget = entry },
                             onDelete = { deleteTargets = listOf(entry) },
                         )
@@ -406,6 +503,7 @@ private fun FileBrowserEntry(
     onCopyPath: () -> Unit,
     onCopyFile: () -> Unit,
     onCutFile: () -> Unit,
+    onDownload: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -421,6 +519,13 @@ private fun FileBrowserEntry(
                 }
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
+                if (!entry.isDirectory) {
+                    ListItem(
+                        headlineContent = { Text("Download") },
+                        leadingContent = { Icon(Icons.Default.Download, contentDescription = null) },
+                        modifier = Modifier.clickable { showActions = false; onDownload() },
+                    )
+                }
                 ListItem(headlineContent = { Text("Copy") }, leadingContent = { Icon(Icons.Default.ContentCopy, contentDescription = null) }, modifier = Modifier.clickable { onCopyFile(); showActions = false })
                 ListItem(headlineContent = { Text("Cut") }, leadingContent = { Icon(Icons.Default.ContentCut, contentDescription = null) }, modifier = Modifier.clickable { onCutFile(); showActions = false })
                 ListItem(headlineContent = { Text("Copy path") }, leadingContent = { Icon(Icons.Default.Link, contentDescription = null) }, modifier = Modifier.clickable { onCopyPath(); showActions = false })
@@ -582,6 +687,7 @@ private fun TextFileViewer(
     onSave: ((String) -> Unit)? = null,
     isSaving: Boolean = false,
     saveError: String? = null,
+    onDownload: () -> Unit,
 ) {
     val originalText = remember(bytes) { String(bytes, Charsets.UTF_8) }
     var isEditing by remember { mutableStateOf(false) }
@@ -633,6 +739,9 @@ private fun TextFileViewer(
                             }
                         }
                     } else {
+                        IconButton(onClick = onDownload) {
+                            Icon(Icons.Default.Download, contentDescription = "Download")
+                        }
                         if (onSave != null) {
                             IconButton(onClick = { isEditing = true }) {
                                 Icon(Icons.Default.Edit, contentDescription = "Edit")

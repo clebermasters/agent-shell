@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -92,6 +93,7 @@ fun ImageViewer(
     imageBytes: ByteArray,
     filename: String,
     onDismiss: () -> Unit,
+    onDownload: (() -> Unit)? = null,
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
@@ -125,18 +127,23 @@ fun ImageViewer(
                             }
                         },
                 )
-                // Close button top-end
-                IconButton(
-                    onClick = onDismiss,
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(16.dp),
                 ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Close",
-                        tint = MaterialTheme.colorScheme.inverseOnSurface,
-                    )
+                    onDownload?.let {
+                        IconButton(onClick = it) {
+                            Icon(Icons.Default.Download, contentDescription = "Download", tint = MaterialTheme.colorScheme.inverseOnSurface)
+                        }
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = MaterialTheme.colorScheme.inverseOnSurface,
+                        )
+                    }
                 }
                 // Filename label bottom-center
                 Text(
@@ -163,6 +170,7 @@ fun AudioViewer(
     filename: String,
     mimeType: String,
     onDismiss: () -> Unit,
+    onDownload: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -264,6 +272,12 @@ fun AudioViewer(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            onDownload?.let {
+                TextButton(onClick = it) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("Download", modifier = Modifier.padding(start = 8.dp))
+                }
+            }
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -278,6 +292,7 @@ fun MarkdownViewer(
     markdownBytes: ByteArray,
     filename: String,
     onDismiss: () -> Unit,
+    onDownload: (() -> Unit)? = null,
 ) {
     val markdownText = remember(markdownBytes) { String(markdownBytes, Charsets.UTF_8) }
     val context = LocalContext.current
@@ -349,6 +364,11 @@ fun MarkdownViewer(
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
                     )
+                    onDownload?.let {
+                        IconButton(onClick = it) {
+                            Icon(Icons.Default.Download, contentDescription = "Download")
+                        }
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
@@ -388,6 +408,7 @@ fun HtmlViewer(
     htmlBytes: ByteArray,
     filename: String,
     onDismiss: () -> Unit,
+    onDownload: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val htmlContent = remember(htmlBytes) { String(htmlBytes, Charsets.UTF_8) }
@@ -443,6 +464,11 @@ fun HtmlViewer(
                     TextButton(onClick = openInBrowser) {
                         Text("Open in Browser", style = MaterialTheme.typography.labelSmall)
                     }
+                    onDownload?.let {
+                        IconButton(onClick = it) {
+                            Icon(Icons.Default.Download, contentDescription = "Download")
+                        }
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
@@ -484,6 +510,7 @@ fun PdfViewer(
     pdfBytes: ByteArray,
     filename: String,
     onDismiss: () -> Unit,
+    onDownload: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val pdfFile = remember(pdfBytes, filename) {
@@ -537,6 +564,11 @@ fun PdfViewer(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    onDownload?.let {
+                        IconButton(onClick = it) {
+                            Icon(Icons.Default.Download, contentDescription = "Download")
+                        }
+                    }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
@@ -569,6 +601,7 @@ fun FileInfoDialog(
     size: Long,
     mimeType: String,
     onDismiss: () -> Unit,
+    onDownload: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -591,6 +624,11 @@ fun FileInfoDialog(
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
         },
+        dismissButton = {
+            onDownload?.let {
+                TextButton(onClick = it) { Text("Download") }
+            }
+        },
     )
 }
 
@@ -601,14 +639,15 @@ fun InlineFileViewer(
     mimeType: String,
     size: Long,
     onDismiss: () -> Unit,
+    onDownload: (() -> Unit)? = null,
 ) {
     when {
-        isImageFile(mimeType) -> ImageViewer(fileBytes, filename, onDismiss)
-        isAudioFile(mimeType) -> AudioViewer(fileBytes, filename, mimeType, onDismiss)
-        isMarkdownFile(mimeType, filename) -> MarkdownViewer(fileBytes, filename, onDismiss)
-        isHtmlFile(mimeType, filename) -> HtmlViewer(fileBytes, filename, onDismiss)
-        isPdfFile(mimeType, filename) -> PdfViewer(fileBytes, filename, onDismiss)
-        else -> FileInfoDialog(filename, size, mimeType.ifBlank { "unknown" }, onDismiss)
+        isImageFile(mimeType) -> ImageViewer(fileBytes, filename, onDismiss, onDownload)
+        isAudioFile(mimeType) -> AudioViewer(fileBytes, filename, mimeType, onDismiss, onDownload)
+        isMarkdownFile(mimeType, filename) -> MarkdownViewer(fileBytes, filename, onDismiss, onDownload)
+        isHtmlFile(mimeType, filename) -> HtmlViewer(fileBytes, filename, onDismiss, onDownload)
+        isPdfFile(mimeType, filename) -> PdfViewer(fileBytes, filename, onDismiss, onDownload)
+        else -> FileInfoDialog(filename, size, mimeType.ifBlank { "unknown" }, onDismiss, onDownload)
     }
 }
 

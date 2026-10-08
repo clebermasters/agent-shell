@@ -1,12 +1,17 @@
 package com.agentshell.feature.file_browser
 
+import android.net.Uri
 import android.util.Base64
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.FileEntry
 import com.agentshell.data.repository.FileBrowserRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,6 +36,12 @@ data class FileViewerState(
     val saveError: String? = null,
 )
 
+data class PasteConflict(
+    val fileName: String,
+    val sourcePath: String,
+    val isDirectory: Boolean,
+)
+
 data class FileBrowserUiState(
     val currentPath: String = "/",
     val entries: List<FileEntry> = emptyList(),
@@ -43,6 +54,9 @@ data class FileBrowserUiState(
     val clipboardPaths: List<String> = emptyList(),
     val clipboardMode: ClipboardMode = ClipboardMode.NONE,
     val viewer: FileViewerState? = null,
+    val pasteConflicts: List<PasteConflict> = emptyList(),
+    val downloadingFile: String? = null,
+    val downloadMessage: String? = null,
 ) {
     val sortedEntries: List<FileEntry>
         get() {
@@ -64,10 +78,12 @@ data class FileBrowserUiState(
 class FileBrowserViewModel @Inject constructor(
     private val repository: FileBrowserRepository,
     private val prefs: PreferencesDataStore,
+    private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(FileBrowserUiState())
     val state: StateFlow<FileBrowserUiState> = _state.asStateFlow()
+    private var downloadJob: Job? = null
 
     init {
         observeEvents()
@@ -159,6 +175,35 @@ class FileBrowserViewModel @Inject constructor(
     fun pasteFiles() {
         val s = _state.value
         if (s.clipboardPaths.isEmpty() || s.clipboardMode == ClipboardMode.NONE) return
+
+        val existingNames = s.entries.map { it.name }.toSet()
+        val conflicts = s.clipboardPaths.mapNotNull { path ->
+            val name = path.substringAfterLast('/')
+            if (name in existingNames) {
+                val isDir = s.entries.first { it.name == name }.isDirectory
+                PasteConflict(fileName = name, sourcePath = path, isDirectory = isDir)
+            } else null
+        }
+
+        if (conflicts.isNotEmpty()) {
+            _state.update { it.copy(pasteConflicts = conflicts) }
+        } else {
+            executePaste()
+        }
+    }
+
+    fun confirmPaste() {
+        _state.update { it.copy(pasteConflicts = emptyList()) }
+        executePaste()
+    }
+
+    fun dismissPasteConflicts() {
+        _state.update { it.copy(pasteConflicts = emptyList()) }
+    }
+
+    private fun executePaste() {
+        val s = _state.value
+        if (s.clipboardPaths.isEmpty() || s.clipboardMode == ClipboardMode.NONE) return
         when (s.clipboardMode) {
             ClipboardMode.COPY -> repository.copyFiles(s.clipboardPaths, s.currentPath)
             ClipboardMode.CUT -> repository.moveFiles(s.clipboardPaths, s.currentPath)
@@ -206,6 +251,47 @@ class FileBrowserViewModel @Inject constructor(
 
     fun closeViewer() {
         _state.update { it.copy(viewer = null) }
+    }
+
+    fun prepareDownload(entry: FileEntry): Boolean {
+        if (entry.isDirectory || downloadJob?.isActive == true || savedStateHandle.contains("downloadPath")) return false
+        savedStateHandle["downloadPath"] = entry.path
+        savedStateHandle["downloadName"] = entry.name
+        return true
+    }
+
+    fun downloadTo(destination: Uri?) {
+        val path = savedStateHandle.remove<String>("downloadPath") ?: return
+        val name = savedStateHandle.remove<String>("downloadName") ?: path.substringAfterLast('/')
+        if (destination == null) return // The user dismissed the save picker.
+        _state.update { it.copy(downloadingFile = name, downloadMessage = null) }
+        downloadJob = viewModelScope.launch {
+            try {
+                repository.downloadFile(path, destination)
+                _state.update { it.copy(downloadMessage = "Downloaded $name") }
+            } catch (_: TimeoutCancellationException) {
+                _state.update { it.copy(downloadMessage = "Download timed out. Please try again") }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(downloadMessage = "Download failed: ${e.message ?: "Unable to save the file"}") }
+            } finally {
+                _state.update { it.copy(downloadingFile = null) }
+            }
+        }
+    }
+
+    fun cancelDownload() {
+        downloadJob?.cancel()
+    }
+
+    fun downloadPickerUnavailable() {
+        downloadTo(null)
+        _state.update { it.copy(downloadMessage = "No file picker is available to save this file") }
+    }
+
+    fun clearDownloadMessage() {
+        _state.update { it.copy(downloadMessage = null) }
     }
 
     fun saveFile(path: String, content: String) {
@@ -257,14 +343,26 @@ class FileBrowserViewModel @Inject constructor(
     }
 
     private fun handleBinaryFileContent(msg: Map<String, Any?>) {
+        val viewer = _state.value.viewer ?: return
+        // Downloads and other previews share this WebSocket. Only complete the requested preview.
+        if (!viewer.isLoading || msg["path"] != viewer.entry?.path) return
         val error = msg["error"] as? String
         if (error != null) {
             _state.update { it.copy(viewer = it.viewer?.copy(isLoading = false, error = error)) }
             return
         }
-        val b64 = msg["contentBase64"] as? String ?: ""
+        val b64 = msg["contentBase64"] as? String
+        if (b64 == null) {
+            _state.update { it.copy(viewer = it.viewer?.copy(isLoading = false, error = "The server returned no file content")) }
+            return
+        }
         val mimeType = msg["mimeType"] as? String
-        val bytes = if (b64.isNotEmpty()) Base64.decode(b64, Base64.DEFAULT) else null
+        val bytes = try {
+            Base64.decode(b64, Base64.DEFAULT)
+        } catch (_: IllegalArgumentException) {
+            _state.update { it.copy(viewer = it.viewer?.copy(isLoading = false, error = "Invalid file content")) }
+            return
+        }
         _state.update {
             it.copy(viewer = it.viewer?.copy(isLoading = false, bytes = bytes, mimeType = mimeType))
         }

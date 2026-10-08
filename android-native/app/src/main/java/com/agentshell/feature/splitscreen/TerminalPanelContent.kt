@@ -11,12 +11,16 @@ import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agentshell.feature.terminal.TerminalAccessoryBar
 import com.agentshell.terminal.XTermView
 import com.agentshell.terminal.rememberXTermController
 
@@ -82,43 +86,89 @@ fun TerminalPanelContent(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF1E1E1E))) {
-        XTermView(
-            controller = controller,
-            onInput = { data ->
-                if (isFocused) {
-                    panelSocket.send(mapOf("type" to "input", "data" to data))
-                }
-            },
-            onResize = { cols, rows ->
-                termCols = cols
-                termRows = rows
-                if (isSocketConnected && isReady) {
-                    panelSocket.send(
-                        mapOf(
-                            "type" to "resize",
-                            "cols" to cols,
-                            "rows" to rows,
-                        ),
-                    )
-                }
-            },
-            onReady = { cols, rows ->
-                termCols = cols
-                termRows = rows
-                isReady = true
-            },
-            modifier = Modifier.fillMaxSize(),
-        )
+    var ctrlActive by remember { mutableStateOf(false) }
+    var altActive by remember { mutableStateOf(false) }
+    var shiftActive by remember { mutableStateOf(false) }
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    val isKeyboardVisible = imeBottom > 0
 
-        if (!isFocused) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { onRequestFocus() },
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF1E1E1E))) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            XTermView(
+                controller = controller,
+                onInput = { data ->
+                    if (isFocused) {
+                        var processed = data
+                        if (ctrlActive && processed.length == 1) {
+                            val ch = processed[0]
+                            processed = when {
+                                ch in 'a'..'z' -> String(charArrayOf((ch.code - 0x60).toChar()))
+                                ch in 'A'..'Z' -> String(charArrayOf((ch.code - 0x40).toChar()))
+                                ch == ' ' -> "\u0000"
+                                else -> processed
+                            }
+                            ctrlActive = false
+                        }
+                        if (altActive && !processed.startsWith("\u001b")) {
+                            processed = "\u001b$processed"
+                            altActive = false
+                        }
+                        if (shiftActive) {
+                            shiftActive = false
+                        }
+                        panelSocket.send(mapOf("type" to "input", "data" to processed))
+                    }
+                },
+                onResize = { cols, rows ->
+                    termCols = cols
+                    termRows = rows
+                    if (isSocketConnected && isReady) {
+                        panelSocket.send(
+                            mapOf(
+                                "type" to "resize",
+                                "cols" to cols,
+                                "rows" to rows,
+                            ),
+                        )
+                    }
+                },
+                onReady = { cols, rows ->
+                    termCols = cols
+                    termRows = rows
+                    isReady = true
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            if (!isFocused) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onRequestFocus() },
+                )
+            }
+        }
+
+        if (isFocused && isKeyboardVisible) {
+            TerminalAccessoryBar(
+                ctrlActive = ctrlActive,
+                altActive = altActive,
+                shiftActive = shiftActive,
+                onCtrlToggle = { ctrlActive = !ctrlActive },
+                onAltToggle = { altActive = !altActive },
+                onShiftToggle = { shiftActive = !shiftActive },
+                onKeyPressed = { sequence ->
+                    panelSocket.send(mapOf("type" to "input", "data" to sequence))
+                },
+                onModifiersReset = {
+                    ctrlActive = false
+                    altActive = false
+                    shiftActive = false
+                },
+                modifier = Modifier.fillMaxWidth(),
             )
         }
     }

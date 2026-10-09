@@ -51,6 +51,11 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions {
+        // Share-target tests need the merged manifest used by Android's intent resolver.
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 // ── Generate BuildConfig.kt from ../.env (mirrors Flutter's Docker-based generation) ──

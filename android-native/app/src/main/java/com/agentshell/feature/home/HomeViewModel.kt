@@ -121,16 +121,7 @@ class HomeViewModel @Inject constructor(
     private fun observeAndConnect() {
         viewModelScope.launch {
             // Step 1: Ensure build-time hosts exist and one is selected (one-shot)
-            val hosts = hostRepository.getHosts().first()
-            if (hosts.isEmpty()) {
-                val defaults = hostRepository.loadBuildTimeHosts()
-                defaults.forEach { hostRepository.saveHost(it) }
-                // Select first entry from SERVER_LIST (index 0 = sortOrder 0)
-                val preferred = defaults.firstOrNull()
-                preferred?.let { hostRepository.selectHost(it.id) }
-            } else if (hostRepository.getSelectedHostOnce() == null) {
-                hostRepository.selectHost(hosts.first().id)
-            }
+            hostRepository.ensureDefaultHosts()
 
             // Step 2: Connect once to the selected host, reconnect only on host switch
             hostRepository.getSelectedHost()

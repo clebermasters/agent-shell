@@ -44,11 +44,16 @@ import com.agentshell.feature.settings.SettingsScreen
 import com.agentshell.feature.system.SystemScreen
 import com.agentshell.feature.terminal.TerminalScreen
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.feature.share.ShareScreen
+import com.agentshell.feature.share.ShareViewModel
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 
 object Routes {
     const val HOME = "home"
     const val TERMINAL = "terminal/{sessionName}?isSwipeNav={isSwipeNav}"
-    const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}&isSwipeNav={isSwipeNav}&cwd={cwd}"
+    const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}&isSwipeNav={isSwipeNav}&cwd={cwd}&shareId={shareId}"
+    const val SHARE = "share"
     const val SETTINGS = "settings"
     const val DEBUG = "debug"
     const val ALERTS = "alerts?notificationId={notificationId}"
@@ -75,10 +80,11 @@ object Routes {
         isAcp: Boolean = false,
         isSwipeNav: Boolean = false,
         cwd: String = "",
+        shareId: String = "",
     ): String {
         val encodedSession = encodeRouteParam(sessionName)
         val encodedCwd = Uri.encode(cwd, "")
-        return "chat/$encodedSession/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav&cwd=$encodedCwd"
+        return "chat/$encodedSession/$windowIndex?isAcp=$isAcp&isSwipeNav=$isSwipeNav&cwd=$encodedCwd&shareId=${Uri.encode(shareId)}"
     }
     fun fileBrowser(path: String = "/", openPath: String? = null): String {
         val encodedPath = Uri.encode(path, "")
@@ -106,10 +112,14 @@ fun AgentShellNavHost(
     pendingChatTarget: ChatTarget? = null,
     onChatIntentConsumed: (ChatTarget) -> Unit = {},
     viewModel: NavigationViewModel = hiltViewModel(),
+    shareViewModel: ShareViewModel = hiltViewModel(),
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
-    var hasOpenedChatNotification by rememberSaveable { mutableStateOf(pendingChatTarget != null) }
+    val shareState by shareViewModel.uiState.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var openingSharedChat by remember { mutableStateOf(false) }
+    var hasOpenedChatNotification by rememberSaveable { mutableStateOf(pendingChatTarget != null || shareState.id != null) }
     val keepScreenOnEnabled by viewModel.keepScreenOn.collectAsStateWithLifecycle()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val keepScreenOn = keepScreenOnEnabled && when (backStackEntry?.destination?.route) {
@@ -123,6 +133,13 @@ fun AgentShellNavHost(
     DisposableEffect(view, keepScreenOn) {
         view.keepScreenOn = keepScreenOn
         onDispose { view.keepScreenOn = false }
+    }
+
+    LaunchedEffect(shareState.id) {
+        if (shareState.id != null) {
+            hasOpenedChatNotification = true
+            navController.navigate(Routes.SHARE) { launchSingleTop = true }
+        }
     }
 
     LaunchedEffect(pendingChatTarget) {
@@ -151,6 +168,32 @@ fun AgentShellNavHost(
         navController = navController,
         startDestination = Routes.HOME,
     ) {
+        composable(Routes.SHARE) {
+            ShareScreen(
+                viewModel = shareViewModel,
+                onCancel = { shareViewModel.consume(discard = true); navController.popBackStack() },
+                onChoose = { target, draft ->
+                    if (!openingSharedChat) {
+                        openingSharedChat = true
+                        scope.launch {
+                            try {
+                                if (viewModel.prepareChatNotification(target)) {
+                                    if (shareViewModel.uiState.value.id != draft.id) return@launch
+                                    navController.navigate(Routes.chat(target.sessionName, target.windowIndex, isAcp = target.isAcp, cwd = target.cwd, shareId = draft.id)) {
+                                        popUpTo(Routes.HOME)
+                                    }
+                                    shareViewModel.consume()
+                                } else {
+                                    Toast.makeText(context, "This chat's server is no longer configured", Toast.LENGTH_LONG).show()
+                                }
+                            } finally {
+                                openingSharedChat = false
+                            }
+                        }
+                    }
+                },
+            )
+        }
         // ── Home shell (tabs: Sessions, Cron, Dotfiles, System) ──────────────
         composable(Routes.HOME) {
             HomeScreen(
@@ -235,6 +278,7 @@ fun AgentShellNavHost(
                 navArgument("isAcp") { type = NavType.BoolType; defaultValue = false },
                 navArgument("isSwipeNav") { type = NavType.BoolType; defaultValue = false },
                 navArgument("cwd") { type = NavType.StringType; defaultValue = "" },
+                navArgument("shareId") { type = NavType.StringType; defaultValue = "" },
             ),
         ) { backStackEntry ->
             val sessionName = Uri.decode(backStackEntry.arguments?.getString("sessionName") ?: "")

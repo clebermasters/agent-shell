@@ -37,12 +37,21 @@ import com.agentshell.data.remote.watchAcpChatLog
 import com.agentshell.data.remote.watchChatLog
 import com.agentshell.data.repository.ChatRepository
 import com.agentshell.data.repository.HostRepository
+import com.agentshell.data.repository.SharedContentRepository
+import com.agentshell.data.repository.encodeChatAttachment
+import com.agentshell.data.repository.mergeSharedText
 import com.agentshell.data.services.AudioPlayerManager
 import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.TranscriptionQueueService
 import com.agentshell.data.services.TranscriptionSuccessEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -72,6 +81,7 @@ data class PendingPermission(
     val options: List<PermissionOption> = emptyList(),
 )
 
+@Serializable
 data class AttachedFile(
     val uri: String,
     val filename: String,
@@ -125,10 +135,11 @@ data class ChatUiState(
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
-    savedStateHandle: SavedStateHandle,
+    private val savedStateHandle: SavedStateHandle,
     private val chatRepository: ChatRepository,
     private val chatActivityRepository: ChatActivityRepository,
     private val hostRepository: HostRepository,
+    private val sharedContentRepository: SharedContentRepository,
     private val dataStore: PreferencesDataStore,
     private val audioService: AudioService,
     private val transcriptionQueue: TranscriptionQueueService,
@@ -147,6 +158,7 @@ class ChatViewModel @Inject constructor(
     private val navWindowIndex: Int = savedStateHandle["windowIndex"] ?: 0
     private val navIsAcp: Boolean = savedStateHandle["isAcp"] ?: false
     private val navCwd: String = savedStateHandle["cwd"] ?: ""
+    private val navShareId: String = savedStateHandle["shareId"] ?: ""
 
     private val _uiState = MutableStateFlow(
         ChatUiState(
@@ -154,6 +166,10 @@ class ChatViewModel @Inject constructor(
             windowIndex = navWindowIndex,
             isAcp = navIsAcp,
             sessionCwd = navCwd,
+            draftMessage = savedStateHandle["share_draft_text"] ?: "",
+            attachedFile = savedStateHandle.get<String>("share_attachment")?.let {
+                runCatching { Json.decodeFromString<AttachedFile>(it) }.getOrNull()
+            },
         )
     )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -526,6 +542,7 @@ class ChatViewModel @Inject constructor(
         }
         logDebug("Initial ACP chat watch session=$sessionName backend=${directBackendForSession(sessionName)} cwd=${cwd.isNotBlank()}")
         hasSeenConnectedState = false
+        restoreDraft(draftKey(sessionKey, 0))
         viewModelScope.launch {
             prepareReadTracking(sessionName, 0, true, cwd)
             webSocketService.selectBackend(directBackendForSession(sessionName))
@@ -587,6 +604,7 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(text: String) {
         val state = _uiState.value
+        if (state.isUploading) return
         val trimmed = text.trim()
 
         // Guard: don't send to tmux with an empty session name
@@ -595,37 +613,45 @@ class ChatViewModel @Inject constructor(
         // Handle file attachment upload
         val file = state.attachedFile
         if (file != null) {
+            val serverUrl = webSocketService.currentWebSocketUrl
+            if (serverUrl == null || serverUrl.substringBefore('?') != readHostServerUrl) {
+                _uiState.update { it.copy(error = "Wait for this chat's server connection before sending") }
+                return
+            }
+            _uiState.update { it.copy(isUploading = true, error = null) }
             viewModelScope.launch {
-                _uiState.update { it.copy(isUploading = true) }
                 try {
-                    val bytes = app.contentResolver
-                        .openInputStream(android.net.Uri.parse(file.uri))
-                        ?.readBytes()
-                    if (bytes != null) {
-                        val base64 = android.util.Base64.encodeToString(
-                            bytes, android.util.Base64.NO_WRAP,
-                        )
-                        if (state.isAcp) {
-                            val sessionId = state.sessionName.removePrefix("acp_")
-                            webSocketService.sendFileToAcpChat(
-                                sessionId, file.filename, file.mimeType, base64,
-                                trimmed.ifEmpty { null }, "",
-                            )
-                        } else {
-                            webSocketService.sendFileToChat(
-                                state.sessionName, state.windowIndex,
-                                file.filename, file.mimeType, base64,
-                                trimmed.ifEmpty { null },
-                            )
-                        }
-                        // Optimistically add a user message for the file send
-                        val prompt = trimmed.ifEmpty { "[File: ${file.filename}]" }
-                        val userMsg = buildUserMessage(prompt)
-                        _uiState.value.messages.add(userMsg)
+                    val base64 = withContext(Dispatchers.IO) {
+                        encodeChatAttachment(app.contentResolver.openInputStream(android.net.Uri.parse(file.uri)))
                     }
-                } finally {
+                    val sent = if (state.isAcp) {
+                        val sessionId = state.sessionName.removePrefix("acp_")
+                        webSocketService.sendFileToAcpChat(
+                            sessionId, file.filename, file.mimeType, base64,
+                            trimmed.ifEmpty { null }, state.sessionCwd, serverUrl,
+                        )
+                    } else {
+                        webSocketService.sendFileToChat(
+                            state.sessionName, state.windowIndex,
+                            file.filename, file.mimeType, base64,
+                            trimmed.ifEmpty { null }, serverUrl,
+                        )
+                    }
+                    if (!sent) throw java.io.IOException("Unable to send the attachment. Check your server connection and retry")
+                    // Optimistically add a user message for the file send.
+                    val prompt = trimmed.ifEmpty { "[File: ${file.filename}]" }
+                    val userMsg = buildUserMessage(prompt)
+                    _uiState.value.messages.add(userMsg)
                     _uiState.update { it.copy(attachedFile = null, isUploading = false, draftMessage = "") }
+                    if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = ""
                     saveDraft(draftKey(state.sessionName, state.windowIndex), "")
+                    clearSharedAttachment()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    _uiState.update { it.copy(error = error.message ?: "Unable to send the attachment") }
+                } finally {
+                    _uiState.update { it.copy(isUploading = false) }
                 }
             }
             return
@@ -634,7 +660,9 @@ class ChatViewModel @Inject constructor(
         if (trimmed.isEmpty()) return
 
         _uiState.update { it.copy(draftMessage = "") }
+        if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = ""
         saveDraft(draftKey(state.sessionName, state.windowIndex), "")
+        clearSharedAttachment()
 
         if (state.isAcp) {
             // ACP: optimistic local add (backend doesn't echo user messages back)
@@ -702,6 +730,7 @@ class ChatViewModel @Inject constructor(
     fun updateDraft(text: String) {
         val state = _uiState.value
         _uiState.update { it.copy(draftMessage = text) }
+        if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = text
         saveDraft(draftKey(state.sessionName, state.windowIndex), text)
     }
 
@@ -778,11 +807,19 @@ class ChatViewModel @Inject constructor(
     // -------------------------------------------------------------------------
 
     fun attachFile(uri: String, filename: String, mimeType: String, size: Long) {
-        _uiState.update { it.copy(attachedFile = AttachedFile(uri, filename, mimeType, size)) }
+        val file = AttachedFile(uri, filename, mimeType, size)
+        _uiState.update { it.copy(attachedFile = file) }
+        savedStateHandle["share_attachment"] = Json.encodeToString(file)
     }
 
     fun removeAttachedFile() {
         _uiState.update { it.copy(attachedFile = null) }
+        clearSharedAttachment()
+    }
+
+    private fun clearSharedAttachment() {
+        savedStateHandle.remove<String>("share_attachment")
+        if (navShareId.isNotBlank()) viewModelScope.launch { sharedContentRepository.discard(navShareId) }
     }
 
     private fun draftKey(sessionName: String, windowIndex: Int) =
@@ -796,8 +833,26 @@ class ChatViewModel @Inject constructor(
 
     private fun restoreDraft(key: String) {
         viewModelScope.launch {
-            val draft = dataStore.getDraftMessage(key)
-            _uiState.update { it.copy(draftMessage = draft ?: "") }
+            val draft = dataStore.getDraftMessage(key).orEmpty()
+            if (navShareId.isBlank() || savedStateHandle.get<Boolean>("share_applied") == true) {
+                _uiState.update { it.copy(draftMessage = savedStateHandle.get<String>("share_draft_text") ?: draft) }
+                return@launch
+            }
+            try {
+                val shared = sharedContentRepository.load(navShareId)
+                    ?: throw java.io.IOException("Shared content is no longer available. Please share it again")
+                val text = mergeSharedText(draft, shared.text)
+                val file = shared.attachment?.let { AttachedFile(it.uri, it.filename, it.mimeType, it.sizeBytes) }
+                _uiState.update { it.copy(draftMessage = text, attachedFile = file) }
+                savedStateHandle["share_applied"] = true
+                savedStateHandle["share_draft_text"] = text
+                file?.let { savedStateHandle["share_attachment"] = Json.encodeToString(it) }
+                dataStore.setDraftMessage(key, text)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                _uiState.update { it.copy(draftMessage = draft, error = error.message ?: "Unable to restore shared content") }
+            }
         }
     }
 

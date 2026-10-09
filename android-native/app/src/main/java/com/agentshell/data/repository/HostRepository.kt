@@ -8,6 +8,8 @@ import com.agentshell.data.model.Host
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,6 +19,16 @@ class HostRepository @Inject constructor(
     private val hostDao: HostDao,
     private val dataStore: PreferencesDataStore,
 ) {
+    private val defaultsMutex = Mutex()
+
+    /** Home and the share picker can start together on a fresh installation. */
+    suspend fun ensureDefaultHosts() = defaultsMutex.withLock {
+        if (hostDao.getAll().first().isEmpty()) {
+            val defaults = loadBuildTimeHosts()
+            defaults.forEach { saveHost(it) }
+            defaults.firstOrNull()?.let { selectHost(it.id) }
+        }
+    }
 
     /** Emits a combined flow of (hosts list, selected host). */
     fun getHosts(): Flow<List<Host>> = hostDao.getAll()

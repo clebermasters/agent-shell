@@ -416,8 +416,9 @@ fun WebSocketService.sendFileToChat(
     mimeType: String,
     data: String,
     prompt: String? = null,
-) {
-    send(buildMap {
+    expectedServerUrl: String? = null,
+): Boolean {
+    val message = buildMap<String, Any?> {
         put("type",        "send-file-to-chat")
         put("sessionName", sessionName)
         put("windowIndex", windowIndex)
@@ -427,7 +428,10 @@ fun WebSocketService.sendFileToChat(
             "data"     to data,
         ))
         put("prompt", prompt)
-    })
+    }
+    if (expectedServerUrl != null) return sendIfConnected(message, expectedServerUrl)
+    send(message)
+    return true
 }
 
 /**
@@ -444,8 +448,9 @@ fun WebSocketService.sendFileToAcpChat(
     data: String,
     prompt: String? = null,
     cwd: String? = null,
-) {
-    send(buildMap {
+    expectedServerUrl: String? = null,
+): Boolean {
+    val message = buildMap<String, Any?> {
         put("type",      "send-file-to-acp-chat")
         put("sessionId", sessionId)
         put("file", mapOf(
@@ -455,7 +460,10 @@ fun WebSocketService.sendFileToAcpChat(
         ))
         put("prompt", prompt)
         put("cwd", cwd)
-    })
+    }
+    if (expectedServerUrl != null) return sendIfConnected(message, expectedServerUrl)
+    send(message)
+    return true
 }
 
 // =============================================================================

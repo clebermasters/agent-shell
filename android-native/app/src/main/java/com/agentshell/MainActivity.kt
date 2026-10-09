@@ -9,6 +9,7 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -21,6 +22,8 @@ import com.agentshell.core.theme.AgentShellTheme
 import com.agentshell.feature.home.AgentShellNavHost
 import com.agentshell.core.util.NotificationHelper
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.feature.share.ShareViewModel
+import com.agentshell.core.util.ShareIntentParser
 import dagger.hilt.android.AndroidEntryPoint
 
 /**
@@ -35,6 +38,8 @@ object VolumeKeyHandler {
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    private val shareViewModel: ShareViewModel by viewModels()
+
     private var pendingNotificationId by mutableStateOf<String?>(null)
     private var pendingChatTarget by mutableStateOf<ChatTarget?>(null)
 
@@ -44,6 +49,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null && ShareIntentParser.isShare(intent)) shareViewModel.receive(intent)
         pendingNotificationId = intent.extractNotificationId()
         pendingChatTarget = NotificationHelper.chatTarget(intent)
         enableEdgeToEdge()
@@ -52,6 +58,7 @@ class MainActivity : ComponentActivity() {
             AgentShellTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     AgentShellNavHost(
+                        shareViewModel = shareViewModel,
                         pendingChatTarget = pendingChatTarget,
                         onChatIntentConsumed = { target ->
                             if (pendingChatTarget == target) {
@@ -74,6 +81,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (ShareIntentParser.isShare(intent)) shareViewModel.receive(intent)
         pendingNotificationId = intent.extractNotificationId()
         pendingChatTarget = NotificationHelper.chatTarget(intent)
     }

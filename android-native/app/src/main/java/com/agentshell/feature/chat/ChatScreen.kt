@@ -635,6 +635,7 @@ private fun ChatInputBar(
                             }
                             IconButton(
                                 onClick = onRemoveAttachment,
+                                enabled = !isUploading,
                                 modifier = Modifier.size(24.dp),
                             ) {
                                 Icon(
@@ -710,7 +711,7 @@ private fun ChatInputBar(
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                IconButton(onClick = onAttachClick) {
+                IconButton(onClick = onAttachClick, enabled = !isUploading) {
                     Icon(
                         Icons.Default.AttachFile,
                         contentDescription = "Attach file",
@@ -721,6 +722,7 @@ private fun ChatInputBar(
                 OutlinedTextField(
                     value = value,
                     onValueChange = onValueChange,
+                    enabled = !isUploading,
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Message…") },
                     maxLines = 6,
@@ -732,7 +734,7 @@ private fun ChatInputBar(
                 if (showVoiceButton) {
                     IconButton(
                         onClick = onMicPressed,
-                        enabled = !isTranscribing,
+                        enabled = !isTranscribing && !isUploading,
                     ) {
                         when {
                             isTranscribing -> CircularProgressIndicator(

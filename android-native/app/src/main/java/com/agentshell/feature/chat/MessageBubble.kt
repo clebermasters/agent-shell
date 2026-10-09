@@ -148,7 +148,13 @@ fun MessageBubble(
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
         // Header row: avatar + label
-        MessageHeader(isUser = isUser, isError = isError, isTool = isTool)
+        if (message.messageType == ChatMessageType.ASSISTANT) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                MessageHeader(isUser = false, isError = false, isTool = false)
+                Spacer(Modifier.weight(1f))
+                CopyMessageButton(message)
+            }
+        } else MessageHeader(isUser = isUser, isError = isError, isTool = isTool)
 
         Spacer(Modifier.height(4.dp))
 

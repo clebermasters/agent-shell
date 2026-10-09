@@ -32,6 +32,7 @@ import com.agentshell.feature.chat.AgentActivityBar
 import com.agentshell.data.model.ChatCursor
 import com.agentshell.data.remote.SessionSocket
 import com.agentshell.feature.chat.MarkdownText
+import com.agentshell.feature.chat.CopyMessageButton
 import com.agentshell.feature.chat.UnreadDivider
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Dispatchers
@@ -438,7 +439,11 @@ private fun CompactMessageBubble(message: ChatMessage) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-            Text(text = label, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(text = label, fontSize = 10.sp, color = MaterialTheme.colorScheme.outline)
+                Spacer(Modifier.weight(1f))
+                CopyMessageButton(message)
+            }
 
             // Render blocks if present
             if (message.blocks.isNotEmpty()) {

@@ -13,6 +13,7 @@ import com.agentshell.data.remote.renameSession
 import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.TerminalService
 import com.agentshell.data.services.TranscriptionQueueService
+import com.agentshell.data.services.TranscriptionReceipt
 import com.agentshell.data.services.TranscriptionSuccessEvent
 import com.agentshell.terminal.XTermController
 import android.app.Application
@@ -59,6 +60,7 @@ class TerminalViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val density: Float = app.resources.displayMetrics.scaledDensity
+    private val transcriptionReceipt = TranscriptionReceipt()
 
     val macros: StateFlow<List<CommandMacro>> = macroDao.getAll()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -126,11 +128,20 @@ class TerminalViewModel @Inject constructor(
         viewModelScope.launch {
             transcriptionQueue.successEvents.collect { event ->
                 if (event.source == com.agentshell.data.model.TranscriptionJob.Source.TERMINAL) {
-                    if (event.text.isNotBlank()) {
-                        terminalService.sendInput(event.text)
-                    }
-                    _uiState.update { it.copy(isTranscribing = false, transcriptionError = null) }
+                    receiveTranscription(event.jobId, event.text)
                 }
+            }
+        }
+        viewModelScope.launch {
+            transcriptionQueue.pendingResult.collect { result ->
+                if (result == null || result.source != com.agentshell.data.model.TranscriptionJob.Source.TERMINAL) return@collect
+                when (result) {
+                    is TranscriptionQueueService.PendingResult.Success -> receiveTranscription(result.jobId, result.text)
+                    is TranscriptionQueueService.PendingResult.Failed -> _uiState.update {
+                        it.copy(isTranscribing = false, transcriptionError = result.error, failedTranscriptionJobId = result.jobId)
+                    }
+                }
+                transcriptionQueue.clearPendingResult()
             }
         }
 
@@ -224,31 +235,13 @@ class TerminalViewModel @Inject constructor(
             _uiState.update { it.copy(isTranscribing = true, transcriptionError = null) }
             val apiKey = prefs.openaiApiKey.first()
             transcriptionQueue.enqueue(path, apiKey, com.agentshell.data.model.TranscriptionJob.Source.TERMINAL)
-
-            // Observe pending result
-            transcriptionQueue.pendingResult.collect { result ->
-                if (result == null) return@collect
-                when (result) {
-                    is TranscriptionQueueService.PendingResult.Success -> {
-                        if (result.text.isNotBlank()) {
-                            terminalService.sendInput(result.text)
-                        }
-                        _uiState.update { it.copy(isTranscribing = false) }
-                        transcriptionQueue.clearPendingResult()
-                    }
-                    is TranscriptionQueueService.PendingResult.Failed -> {
-                        _uiState.update {
-                            it.copy(
-                                isTranscribing = false,
-                                transcriptionError = result.error,
-                                failedTranscriptionJobId = result.jobId,
-                            )
-                        }
-                        transcriptionQueue.clearPendingResult()
-                    }
-                }
-            }
         }
+    }
+
+    private fun receiveTranscription(jobId: String, text: String) {
+        if (!transcriptionReceipt.accept(jobId)) return
+        if (text.isNotBlank()) terminalService.sendInput(text)
+        _uiState.update { it.copy(isTranscribing = false, transcriptionError = null, failedTranscriptionJobId = null) }
     }
 
     fun retryTranscription(jobId: String) {

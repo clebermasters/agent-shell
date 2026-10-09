@@ -71,8 +71,9 @@ class TranscriptionQueueService @Inject constructor(
     }
 
     sealed class PendingResult {
-        data class Success(val text: String) : PendingResult()
-        data class Failed(val jobId: String, val error: String) : PendingResult()
+        abstract val source: TranscriptionJob.Source
+        data class Success(val text: String, val jobId: String, override val source: TranscriptionJob.Source) : PendingResult()
+        data class Failed(val jobId: String, val error: String, override val source: TranscriptionJob.Source) : PendingResult()
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -171,7 +172,7 @@ class TranscriptionQueueService @Inject constructor(
 
                     // Notify caller
                     if (attempt == 0) {
-                        _pendingResult.value = PendingResult.Success(text)
+                        _pendingResult.value = PendingResult.Success(text, currentJob.id, currentJob.source)
                     }
 
                     // Notify any observers (e.g. for retries that succeed later)
@@ -188,7 +189,7 @@ class TranscriptionQueueService @Inject constructor(
                     )
                     updateJob(currentJob)
                     if (attempt == 0) {
-                        _pendingResult.value = PendingResult.Failed(currentJob.id, result.message)
+                        _pendingResult.value = PendingResult.Failed(currentJob.id, result.message, currentJob.source)
                     }
                     return
                 }
@@ -210,7 +211,7 @@ class TranscriptionQueueService @Inject constructor(
         )
         updateJob(currentJob)
         if (job.retryCount == 0) {
-            _pendingResult.value = PendingResult.Failed(currentJob.id, currentJob.error ?: "Transcription failed")
+            _pendingResult.value = PendingResult.Failed(currentJob.id, currentJob.error ?: "Transcription failed", currentJob.source)
         }
     }
 

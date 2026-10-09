@@ -44,6 +44,7 @@ import com.agentshell.data.services.AudioPlayerManager
 import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.TranscriptionQueueService
 import com.agentshell.data.services.TranscriptionSuccessEvent
+import com.agentshell.data.services.TranscriptionReceipt
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
@@ -193,6 +194,7 @@ class ChatViewModel @Inject constructor(
     private val readOwner = UUID.randomUUID().toString()
     private var screenActive = false
     private var followingLive = false
+    private val transcriptionReceipt = TranscriptionReceipt()
 
     private fun newMessageList(messages: List<ChatMessage> = emptyList()): SnapshotStateList<ChatMessage> =
         mutableStateListOf<ChatMessage>().apply { addAll(messages) }
@@ -466,10 +468,21 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             transcriptionQueue.successEvents.collect { event ->
                 if (event.source == com.agentshell.data.model.TranscriptionJob.Source.CHAT) {
-                    _uiState.update {
-                        it.copy(isTranscribing = false, transcribedText = event.text, transcriptionError = null)
+                    receiveTranscription(event.jobId, event.text)
+                }
+            }
+        }
+        // One collector per ViewModel; starting another recording must not add another observer.
+        viewModelScope.launch {
+            transcriptionQueue.pendingResult.collect { result ->
+                if (result == null || result.source != com.agentshell.data.model.TranscriptionJob.Source.CHAT) return@collect
+                when (result) {
+                    is TranscriptionQueueService.PendingResult.Success -> receiveTranscription(result.jobId, result.text)
+                    is TranscriptionQueueService.PendingResult.Failed -> _uiState.update {
+                        it.copy(isTranscribing = false, transcriptionError = result.error, failedTranscriptionJobId = result.jobId)
                     }
                 }
+                transcriptionQueue.clearPendingResult()
             }
         }
 
@@ -748,38 +761,26 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(isTranscribing = true, transcriptionError = null) }
             val apiKey = dataStore.openaiApiKey.first()
             transcriptionQueue.enqueue(path, apiKey, com.agentshell.data.model.TranscriptionJob.Source.CHAT)
-
-            // Observe pending result
-            transcriptionQueue.pendingResult.collect { result ->
-                if (result == null) return@collect
-                when (result) {
-                    is TranscriptionQueueService.PendingResult.Success -> {
-                        _uiState.update {
-                            it.copy(isTranscribing = false, transcribedText = result.text)
-                        }
-                        transcriptionQueue.clearPendingResult()
-                    }
-                    is TranscriptionQueueService.PendingResult.Failed -> {
-                        _uiState.update {
-                            it.copy(
-                                isTranscribing = false,
-                                transcriptionError = result.error,
-                                failedTranscriptionJobId = result.jobId,
-                            )
-                        }
-                        transcriptionQueue.clearPendingResult()
-                    }
-                }
-            }
         }
+    }
+
+    private fun receiveTranscription(jobId: String, text: String) {
+        if (!transcriptionReceipt.accept(jobId)) return
+        _uiState.update { it.copy(isTranscribing = false, transcribedText = text, transcriptionError = null, failedTranscriptionJobId = null) }
     }
 
     fun cancelVoiceRecording() {
         viewModelScope.launch { audioService.cancelRecording() }
     }
 
-    fun clearTranscribedText() {
+    fun consumeTranscribedText() {
+        val state = _uiState.value
+        val text = state.transcribedText ?: return
+        val draft = if (state.draftMessage.isBlank()) text else "${state.draftMessage} $text"
         _uiState.update { it.copy(transcribedText = null) }
+        if (text.isBlank()) return
+        updateDraft(draft)
+        viewModelScope.submitVoiceDraft(draft, { isVoiceAutoEnter() }, { _uiState.value.draftMessage }, ::sendMessage)
     }
 
     fun retryTranscription(jobId: String) {

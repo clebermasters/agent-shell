@@ -202,16 +202,7 @@ fun ChatScreen(
 
     // Auto-insert transcribed voice text into draft
     LaunchedEffect(uiState.transcribedText) {
-        val text = uiState.transcribedText ?: return@LaunchedEffect
-        if (text.isNotBlank()) {
-            val current = uiState.draftMessage
-            val newDraft = if (current.isBlank()) text else "$current $text"
-            viewModel.updateDraft(newDraft)
-            viewModel.clearTranscribedText()
-            if (viewModel.isVoiceAutoEnter()) {
-                viewModel.sendMessage(newDraft)
-            }
-        }
+        viewModel.consumeTranscribedText()
     }
 
     // Initialise the chat watch on first composition

@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use super::types::{merge_history_messages, send_message, WsState};
-use crate::{types::*, AppState};
+use crate::{tmux, types::*, AppState};
 
 const BACKEND_CODEX: &str = "codex";
 
@@ -1221,56 +1221,9 @@ pub(crate) async fn handle(
             // Send the single-line text (prompt + file path) to the tmux session
             // so the AI tool (OpenCode/Claude) receives the file reference.
             if !tmux_text.is_empty() {
-                let target = format!("{}:{}", session_name, window_index);
-
-                // Two separate tmux calls: text first, then Enter.
-                let send_text = tokio::process::Command::new("tmux")
-                    .args(&["send-keys", "-t", &target, "-l", &tmux_text])
-                    .output()
-                    .await;
-
-                // If session:window failed (window doesn't exist), retry with session only.
-                let (send_text, effective_target) = match &send_text {
-                    Ok(output) if !output.status.success() => {
-                        warn!(
-                            "SendFileToChat: target {} failed, retrying with session only ({})",
-                            target, session_name
-                        );
-                        let retry = tokio::process::Command::new("tmux")
-                            .args(&["send-keys", "-t", &session_name, "-l", &tmux_text])
-                            .output()
-                            .await;
-                        (retry, session_name.clone())
-                    }
-                    _ => (send_text, target.clone()),
-                };
-
-                // Delay so the TUI finishes processing the typed text before Enter.
-                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
-                let send_enter = tokio::process::Command::new("tmux")
-                    .args(&["send-keys", "-t", &effective_target, "Enter"])
-                    .output()
-                    .await;
-
-                match (send_text, send_enter) {
-                    (Ok(t), Ok(e)) if t.status.success() && e.status.success() => {
-                        info!(
-                            "SendFileToChat: OK sent to tmux target {}: {:?}",
-                            effective_target, tmux_text
-                        );
-                    }
-                    (Ok(t), Ok(e)) => {
-                        error!("SendFileToChat: tmux send-keys FAILED for {} — text_exit={}, enter_exit={}, text_stderr={:?}, enter_stderr={:?}",
-                            effective_target, t.status, e.status,
-                            String::from_utf8_lossy(&t.stderr),
-                            String::from_utf8_lossy(&e.stderr));
-                    }
-                    (Err(e), _) | (_, Err(e)) => {
-                        error!(
-                            "SendFileToChat: failed to spawn tmux for {}: {}",
-                            effective_target, e
-                        );
-                    }
+                if let Err(error) = tmux::send_text_and_enter(&session_name, Some(window_index), &tmux_text).await {
+                    error!("SendFileToChat: unable to submit to {}:{}: {}", session_name, window_index, error);
+                    send_message(&state.message_tx, ServerMessage::ChatLogError { error: error.to_string() }).await?;
                 }
             }
         }
@@ -1333,56 +1286,11 @@ pub(crate) async fn handle(
                 state.client_manager.broadcast(notify_msg).await;
             }
 
-            let target = format!("{}:{}", session_name, window_index);
-            let text = message.trim();
-
-            // Two separate tmux calls: text first, then Enter.
-            let send_text = tokio::process::Command::new("tmux")
-                .args(&["send-keys", "-t", &target, "-l", text])
-                .output()
-                .await;
-
-            // If session:window failed (window doesn't exist), retry with session only
-            // so tmux targets the active window.
-            let (_send_text, effective_target) = match &send_text {
-                Ok(output) if !output.status.success() => {
-                    warn!(
-                        "SendChatMessage: target {} failed, retrying with session only ({})",
-                        target, session_name
-                    );
-                    let retry = tokio::process::Command::new("tmux")
-                        .args(&["send-keys", "-t", &session_name, "-l", text])
-                        .output()
-                        .await;
-                    (retry, session_name.clone())
-                }
-                _ => (send_text, target.clone()),
-            };
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
-            let result = tokio::process::Command::new("tmux")
-                .args(&["send-keys", "-t", &effective_target, "Enter"])
-                .output()
-                .await;
-
-            match result {
-                Ok(output) if output.status.success() => {
-                    info!(
-                        "Sent chat message to tmux: {:?} (target: {})",
-                        text, effective_target
-                    );
-                }
-                Ok(output) => {
-                    error!(
-                        "tmux send-keys failed for {}: {}",
-                        effective_target, output.status
-                    );
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to send chat message to tmux session {}: {}",
-                        effective_target, e
-                    );
+            match tmux::send_text_and_enter(&session_name, Some(window_index), message.trim()).await {
+                Ok(()) => info!("Submitted chat message to tmux {}:{} ({} bytes)", session_name, window_index, message.trim().len()),
+                Err(error) => {
+                    error!("SendChatMessage: unable to submit to {}:{}: {}", session_name, window_index, error);
+                    send_message(&state.message_tx, ServerMessage::ChatLogError { error: error.to_string() }).await?;
                 }
             }
         }

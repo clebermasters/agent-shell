@@ -1,9 +1,44 @@
 {
   "branch": "poc/open-intelligent-ui",
-  "rust_tests": 603,
-  "android_tests": 113,
-  "android_failures": 0,
+  "android_unit_tests": {
+    "tests": 113,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "mobile_layout_cases": 50,
+  "native_api": 35,
+  "native_maximized_message_css_widths": {
+    "phone_css_width": 356,
+    "tablet_css_width": 1012,
+    "controls_survive_close_and_display_resize": true
+  },
+  "browser_conversation_isolation": true,
+  "native_five_widgets_and_scoped_actions": true,
+  "native_fullscreen_theme_recreation_and_image_export": true,
+  "native_pixels_verified": true,
+  "release_kotlin_compile": true,
+  "external_widget_requests": 0,
   "provider_inference_calls": 0,
-  "upstream_revision": "f6e4388b26a64b9a0714943b08a1ce622b924eec",
-  "scope": "Complete HTML widgets, MCP publishing, scoped persistence and follow-ups; no AG-UI streaming or automatic model router."
+  "backend": "unchanged from POC 2eab2576; its original 603-test validation retained",
+  "scope": "Isolated preview; no production deployment or real-agent global configuration",
+  "apk": {
+    "signed_v2": true,
+    "isolated_credentials": true,
+    "package": "com.agentshell.debug",
+    "sha256": "564bb286d7eba5496ffbe9dd8e3e0a19e378380c15d9d19ed44f9fa108402cdd",
+    "artifact": "/tmp/agentshell-ui-mobile-evidence/agentshell-interactive-preview.apk"
+  },
+  "live_basemap_and_offline_fallback": {
+    "live_tiles_loaded": true,
+    "real_tiles_fetched": 8,
+    "schematic_does_not_cover_tiles": true,
+    "mode_restored": true,
+    "network_failure_restores_offline_map": true,
+    "route_and_stops_retained": true,
+    "source": "USGS tile service, actual per-coordinate tile requests; simulated outage in a fresh document"
+  },
+  "native_conversation_switch_verified": true,
+  "keyboard_visible_field_verified": true,
+  "invalid_connection_address_handled": true
 }

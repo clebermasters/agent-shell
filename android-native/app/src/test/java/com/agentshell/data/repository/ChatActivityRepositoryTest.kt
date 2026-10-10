@@ -22,6 +22,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -80,7 +83,8 @@ class ChatActivityRepositoryTest {
 
     @After fun teardown() {
         repositories.forEach { it.close() }
-        storeScope.cancel()
+        // Finish DataStore I/O before JUnit removes the temporary directory.
+        runBlocking { storeScope.coroutineContext[Job]?.cancelAndJoin() }
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
         Dispatchers.resetMain()

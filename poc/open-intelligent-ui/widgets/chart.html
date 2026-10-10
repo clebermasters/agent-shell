@@ -1,0 +1,10 @@
+<div class="eyebrow">Insights · sample dataset</div>
+<h3>Revenue overview</h3>
+<p class="subtitle">Explore six months of revenue, then compare a growth scenario.</p>
+<div class="row between"><div><p class="metric-label">Scenario total</p><p class="metric" id="revenue"></p></div><span class="badge" id="growth"></span></div>
+<div class="divider"></div>
+<div class="chips" role="group" aria-label="Data view"><button id="showChart" aria-pressed="true">Trend</button><button id="showTable" aria-pressed="false">Data table</button></div>
+<div id="chartView"><div class="chart"><svg id="chart" viewBox="0 0 340 170" role="img" aria-label="Six month revenue trend"><defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#8883ed" stop-opacity=".28"/><stop offset="1" stop-color="#8883ed" stop-opacity="0"/></linearGradient></defs><g stroke="var(--line)" stroke-dasharray="3 5"><path d="M10 30H330M10 85H330M10 140H330"/></g><path id="area" fill="url(#areaFill)"/><path id="series" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><g id="points"></g></svg></div><div class="months" id="months" role="group" aria-label="Select a month"></div><div class="chart-summary"><span id="selectedMonth" class="caption"></span><strong id="selectedValue"></strong></div></div>
+<div id="tableView" class="table-wrap" hidden><table><thead><tr><th scope="col">Month</th><th scope="col">Revenue</th><th scope="col">Growth</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="panel"><div class="row between"><label for="scale">Growth scenario</label><output id="chartValue">1</output></div><input id="scale" type="range" min="1" max="4" step="1" value="1" aria-label="Growth scenario"><p class="caption" id="scenarioNote"></p></div>
+<button class="primary" id="ask">Explore this trend with the agent</button>

@@ -37,6 +37,7 @@ import com.agentshell.feature.chat.ConversationLinkBar
 import com.agentshell.data.model.ChatBindingState
 import com.agentshell.data.model.acceptsConversationPacket
 import com.agentshell.feature.chat.UnreadDivider
+import com.agentshell.feature.chat.UiWidgetBlock
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -84,6 +85,7 @@ fun ChatPanelContent(
     var inputText by remember { mutableStateOf("") }
     var bindingState by remember(target?.key) { mutableStateOf<ChatBindingState?>(if (isAcp) null else ChatBindingState("checking", "", "", null, emptyList(), "Linking this terminal…")) }
     var pendingSend by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var pendingWidget by remember(target?.key) { mutableStateOf<Pair<String, String>?>(null) }
     var submissionError by remember { mutableStateOf<String?>(null) }
     val conversationDrafts = remember { mutableMapOf<String, String>() }
     val listState = rememberLazyListState()
@@ -160,6 +162,12 @@ fun ChatPanelContent(
 
         panelSocket.messages.collect { message ->
             if (message["type"] == "chat-send-result") {
+                if (message["requestId"] == pendingWidget?.first && pendingWidget != null) {
+                    val linked = pendingWidget?.second == bindingState?.binding?.id
+                    pendingWidget = null
+                    if (linked) submissionError = if (message["success"] == true) null else message["error"] as? String ?: "Unable to send this action"
+                    return@collect
+                }
                 val pending = pendingSend
                 if (pending != null && message["requestId"] == pending.first) {
                     pendingSend = null
@@ -388,7 +396,23 @@ fun ChatPanelContent(
             items(messages.toList(), key = { it.id }) { msg ->
                 Column {
                     if (msg.id == firstUnreadId) UnreadDivider()
-                    CompactMessageBubble(msg)
+                    CompactMessageBubble(msg) { widgetId, text ->
+                        val linked = bindingState?.binding
+                        if (isAcp || !isSocketConnected || linked == null || pendingWidget != null) return@CompactMessageBubble
+                        val request = UUID.randomUUID().toString()
+                        pendingWidget = request to linked.id
+                        submissionError = null
+                        panelSocket.send(mapOf("type" to "send-bound-ui-action", "bindingId" to linked.id,
+                            "requestId" to request, "sessionName" to sessionName, "windowIndex" to windowIndex,
+                            "widgetId" to widgetId, "message" to text))
+                        coroutineScope.launch {
+                            kotlinx.coroutines.delay(30_000)
+                            if (pendingWidget?.first == request) {
+                                pendingWidget = null
+                                if (bindingState?.binding?.id == linked.id) submissionError = "Action delivery was not confirmed. Check the conversation before retrying"
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -468,7 +492,7 @@ fun ChatPanelContent(
 // ── Message Rendering ───────────────────────────────────────────────────────
 
 @Composable
-private fun CompactMessageBubble(message: ChatMessage) {
+private fun CompactMessageBubble(message: ChatMessage, onWidgetAction: (String, String) -> Unit) {
     val isUser = message.messageType == ChatMessageType.USER
     val isToolCall = message.messageType == ChatMessageType.TOOL_CALL
     val isToolResult = message.messageType == ChatMessageType.TOOL_RESULT
@@ -506,6 +530,7 @@ private fun CompactMessageBubble(message: ChatMessage) {
             if (message.blocks.isNotEmpty()) {
                 message.blocks.forEach { block ->
                     when (block.blockType) {
+                        ChatBlockType.UI_WIDGET -> UiWidgetBlock(block, onWidgetAction)
                         ChatBlockType.TEXT -> {
                             val text = block.text ?: ""
                             if (text.isNotEmpty()) {

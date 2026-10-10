@@ -1,15 +1,36 @@
-"""Deterministic widget fixtures: no inference calls, no private/live business data."""
+"""Self-contained mobile showcases. All values are explicitly illustrative."""
+import json
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[2]/"android-native/app/src/debug/assets/ui-poc"
+
+ROOT = Path(__file__).resolve().parents[2] / "android-native/app/src/debug/assets/ui-poc"
+SOURCE = Path(__file__).with_name("widgets")
+
 
 def widgets(base):
- base=base.rstrip('/')
- theme=(ROOT/'theme.css').read_text()
- def doc(body,script,extras=''):
-  return f"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none';script-src 'unsafe-inline' {base}/;style-src 'unsafe-inline' {base}/;img-src data: blob: {base}/ https://basemap.nationalmap.gov;connect-src 'none';font-src data:;base-uri 'none';form-action 'none'"><style>{theme} body{{margin:0;padding:14px;font:14px system-ui;background:var(--color-background-primary);color:var(--color-text-primary)}} button,input{{font:inherit}} .caption{{font-size:12px;color:var(--color-text-secondary)}} canvas,svg{{max-width:100%}} button{{margin-top:8px}} </style>{extras}</head><body><p class="caption">Illustrative POC data · interactive HTML/CSS/JavaScript</p>{body}<script>window.sendPrompt=function(text){{parent.postMessage({{type:'send-prompt',text}},'*')}};new ResizeObserver(()=>parent.postMessage({{type:'widget-resize',height:document.body.scrollHeight+20}},'*')).observe(document.body);{script}</script></body></html>"""
- chart=doc('<h3>Interactive sample chart</h3><label>Scale <input id="scale" type="range" min="1" max="4" value="1"></label><output id="chartValue">1</output><svg id="chart" viewBox="0 0 320 150"><path id="series" fill="none" stroke="#6366f1" stroke-width="4"/></svg><table><tr><th>Month</th><th>Sample</th></tr><tr><td>Jan</td><td>20</td></tr><tr><td>Feb</td><td>35</td></tr></table><button id="ask">Ask agent about selection</button>',"const scale=document.querySelector('#scale');function draw(){let v=Number(scale.value);document.querySelector('#chartValue').textContent=v;document.querySelector('#series').setAttribute('d',[20,35,28,42,31,55].map((x,i)=>(i?'L':'M')+(20+i*55)+' '+(140-(x+(v-1)*i*6)/(55+(v-1)*30)*110)).join(' '));}scale.oninput=draw;draw();document.querySelector('#ask').onclick=()=>sendPrompt('Explain the sample chart at scale '+scale.value);")
- calc=doc('<h3>Bill splitter</h3><label>Bill <input id="bill" type="number" value="100"></label><label>Tip % <input id="tip" type="number" value="15"></label><label>People <input id="people" type="number" min="1" value="2"></label><p>Per person: <strong id="total"></strong></p><button id="ask">Ask agent about this split</button>',"function calc(){let b=Math.max(0,Number(document.querySelector('#bill').value)||0),t=Math.max(0,Number(document.querySelector('#tip').value)||0),n=Math.max(1,Number(document.querySelector('#people').value)||1);document.querySelector('#total').textContent=(b*(1+t/100)/n).toFixed(2);}document.querySelectorAll('input').forEach(e=>e.oninput=calc);calc();document.querySelector('#ask').onclick=()=>sendPrompt('Explain the bill split: '+document.querySelector('#total').textContent+' per person');")
- diagram=doc('<h3>Process explorer</h3><svg viewBox="0 0 340 70">'+''.join(f'<g id="stage{i}"><rect x="{i*85}" y="8" width="76" height="44" rx="8" fill="#e2e8f0"/><text x="{i*85+38}" y="35" text-anchor="middle">{label}</text></g>' for i,label in enumerate(['Collect','Validate','Render','Review']))+'</svg><p id="stepLabel">Collect</p><button id="step">Next step</button><button id="ask">Ask agent about this step</button>',"let step=0,labels=['Collect','Validate','Render','Review'];function render(){labels.forEach((x,i)=>document.querySelector('#stage'+i+' rect').setAttribute('fill',i===step?'#a5b4fc':'#e2e8f0'));document.querySelector('#stepLabel').textContent=labels[step];}document.querySelector('#step').onclick=()=>{step=(step+1)%4;render()};document.querySelector('#ask').onclick=()=>sendPrompt('Explain the '+labels[step]+' stage');render();")
- cube=doc('<h3>3D orientation explorer</h3><div id="scene" style="height:240px"></div><label>Yaw <input id="yaw" type="range" min="-180" max="180" value="0"></label><output id="angle">0</output><button id="reset">Reset</button><button id="ask">Ask agent about rotation</button>',"const scene=new THREE.Scene();scene.background=new THREE.Color('#f1f5f9');const camera=new THREE.PerspectiveCamera(45,1.4,.1,100);camera.position.set(3,2,4);camera.lookAt(0,0,0);const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});renderer.setSize(320,240);document.querySelector('#scene').appendChild(renderer.domElement);const cube=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.5,1.5),new THREE.MeshNormalMaterial());scene.add(cube);let yaw=document.querySelector('#yaw');function draw(){cube.rotation.y=Number(yaw.value)*Math.PI/180;document.querySelector('#angle').textContent=yaw.value;renderer.render(scene,camera);}yaw.oninput=draw;document.querySelector('#reset').onclick=()=>{yaw.value=0;draw()};document.querySelector('#ask').onclick=()=>sendPrompt('Explain cube yaw '+yaw.value+' degrees');draw();window.__poc3dReady=true;",f'<script src="{base}/vendor/three.js"></script>')
- mapui=doc('<h3>Interactive itinerary</h3><div id="map" style="height:240px"></div><p class="caption">Illustrative connection, not a driving route. Basemap © USGS.</p><button id="selectStop">Select San Jose</button><p id="stopName">San Francisco</p><button id="ask">Ask agent about this stop</button>',"const map=L.map('map').setView([37.55,-122.12],8);L.tileLayer('https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',{attribution:'USGS',maxZoom:16}).addTo(map);const stops=[[37.77,-122.42],[37.33,-121.89]];L.polyline(stops,{color:'#6366f1'}).addTo(map);stops.forEach((p,i)=>L.circleMarker(p,{radius:9}).addTo(map).on('click',()=>select(i)));function select(i){document.querySelector('#stopName').textContent=i?'San Jose':'San Francisco';map.panTo(stops[i]);}document.querySelector('#selectStop').onclick=()=>select(1);document.querySelector('#ask').onclick=()=>sendPrompt('Explore '+document.querySelector('#stopName').textContent+' from the illustrative itinerary');window.__pocMapReady=true;",f'<link rel="stylesheet" href="{base}/vendor/leaflet.css"><script src="{base}/vendor/leaflet.js"></script>')
- return [{'title':title,'html':html} for title,html in [('Chart and table',chart),('Calculator',calc),('Diagram',diagram),('3D scene',cube),('Map',mapui)]]
+    base = base.rstrip("/")
+    css = (SOURCE / "mobile.css").read_text()
+    runtime = (SOURCE / "runtime.js").read_text()
+    entries = []
+    for name, title, libraries in [
+        ("chart", "Chart and table", []),
+        ("calculator", "Calculator", []),
+        ("diagram", "Diagram", []),
+        ("scene", "3D scene", ["three.js"]),
+        ("map", "Map", ["leaflet.js"]),
+    ]:
+        extras = "".join(f'<script src="{base}/vendor/{lib}"></script>' for lib in libraries)
+        if name == "map":
+            extras += f'<link rel="stylesheet" href="{base}/vendor/leaflet.css">'
+        html = f'''<!doctype html><html lang="en"><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none';script-src 'unsafe-inline' {base}/;style-src 'unsafe-inline' {base}/;img-src data: blob: {base}/ https://basemap.nationalmap.gov;connect-src 'none';font-src data:;base-uri 'none';form-action 'none'">
+<style>{css}</style>{extras}</head><body>
+{(SOURCE / (name + '.html')).read_text()}
+<script>{runtime}\n{(SOURCE / (name + '.js')).read_text()}</script>
+</body></html>'''
+        entries.append({"title": title, "html": html})
+    return entries
+
+
+if __name__ == "__main__":
+    (ROOT / "demo.json").write_text(json.dumps(widgets("https://appassets.androidplatform.net/assets/ui-poc")))

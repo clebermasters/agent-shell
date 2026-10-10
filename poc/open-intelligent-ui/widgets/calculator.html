@@ -1,0 +1,9 @@
+<div class="eyebrow">Everyday tools · local calculation</div><h3>Split the bill</h3>
+<p class="subtitle">Set the tip and group size. Everyone gets a clear share.</p>
+<div class="panel"><p class="metric-label">Each person pays</p><div class="row between"><p class="metric">$<span id="total">57.50</span></p><span class="badge" id="peopleLabel">2 people</span></div></div>
+<div class="stack" style="margin-top:20px"><label for="bill">Bill subtotal · USD<input id="bill" type="number" inputmode="decimal" min="0" max="1000000" step="0.01" value="100" aria-describedby="billError"></label><p id="billError" class="error" aria-live="polite"></p>
+<div><div class="row between"><label for="tip">Tip percentage</label><span id="tipAmount" class="caption"></span></div><div class="chips" id="tips" role="group" aria-label="Tip presets" style="margin-top:8px"><button data-tip="0">No tip</button><button data-tip="10">10%</button><button data-tip="15" aria-pressed="true">15%</button><button data-tip="20">20%</button></div><input id="tip" type="number" inputmode="decimal" min="0" max="100" value="15" aria-label="Custom tip percentage" aria-describedby="tipError"><p id="tipError" class="error" aria-live="polite"></p></div>
+<div><label for="people" style="margin-bottom:8px">People sharing</label><div class="stepper"><button id="less" aria-label="One fewer person">−</button><input id="people" type="number" inputmode="numeric" min="1" max="24" step="1" value="2" aria-describedby="peopleError"><button id="more" aria-label="One more person">+</button></div><p id="peopleError" class="error" aria-live="polite"></p></div></div>
+<div class="divider"></div><div class="row between"><span class="caption">Total including tip</span><strong id="grandTotal">$115.00</strong></div>
+<p class="caption">Shares round to cents. Settle any rounding difference with the group.</p>
+<button id="ask" class="primary">Ask the agent about this split</button>

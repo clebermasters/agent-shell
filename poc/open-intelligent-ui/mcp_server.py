@@ -30,7 +30,16 @@ def run():
    method=request.get('method')
    if method=='initialize':result={'protocolVersion':request.get('params',{}).get('protocolVersion','2024-11-05'),'capabilities':{'tools':{}},'serverInfo':{'name':'agentshell-open-ui-poc','version':'0.1.0'}}
    elif method=='ping':result={}
-   elif method=='tools/list':result={'tools':[{'name':'render_interactive_ui','description':'Publish a complete interactive HTML document in this agent conversation. Browser widgets can render charts, diagrams, calculators, 3D and maps. POC only.','inputSchema':{'type':'object','properties':{'title':{'type':'string'},'html':{'type':'string'}},'required':['title','html'],'additionalProperties':False}}]}
+   elif method=='tools/list':result={'tools':[{'name':'render_interactive_ui','description':
+    'Publish a complete interactive HTML document in this agent conversation. Use for useful charts, diagrams, calculators, 3D previews or maps. '
+    'Design mobile first at 280 CSS pixels: no page overflow, labelled inputs, 44px touch targets, system fonts, light/dark themes and reduced motion. '
+    'Use self-contained inline CSS/JS and accurate labelled data. No secrets or private network calls. '
+    'For an agent follow-up use parent.postMessage({type:"send-prompt",text:"contextual question"},"*"). '
+    'The host handles sizing, fullscreen and image sharing. Tool result confirms publication to the exact current native conversation. '
+    'Optional control persistence: post {type:"widget-state",state:{inputs,custom}}; listen for parent widget-context messages containing state/theme. '
+    'Available local libraries: https://appassets.androidplatform.net/assets/ui-poc/vendor/three.js and leaflet.js (plus leaflet.css). '
+    'Preview branch only.',
+    'inputSchema':{'type':'object','properties':{'title':{'type':'string','minLength':1,'maxLength':160},'html':{'type':'string','minLength':1,'maxLength':262144}},'required':['title','html'],'additionalProperties':False}}]}
    elif method=='tools/call':
     if request['params']['name']!='render_interactive_ui':raise ValueError('Unknown tool')
     args=request['params']['arguments'];artifact=publish(args['title'],args['html'])

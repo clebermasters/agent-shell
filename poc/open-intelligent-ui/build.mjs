@@ -2,6 +2,7 @@ import {build} from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
+import {execFileSync} from 'node:child_process';
 const require=createRequire(import.meta.url);
 const target=path.resolve('../../android-native/app/src/debug/assets/ui-poc');
 fs.mkdirSync(target+'/vendor',{recursive:true});
@@ -14,3 +15,4 @@ fs.copyFileSync('node_modules/leaflet/dist/leaflet.css',target+'/vendor/leaflet.
 fs.cpSync('node_modules/leaflet/dist/images',target+'/vendor/images',{recursive:true});
 for(const name of ['three','leaflet'])fs.copyFileSync('node_modules/'+name+'/LICENSE',target+'/vendor/'+name+'-LICENSE');
 fs.copyFileSync('upstream/LICENSE',target+'/OPENINTELLIGENTUI-LICENSE');
+execFileSync('python3',['fixtures.py'],{stdio:'inherit'});

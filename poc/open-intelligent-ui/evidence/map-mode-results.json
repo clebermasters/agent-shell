@@ -1,0 +1,9 @@
+{
+  "live_tiles_loaded": true,
+  "real_tiles_fetched": 8,
+  "schematic_does_not_cover_tiles": true,
+  "mode_restored": true,
+  "network_failure_restores_offline_map": true,
+  "route_and_stops_retained": true,
+  "source": "USGS tile service, actual per-coordinate tile requests; simulated outage in a fresh document"
+}

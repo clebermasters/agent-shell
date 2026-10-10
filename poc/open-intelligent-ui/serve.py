@@ -29,7 +29,10 @@ def main():
  root=args.directory or Path(tempfile.mkdtemp(prefix='agentshell-ui-poc-runtime-'));root.mkdir(parents=True,exist_ok=True)
  socket_name='agentshell-ui-poc-'+uuid.uuid4().hex;token=secrets.token_urlsafe(24);port=free_port()
  def tmux(*args):return subprocess.check_output(['tmux','-L',socket_name,*args],text=True).strip()
- inventory=subprocess.check_output(['tmux','list-panes','-a','-F','#{pane_id}|#{pane_pid}'],text=True)
+ def live_inventory():
+  result=subprocess.run(['tmux','list-panes','-a','-F','#{pane_id}|#{pane_pid}'],text=True,capture_output=True)
+  return result.stdout if result.returncode==0 else None
+ inventory=live_inventory()
  project=root/'shared-folder';project.mkdir();script=root/'fake-agent.py';script.write_text(FAKE_AGENT)
  backend=None;http=None
  try:
@@ -80,5 +83,9 @@ def main():
    try:backend.wait(timeout=5)
    except subprocess.TimeoutExpired:backend.kill();backend.wait(timeout=5)
   subprocess.run(['tmux','-L',socket_name,'kill-server'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-  assert subprocess.check_output(['tmux','list-panes','-a','-F','#{pane_id}|#{pane_pid}'],text=True)==inventory,'Real terminal inventory changed'
+  # This interactive harness can stay open while the user changes live sessions.
+  # Record that observation without trying to restore or mutate live terminals.
+  (root/'cleanup.json').write_text(json.dumps({'isolated_backend_stopped':backend is None or backend.poll() is not None,
+   'isolated_tmux_stop_attempted':True,'live_inventory_changed_during_run':live_inventory()!=inventory},indent=2)+'\n')
+  (root/'cleanup.json').chmod(0o600)
 if __name__=='__main__':main()

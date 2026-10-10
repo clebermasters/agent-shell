@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
 import android.net.Uri
+import android.os.Bundle
 import android.text.Spannable
 import android.text.method.LinkMovementMethod
 import android.text.style.URLSpan
@@ -17,6 +18,10 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +41,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
@@ -58,6 +64,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -70,6 +77,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.agentshell.data.model.ChatBlock
@@ -118,6 +126,53 @@ fun MessageBubble(
     onWidgetAction: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
+    var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    var widgetState by rememberSaveable(message.id) { mutableStateOf(Bundle()) }
+    val saveWidget: (String, String) -> Unit = { id, value ->
+        widgetState = Bundle(widgetState).apply { putString(id, value) }
+    }
+    if (expanded) {
+        Dialog(onDismissRequest = { expanded = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+                    Row(Modifier.fillMaxWidth().padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Expanded message", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        CopyMessageButton(message)
+                        IconButton(onClick = { expanded = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close expanded message")
+                        }
+                    }
+                    androidx.compose.material3.HorizontalDivider()
+                    Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                        MessageBubbleBody(message, showThinking, showToolCalls, fileBaseUrl, audioPlayerManager,
+                            serverPathBase, onOpenServerPath, onWidgetAction, widgetState, saveWidget, null, true)
+                    }
+                }
+            }
+        }
+    } else {
+        MessageBubbleBody(message, showThinking, showToolCalls, fileBaseUrl, audioPlayerManager,
+            serverPathBase, onOpenServerPath, onWidgetAction, widgetState, saveWidget, { expanded = true }, false, modifier)
+    }
+}
+
+@Composable
+private fun MessageBubbleBody(
+    message: ChatMessage,
+    showThinking: Boolean,
+    showToolCalls: Boolean,
+    fileBaseUrl: String,
+    audioPlayerManager: AudioPlayerManager,
+    serverPathBase: String?,
+    onOpenServerPath: (String) -> Unit,
+    onWidgetAction: (String, String) -> Unit,
+    widgetState: Bundle,
+    onWidgetState: (String, String) -> Unit,
+    onExpand: (() -> Unit)?,
+    expanded: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val isUser = message.messageType == ChatMessageType.USER
     val isTool = message.messageType == ChatMessageType.TOOL_CALL ||
             message.messageType == ChatMessageType.TOOL_RESULT ||
@@ -149,19 +204,24 @@ fun MessageBubble(
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
         // Header row: avatar + label
-        if (message.messageType == ChatMessageType.ASSISTANT) {
+        if (!expanded) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                MessageHeader(isUser = false, isError = false, isTool = false)
-                Spacer(Modifier.weight(1f))
-                CopyMessageButton(message)
+                if (isUser) Spacer(Modifier.weight(1f))
+                MessageHeader(isUser = isUser, isError = isError, isTool = isTool)
+                if (!isUser) Spacer(Modifier.weight(1f))
+                if (message.messageType == ChatMessageType.ASSISTANT) CopyMessageButton(message)
+                if (onExpand != null) IconButton(onClick = onExpand, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.OpenInFull, contentDescription = "Maximize message", modifier = Modifier.size(18.dp))
+                }
             }
-        } else MessageHeader(isUser = isUser, isError = isError, isTool = isTool)
+        }
 
         Spacer(Modifier.height(4.dp))
 
         // Bubble
         Surface(
-            modifier = Modifier.widthIn(max = if (isUser) 320.dp else Int.MAX_VALUE.dp),
+            modifier = Modifier.widthIn(max = if (isUser && !expanded) 320.dp else Int.MAX_VALUE.dp)
+                .then(if (expanded) Modifier.fillMaxWidth() else Modifier),
             color = when {
                 isUser -> MaterialTheme.colorScheme.primaryContainer
                 isError -> MaterialTheme.colorScheme.errorContainer
@@ -181,6 +241,8 @@ fun MessageBubble(
                         BlockContent(
                             block = block,
                             onWidgetAction = onWidgetAction,
+                            widgetState = widgetState,
+                            onWidgetState = onWidgetState,
                             showThinking = showThinking,
                             showToolCalls = showToolCalls,
                             fileBaseUrl = fileBaseUrl,
@@ -308,9 +370,15 @@ private fun BlockContent(
     serverPathBase: String? = null,
     onOpenServerPath: (String) -> Unit = {},
     onWidgetAction: (String, String) -> Unit = { _, _ -> },
+    widgetState: Bundle? = null,
+    onWidgetState: (String, String) -> Unit = { _, _ -> },
 ) {
     when (block.blockType) {
-        ChatBlockType.UI_WIDGET -> UiWidgetBlock(block, onWidgetAction)
+        ChatBlockType.UI_WIDGET -> {
+            val stateKey = "${block.id}:${block.html.hashCode()}"
+            UiWidgetBlock(block, onWidgetAction, initialState = widgetState?.getString(stateKey),
+                onStateChanged = { value -> onWidgetState(stateKey, value) })
+        }
         ChatBlockType.TEXT -> {
             if (!block.text.isNullOrBlank()) {
                 MarkdownText(

@@ -246,6 +246,7 @@ private fun TopBarRow(
             modifier = Modifier.weight(1f).padding(start = 8.dp),
         )
 
+        com.agentshell.core.theme.ThemeToggleButton()
         IconButton(onClick = onSplitScreenClick, modifier = Modifier.size(36.dp)) {
             Icon(Icons.Default.Dashboard, contentDescription = "Split Screen", modifier = Modifier.size(20.dp))
         }

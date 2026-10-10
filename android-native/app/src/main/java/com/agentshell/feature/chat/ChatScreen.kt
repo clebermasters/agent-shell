@@ -318,6 +318,7 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    com.agentshell.core.theme.ThemeToggleButton()
                     if (onSwitchToTerminal != null) {
                         IconButton(onClick = { onSwitchToTerminal(sessionName) }) {
                             Icon(Icons.Filled.Dvr, contentDescription = "Switch to Terminal")

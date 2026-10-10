@@ -22,21 +22,27 @@ async def main():
     parser.add_argument('runtime',type=Path)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--serial',default='emulator-5560')
+    parser.add_argument('--fullscreen-only',action='store_true')
     args=parser.parse_args();cfg=json.loads(args.runtime.read_text());args.output.mkdir(parents=True,exist_ok=True)
     def adb(*arguments):
         return subprocess.check_output(['adb','-s',args.serial,*arguments],timeout=20)
     def hierarchy():
-        for attempt in range(3):
+        deadline=time.monotonic()+12
+        while True:
+            adb('shell','rm','-f','/sdcard/canvas-ui.xml')
             try:
                 adb('shell','uiautomator','dump','/sdcard/canvas-ui.xml')
                 return ET.fromstring(adb('shell','cat','/sdcard/canvas-ui.xml'))
-            except subprocess.CalledProcessError as error:
-                if error.returncode!=137 or attempt==2:raise
-                time.sleep(.5)
+            except (subprocess.CalledProcessError,ET.ParseError):
+                assert time.monotonic()<deadline,'Native hierarchy unavailable'
+                time.sleep(.2)
     def tap(label):
-        tree=hierarchy()
-        nodes=[n for n in tree.iter('node') if label in [n.get('text'),n.get('content-desc')]]
-        assert nodes,'Native control not visible: '+label
+        deadline=time.monotonic()+12
+        while True:
+            nodes=[n for n in hierarchy().iter('node') if label in [n.get('text'),n.get('content-desc')]]
+            if nodes:break
+            assert time.monotonic()<deadline,'Native control not visible: '+label
+            time.sleep(.2)
         x1,y1,x2,y2=map(int,re.findall(r'\d+',nodes[0].get('bounds')))
         assert x2>x1 and y2>y1,(label,nodes[0].attrib)
         adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2))
@@ -101,10 +107,12 @@ async def main():
     report={}
     transcript=Path(cfg['project'])/'.codex/sessions'/('rollout-'+cfg['ids'][0]+'.jsonl')
     for index,title in enumerate(['Revenue overview','Split the bill','Release pipeline','Spatial preview','Weekend itinerary']):
+        if args.fullscreen_only and index!=1:continue
         launch(index)
         async with content() as (page,child):
             assert await page.evaluate(child,"document.querySelector('h3').textContent")==title
             assert not await page.evaluate(child,"(()=>{try{return !!parent.document.body}catch{return false}})()")
+            assert await page.evaluate(child,"typeof window.WidgetHost")=='undefined','Untrusted document received a native bridge'
             if index==0:
                 await page.evaluate(child,"(()=>{const e=document.querySelector('#scale');e.value=3;e.dispatchEvent(new Event('input',{bubbles:true}))})()")
                 assert await page.evaluate(child,"document.querySelector('#revenue').textContent")=='$75,016'
@@ -134,6 +142,26 @@ async def main():
         # Capture the card from its beginning, without the response covering controls.
         for _ in range(5):adb('shell','input','swipe','1055','700','1055','1550','250')
         screenshot(f'native-{index}-light.png')
+        if index==1:
+            tap('Expand interactive view')
+            for _ in range(10):
+                button=next((n for n in hierarchy().iter('node') if n.get('text','').startswith('Ask the agent about this split')),None)
+                bounds=list(map(int,re.findall(r'\d+',button.get('bounds')))) if button is not None else [0]*4
+                if 210<bounds[1]<bounds[3]<=1794:break
+                adb('shell','input','swipe','1055','1620','1055','650','350')
+            assert 210<bounds[1]<bounds[3]<=1794,('Fullscreen action overlaps Android navigation',bounds)
+            count=transcript.read_text().count('reply: ')
+            adb('shell','input','tap',str((bounds[0]+bounds[2])//2),str((bounds[1]+bounds[3])//2))
+            deadline=time.monotonic()+10
+            while transcript.read_text().count('reply: ')<=count:
+                assert time.monotonic()<deadline,'Fullscreen calculator action was not delivered'
+                await asyncio.sleep(.05)
+            screenshot('native-fullscreen-action.png')
+            report['fullscreen_action']={'above_android_navigation':True,'bounds':bounds,'physical_tap_delivered':True}
+            tap('Close expanded view')
+    if args.fullscreen_only:
+        (args.output/'native-fullscreen-results.json').write_text(json.dumps(report,indent=2)+'\n')
+        print(json.dumps(report));return
 
     launch(0)
     async with content() as (page,child):
@@ -182,7 +210,17 @@ async def main():
         assert image.width>=300 and image.width*image.height<=4_000_000
         assert len(image.resize((50,50)).getcolors(2500) or [])>20,'Shared image is blank'
         report['share_png']={'width':image.width,'height':image.height,'verified_nonblank':True}
+    # ACTION_SEND creates the chooser asynchronously; wait for it to appear
+    # before dismissing it, rather than sending Back into the activity underneath.
+    deadline=time.monotonic()+12
+    while not any(n.get('text')=='Sharing image' for n in hierarchy().iter('node')):
+        assert time.monotonic()<deadline,'Share chooser did not appear'
+        await asyncio.sleep(.1)
     adb('shell','input','keyevent','4')
+    deadline=time.monotonic()+12
+    while not any(n.get('content-desc')=='Toggle canvas theme' for n in hierarchy().iter('node')):
+        assert time.monotonic()<deadline,'Share chooser did not close'
+        await asyncio.sleep(.1)
     async with content() as (page,child):
         await page.evaluate(child,"window.dispatchEvent(new ErrorEvent('error'))")
     await asyncio.sleep(.3)

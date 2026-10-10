@@ -128,6 +128,7 @@ tramp
 # Ignore PNGs except project assets
 *.png
 !poc/open-intelligent-ui/evidence/*.png
+!android-native/app/src/main/assets/ui/vendor/images/*.png
 !logo-square.png
 
 # Temporary files

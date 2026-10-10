@@ -13,7 +13,7 @@ def request(url,token,payload):
 
 def main():
  parser=argparse.ArgumentParser();parser.add_argument('runtime',type=Path);parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--output',type=Path,required=True);args=parser.parse_args();cfg=json.loads(args.runtime.read_text())
- endpoint=f"http://127.0.0.1:{cfg['port']}/api/chat/ui-poc";payload=cfg['agents']['A']|{'title':'Negative publication check','html':'<p>test</p>'};report={}
+ endpoint=f"http://127.0.0.1:{cfg['port']}/api/chat/ui";payload=cfg['agents']['A']|{'title':'Negative publication check','html':'<p>test</p>'};report={}
  assert request(endpoint,'invalid-poc-token',payload)==401;report['authentication_required']=True
  assert request(endpoint,cfg['token'],payload|{'agentStart':payload['agentStart']+1})==409;report['publisher_incarnation_checked']=True
  assert request(endpoint,cfg['token'],payload|{'html':'x'*262145})==409;report['document_size_limited']=True
@@ -29,7 +29,7 @@ def main():
      with socket.create_connection(('127.0.0.1',port),timeout=.2):break
     except OSError:
      assert time.monotonic()<deadline;time.sleep(.05)
-   assert request(f'http://127.0.0.1:{port}/api/chat/ui-poc','disabled-poc-test',payload)==404;report['disabled_without_explicit_flag']=True
+   assert request(f'http://127.0.0.1:{port}/api/chat/ui','disabled-poc-test',payload|{'agentStart':0})==409;report['production_endpoint_enabled_without_preview_flag']=True
   finally:
    process.terminate()
    try:process.wait(timeout=5)

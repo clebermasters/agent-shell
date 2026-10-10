@@ -16,6 +16,17 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import javax.inject.Inject
+import com.agentshell.data.local.PreferencesDataStore
+import com.agentshell.core.theme.LocalThemeControls
+import com.agentshell.core.theme.ThemeControls
+import com.agentshell.core.theme.resolvedDarkTheme
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.agentshell.core.theme.AgentShellTheme
@@ -37,6 +48,7 @@ object VolumeKeyHandler {
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @Inject lateinit var preferences: PreferencesDataStore
 
     private val shareViewModel: ShareViewModel by viewModels()
 
@@ -54,25 +66,34 @@ class MainActivity : ComponentActivity() {
         pendingChatTarget = NotificationHelper.chatTarget(intent)
         enableEdgeToEdge()
         requestNotificationPermission()
-        setContent {
-            AgentShellTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    AgentShellNavHost(
-                        shareViewModel = shareViewModel,
-                        pendingChatTarget = pendingChatTarget,
-                        onChatIntentConsumed = { target ->
-                            if (pendingChatTarget == target) {
-                                pendingChatTarget = null
-                                intent.removeExtra(NotificationHelper.CHAT_TARGET_EXTRA)
-                            }
-                        },
-                        pendingNotificationId = pendingNotificationId,
-                        onNotificationIntentConsumed = { consumedId ->
-                            if (pendingNotificationId == consumedId) {
-                                pendingNotificationId = null
-                            }
-                        },
-                    )
+        lifecycleScope.launch {
+            val initialTheme = preferences.themeMode.first()
+            setContent {
+                val themeMode by preferences.themeMode.collectAsStateWithLifecycle(initialValue = initialTheme)
+                val dark = resolvedDarkTheme(themeMode, isSystemInDarkTheme())
+                CompositionLocalProvider(LocalThemeControls provides ThemeControls(themeMode) { mode ->
+                    lifecycleScope.launch { preferences.setThemeMode(mode) }
+                }) {
+                    AgentShellTheme(darkTheme = dark) {
+                        Surface(modifier = Modifier.fillMaxSize()) {
+                            AgentShellNavHost(
+                                shareViewModel = shareViewModel,
+                                pendingChatTarget = pendingChatTarget,
+                                onChatIntentConsumed = { target ->
+                                    if (pendingChatTarget == target) {
+                                        pendingChatTarget = null
+                                        intent.removeExtra(NotificationHelper.CHAT_TARGET_EXTRA)
+                                    }
+                                },
+                                pendingNotificationId = pendingNotificationId,
+                                onNotificationIntentConsumed = { consumedId ->
+                                    if (pendingNotificationId == consumedId) {
+                                        pendingNotificationId = null
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -20,27 +20,23 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.agentshell.R
 
-// Colors matching Flutter app_theme.dart
-val Primary = Color(0xFF6366F1)       // Indigo
-val Secondary = Color(0xFF8B5CF6)     // Purple
-val Accent = Color(0xFF10B981)        // Green
-val ErrorColor = Color(0xFFEF4444)
-val WarningColor = Color(0xFFF59E0B)
-val SuccessColor = Color(0xFF22C55E)
-
-// Dark theme
-val DarkBackground = Color(0xFF0F172A)
-val DarkSurface = Color(0xFF1E293B)
-val DarkCard = Color(0xFF334155)
-val DarkOnBackground = Color(0xFFE2E8F0)
-val DarkOnSurface = Color(0xFFE2E8F0)
-
-// Light theme
-val LightBackground = Color(0xFFF8FAFC)
-val LightSurface = Color(0xFFFFFFFF)
-val LightCard = Color(0xFFF1F5F9)
-val LightOnBackground = Color(0xFF0F172A)
-val LightOnSurface = Color(0xFF0F172A)
+// Shared with the mobile canvas design system (assets/ui/mobile.css).
+val Primary = Color(0xFF5151D8)
+val Secondary = Color(0xFF5151D8)
+val Accent = Color(0xFF147760)
+val ErrorColor = Color(0xFFB4233D)
+val WarningColor = Color(0xFFB46B15)
+val SuccessColor = Color(0xFF147760)
+val DarkBackground = Color(0xFF171C27)
+val DarkSurface = Color(0xFF171C27)
+val DarkCard = Color(0xFF222A39)
+val DarkOnBackground = Color(0xFFEFF3FA)
+val DarkOnSurface = Color(0xFFEFF3FA)
+val LightBackground = Color(0xFFFCFCFD)
+val LightSurface = Color(0xFFFCFCFD)
+val LightCard = Color(0xFFF1F4F8)
+val LightOnBackground = Color(0xFF172133)
+val LightOnSurface = Color(0xFF172133)
 
 // Terminal colors
 val TerminalBackground = Color(0xFF1E1E1E)
@@ -55,33 +51,43 @@ val JetBrainsMono = FontFamily(
 )
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Primary,
-    secondary = Secondary,
-    tertiary = Accent,
-    error = ErrorColor,
-    background = DarkBackground,
-    surface = DarkSurface,
-    surfaceVariant = DarkCard,
-    onBackground = DarkOnBackground,
-    onSurface = DarkOnSurface,
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onError = Color.White,
+    primary = Color(0xFFB0A9FF), onPrimary = DarkBackground,
+    primaryContainer = Color(0xFF353050), onPrimaryContainer = Color(0xFFB0A9FF),
+    secondary = Color(0xFFB1BED0), onSecondary = DarkBackground,
+    secondaryContainer = DarkCard, onSecondaryContainer = DarkOnSurface,
+    tertiary = Color(0xFF69D9B7), onTertiary = DarkBackground,
+    tertiaryContainer = Color(0xFF213B36), onTertiaryContainer = Color(0xFF69D9B7),
+    error = Color(0xFFFF9DAA), onError = DarkBackground,
+    errorContainer = Color(0xFF482A33), onErrorContainer = Color(0xFFFF9DAA),
+    background = DarkBackground, onBackground = DarkOnBackground,
+    surface = DarkSurface, onSurface = DarkOnSurface,
+    surfaceVariant = DarkCard, onSurfaceVariant = Color(0xFFB1BED0),
+    surfaceDim = DarkBackground, surfaceBright = DarkCard,
+    surfaceContainerLowest = DarkBackground, surfaceContainerLow = DarkCard,
+    surfaceContainer = DarkCard, surfaceContainerHigh = DarkCard, surfaceContainerHighest = DarkCard,
+    inverseSurface = LightSurface, inverseOnSurface = LightOnSurface, inversePrimary = Primary,
+    outline = Color(0xFF748198), outlineVariant = Color(0xFF333E51),
+    surfaceTint = Color.Transparent,
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Primary,
-    secondary = Secondary,
-    tertiary = Accent,
-    error = ErrorColor,
-    background = LightBackground,
-    surface = LightSurface,
-    surfaceVariant = LightCard,
-    onBackground = LightOnBackground,
-    onSurface = LightOnSurface,
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onError = Color.White,
+    primary = Primary, onPrimary = Color.White,
+    primaryContainer = Color(0xFFEAEAFF), onPrimaryContainer = Primary,
+    secondary = Color(0xFF57657B), onSecondary = Color.White,
+    secondaryContainer = LightCard, onSecondaryContainer = LightOnSurface,
+    tertiary = Accent, onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFE5F3EE), onTertiaryContainer = Accent,
+    error = ErrorColor, onError = Color.White,
+    errorContainer = Color(0xFFFBE9ED), onErrorContainer = ErrorColor,
+    background = LightBackground, onBackground = LightOnBackground,
+    surface = LightSurface, onSurface = LightOnSurface,
+    surfaceVariant = LightCard, onSurfaceVariant = Color(0xFF57657B),
+    surfaceDim = LightCard, surfaceBright = LightBackground,
+    surfaceContainerLowest = LightBackground, surfaceContainerLow = LightCard,
+    surfaceContainer = LightCard, surfaceContainerHigh = LightCard, surfaceContainerHighest = LightCard,
+    inverseSurface = DarkSurface, inverseOnSurface = DarkOnSurface, inversePrimary = Color(0xFFB0A9FF),
+    outline = Color(0xFF8490A3), outlineVariant = Color(0xFFE3E8F0),
+    surfaceTint = Color.Transparent,
 )
 
 private val AppTypography = Typography(

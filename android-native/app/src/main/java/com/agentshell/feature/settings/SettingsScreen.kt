@@ -40,6 +40,7 @@ import javax.inject.Inject
 // ─── SettingsViewModel ────────────────────────────────────────────────────────
 
 data class SettingsUiState(
+    val themeMode: String = "system",
     val openaiApiKey: String = "",
     val terminalFontSize: Float = AppConfig.DEFAULT_FONT_SIZE,
     val showVoiceButton: Boolean = true,
@@ -65,6 +66,7 @@ class SettingsViewModel @Inject constructor(
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     init {
+        viewModelScope.launch { dataStore.themeMode.collect { mode -> _state.update { it.copy(themeMode = mode) } } }
         viewModelScope.launch {
             combine(
                 dataStore.openaiApiKey,
@@ -96,6 +98,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setApiKey(key: String) { _state.update { it.copy(openaiApiKey = key) } }
+    fun setThemeMode(mode: String) { viewModelScope.launch { dataStore.setThemeMode(mode) } }
     fun setTerminalFontSize(size: Float) { _state.update { it.copy(terminalFontSize = size) } }
 
     fun saveApiKey() {
@@ -176,6 +179,18 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
+            SectionHeader("Appearance")
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose your theme", style = MaterialTheme.typography.titleSmall)
+                    Text("Quick switches in Home and Chat use the same saved preference.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for ((mode, label) in listOf("system" to "System", "light" to "Light", "dark" to "Dark")) {
+                            FilterChip(selected = state.themeMode == mode, onClick = { viewModel.setThemeMode(mode) }, label = { Text(label) }, modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
             // ── Voice Input ───────────────────────────────────────────────────
             SectionHeader("Voice Input (Whisper)")
 

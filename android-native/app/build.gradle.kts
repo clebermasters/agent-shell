@@ -154,8 +154,8 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.5")
 
     // Hilt DI
-    implementation("com.google.dagger:hilt-android:2.52")
-    ksp("com.google.dagger:hilt-compiler:2.52")
+    implementation("com.google.dagger:hilt-android:2.55")
+    ksp("com.google.dagger:hilt-compiler:2.55")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
 
     // Networking

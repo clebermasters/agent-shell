@@ -22,16 +22,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.agentshell.data.model.ChatBlock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -39,15 +44,17 @@ import org.json.JSONObject
 import java.io.File
 import kotlin.math.sqrt
 
-/** Debug-only interactive document. The terminal's privileged bridge is never attached. */
+/** Sandboxed interactive document; only the trusted host receives a native message bridge. */
 @Composable
 fun UiWidgetBlock(block: ChatBlock, onAction: (String, String) -> Unit,
     initialState: String? = null, onStateChanged: (String) -> Unit = {}) {
     val html = block.html ?: return
     val id = block.id ?: return
     val context = LocalContext.current
-    if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) {
-        Text(block.title ?: "Interactive widget (preview build required)")
+    val parentNavigationBottom = ViewCompat.getRootWindowInsets(LocalView.current)
+        ?.getInsets(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
+    if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+        Text("Update Android System WebView to use interactive views.")
         return
     }
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
@@ -78,9 +85,12 @@ fun UiWidgetBlock(block: ChatBlock, onAction: (String, String) -> Unit,
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     }
     if (expanded) Dialog(onDismissRequest = { expanded = false },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+            // Fullscreen dialogs can receive consumed navigation insets on Android 15.
+            // Preserve the parent window's minimum safe area, including three-button navigation.
+            val safeInsets = WindowInsets.safeDrawing.union(WindowInsets(bottom = parentNavigationBottom))
+            Column(Modifier.fillMaxSize().windowInsetsPadding(safeInsets).imePadding()) {
                 Row(Modifier.fillMaxWidth().padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(title, style = MaterialTheme.typography.titleMedium)
@@ -95,7 +105,7 @@ fun UiWidgetBlock(block: ChatBlock, onAction: (String, String) -> Unit,
                     }
                 }
                 HorizontalDivider()
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) {
                     WidgetSurface(block, controls, saveControls, onAction, { currentView = it })
                 }
             }
@@ -130,25 +140,32 @@ private fun WidgetSurface(
         val themed = android.view.ContextThemeWrapper(context,
             if (light) android.R.style.Theme_Material_Light_NoActionBar else android.R.style.Theme_Material_NoActionBar)
         WebView(themed).apply {
-            WebView.setWebContentsDebuggingEnabled(true)
+            WebView.setWebContentsDebuggingEnabled(context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = false
             settings.allowFileAccess = false
             settings.allowContentAccess = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true)
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            val assetHandler = WebViewAssetLoader.AssetsPathHandler(context)
             val assets = WebViewAssetLoader.Builder()
+                .addPathHandler("/assets/ui-poc/", WebViewAssetLoader.PathHandler { path -> assetHandler.handle("ui/$path") })
                 .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context)).build()
-            addJavascriptInterface(object {
-                @JavascriptInterface fun resize(value: Int) { post { height = value.coerceIn(100, 1600) } }
-                @JavascriptInterface fun ready() { post {
+            WebViewCompat.addWebMessageListener(this, "WidgetHost", setOf("https://appassets.androidplatform.net")) { _, message, origin, mainFrame, _ ->
+                if (!mainFrame || origin.toString().trimEnd('/') != "https://appassets.androidplatform.net") return@addWebMessageListener
+                val payload = runCatching { JSONObject(message.data ?: "") }.getOrNull() ?: return@addWebMessageListener
+                when (payload.optString("type")) {
+                "resize" -> post { height = payload.optInt("value", height).coerceIn(100, 1600) }
+                "ready" -> post {
                     postVisualStateCallback(android.os.SystemClock.uptimeMillis(), object : WebView.VisualStateCallback() {
                         override fun onComplete(requestId: Long) { loading = false; invalidate() }
                     })
-                } }
-                @JavascriptInterface fun failed() { post { failed = true; loading = false } }
-                @JavascriptInterface fun focusField(top: Double, bottom: Double) {
-                    if (!top.isFinite() || !bottom.isFinite() || bottom <= top) return
+                }
+                "failed" -> post { failed = true; loading = false }
+                "focus" -> {
+                    val top = payload.optDouble("top"); val bottom = payload.optDouble("bottom")
+                    if (!top.isFinite() || !bottom.isFinite() || bottom <= top) return@addWebMessageListener
                     post { scope.launch {
                         // Wait for the IME insets before asking the Compose scroll
                         // container to reveal this field inside its AndroidView.
@@ -160,24 +177,33 @@ private fun WidgetSurface(
                         if (end > start) runCatching { bringIntoView.bringIntoView(Rect(0f, start, width.toFloat(), end)) }
                     } }
                 }
-                @JavascriptInterface fun saveState(value: String) {
+                "state" -> {
+                    val value = payload.optString("value")
                     if (value.length <= 32768 && runCatching { JSONObject(value) }.isSuccess)
                         post { stateCallback(value) }
                 }
-                @JavascriptInterface fun requestFollowUp(text: String) {
-                    if (text.isBlank() || text.length > 4000) return
+                "action" -> {
+                    val text = payload.optString("text")
+                    if (text.isBlank() || text.toByteArray(Charsets.UTF_8).size > 4000) return@addWebMessageListener
                     post {
                         val visible = android.graphics.Rect()
                         if (isShown && getGlobalVisibleRect(visible) && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
                             actionCallback(id, text)
                     }
                 }
-            }, "WidgetHost")
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                     val response = assets.shouldInterceptRequest(request.url)
                     response?.responseHeaders = response?.responseHeaders.orEmpty() + ("Access-Control-Allow-Origin" to "*")
-                    return response
+                    if (response != null) return response
+                    // Widgets have no arbitrary network/file access. The only
+                    // remote resource is the public map tile service.
+                    val url = request.url
+                    if (url.scheme == "https" && url.host == "basemap.nationalmap.gov" && request.method == "GET" &&
+                        url.path?.matches(Regex("/arcgis/rest/services/USGSTopo/MapServer/tile/[0-9]+/[0-9]+/[0-9]+")) == true && url.query == null) return null
+                    return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), java.io.ByteArrayInputStream(byteArrayOf()))
                 }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
                 override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
@@ -185,7 +211,7 @@ private fun WidgetSurface(
                     return true
                 }
                 override fun onPageFinished(view: WebView, url: String) {
-                    if (url.endsWith("/ui-poc/host.html")) {
+                    if (url.endsWith("/ui/host.html")) {
                         val data = JSONObject().put("id", id).put("title", block.title).put("html", block.html)
                             .put("theme", if (light) "light" else "dark")
                         controls?.let { runCatching { data.put("state", JSONObject(it)) } }
@@ -193,7 +219,7 @@ private fun WidgetSurface(
                     }
                 }
             }
-            loadUrl("https://appassets.androidplatform.net/assets/ui-poc/host.html")
+            loadUrl("https://appassets.androidplatform.net/assets/ui/host.html")
         }
     }
     LaunchedEffect(view) {
@@ -222,7 +248,7 @@ private fun WidgetSurface(
             lifecycle.removeObserver(observer)
             if (view.viewTreeObserver.isAlive) view.viewTreeObserver.removeOnScrollChangedListener(scrollObserver)
             onView(null)
-            view.removeJavascriptInterface("WidgetHost")
+            WebViewCompat.removeWebMessageListener(view, "WidgetHost")
             view.stopLoading(); view.destroy()
         }
     }

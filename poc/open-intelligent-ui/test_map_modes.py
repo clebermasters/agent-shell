@@ -20,7 +20,7 @@ async def main():
   page=await browser.new_page(viewport={'width':360,'height':900});errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
   page.on('console',lambda msg:print('Browser: '+msg.text,flush=True) if msg.type=='error' else None)
   async def asset(route):
-   target=ROOT/'android-native/app/src/debug/assets'/urlparse(route.request.url).path.removeprefix('/assets/')
+   target=ROOT/'android-native/app/src/main/assets'/urlparse(route.request.url).path.removeprefix('/assets/').replace('ui-poc/','ui/',1)
    await route.fulfill(path=str(target),content_type=mimetypes.guess_type(target)[0] or 'application/octet-stream',headers={'Access-Control-Allow-Origin':'*'})
   # Context routing catches the very first request of a new sandboxed OOPIF.
   await page.context.route('https://appassets.androidplatform.net/**',asset)

@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2] / "android-native/app/src/debug/assets/ui-poc"
+ROOT = Path(__file__).resolve().parents[2] / "android-native/app/src/main/assets/ui"
 SOURCE = Path(__file__).with_name("widgets")
 
 
@@ -33,4 +33,4 @@ def widgets(base):
 
 
 if __name__ == "__main__":
-    (ROOT / "demo.json").write_text(json.dumps(widgets("https://appassets.androidplatform.net/assets/ui-poc")))
+    (ROOT.parents[2] / "debug/assets/ui-poc/demo.json").write_text(json.dumps(widgets("https://appassets.androidplatform.net/assets/ui-poc")))

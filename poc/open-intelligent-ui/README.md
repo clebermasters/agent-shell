@@ -26,14 +26,19 @@ AG-UI, LangGraph, or TypeSafe/Jev stack.
   their own socket and conversation binding.
 - Optional live demo connects to fake agents in a separate TMUX server and temporary backend.
 
-## Isolation
+## Production and fixture isolation
 
-The publisher and action API require `AGENTSHELL_UI_POC=1`, plus normal daemon authentication.
-The Android renderer is restricted to debuggable builds. Test activities and widget assets
-live in `src/debug`; release builds do not include the gallery or its libraries.
-Build with `-PuiPoc=true` to replace embedded server/API credentials with test-only defaults.
-The normal `.env` is never modified. No production service, agent configuration, hooks,
-provider keys, or real agent prompts are used by the POC harness.
+The original preview is preserved on the remote `poc/open-intelligent-ui` branch.
+On main, the renderer and libraries live in `src/main/assets/ui` and are included
+in release builds. Publishing uses the authenticated `/api/chat/ui` endpoint;
+no POC daemon flag is required. The gallery/activity remains debug-only.
+See [production setup and appearance](../../docs/interactive-ui.md) for the
+installed MCP tools and saved application-wide theme.
+
+Build with `-PuiPoc=true` to replace embedded server/API credentials with test-only
+defaults. The normal `.env` is never modified. The harness still uses isolated
+fake agents, a separate TMUX server and a temporary backend; it does not install
+hooks or modify real agent configuration.
 
 ## Build and run
 
@@ -119,18 +124,17 @@ self-contained document. The Rust publisher resolves the native conversation its
 the caller cannot choose a conversation by folder or submit a conversation ID.
 The tool description includes mobile design and bridge guidance. `AGENT_GUIDANCE.md` is
 an optional instruction snippet, suitable for project or global agent instructions.
-No MCP configuration or instruction files are installed into real agent environments.
+The fixture harness does not install real agent configuration. Production `install.sh` registers the stdio server globally; project instruction files remain optional.
 
-## Remaining work before production
+## Scope and further extensions
 
 This proves rendering, MCP delivery, persistence format, and conversation-safe actions.
 Automatic visualization selection, model-generated output quality, incremental/AG-UI
-streaming, and production sandbox/network/resource hardening remain separate work.
+streaming, and provider-generated output evaluation remain separate work. The production host applies its own CSP, network restrictions and origin-restricted native bridge; resource governance remains limited.
 Control state is local view state, not server-synchronized application data. Maps are
 authored offline schematics or optional [USGS basemap tiles](https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer),
 with illustrative connections, not driving directions.
-A real Codex/Claude MCP setup and provider smoke test are separate steps; no global
-agent configuration was changed during this POC.
+Production MCP installation is documented separately. Automated fixtures do not invoke a paid model or send prompts into real user agents.
 
 ## Attribution
 

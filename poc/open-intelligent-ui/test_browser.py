@@ -27,8 +27,8 @@ async def main():
    browser=await p.chromium.launch(executable_path='/bin/google-chrome',headless=True,args=['--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'])
    page=await browser.new_page(viewport={'width':412,'height':915})
    async def assets(route):
-    url=urlparse(route.request.url);target=ROOT/'android-native/app/src/debug/assets'/url.path.removeprefix('/assets/')
-    assert target.resolve().is_relative_to((ROOT/'android-native/app/src/debug/assets').resolve())
+    url=urlparse(route.request.url);target=ROOT/'android-native/app/src/main/assets'/url.path.removeprefix('/assets/').replace('ui-poc/','ui/',1)
+    assert target.resolve().is_relative_to((ROOT/'android-native/app/src/main/assets').resolve())
     await route.fulfill(path=str(target),content_type=mimetypes.guess_type(target)[0] or 'application/octet-stream',headers={'Access-Control-Allow-Origin':'*'})
    await page.route('https://appassets.androidplatform.net/**',assets)
    await page.goto(f"http://127.0.0.1:{cfg['assetsPort']}/ui-poc/host.html")
@@ -38,6 +38,7 @@ async def main():
     await page.evaluate('data=>{window.actions=[];mountWidget(data)}',{'id':widget['widgetId'],'html':widget['document']['html']})
     frame=page.frame_locator('#widget');title=widget['document']['title']
     await frame.locator('h3').wait_for()
+    await page.wait_for_function('ready === true')
     assert not await frame.locator('body').evaluate("()=>{try{return !!parent.document.body}catch{return false}}")
     if title=='Chart and table':
      before=await frame.locator('#series').get_attribute('d')

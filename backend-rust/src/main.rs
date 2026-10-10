@@ -62,7 +62,7 @@ struct Args {
 }
 
 use crate::types::ServerMessage;
-mod ui_poc;
+mod interactive_ui;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
     // Build the router — protected routes require auth token
     let protected = Router::new()
         .route("/api/chat/bind", post(chat_binding::register_hook))
-        .route("/api/chat/ui-poc", post(ui_poc::publish))
+        .route("/api/chat/ui", post(interactive_ui::publish))
         // API: Get connected clients count
         .route(
             "/api/clients",

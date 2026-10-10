@@ -49,7 +49,7 @@ def main():
   instance=root/'backend';instance.mkdir()
   context=tmux('display-message','-p','-t','ui-A','#{socket_path},#{pid},0')
   log=(root/'backend.log').open('w')
-  backend=subprocess.Popen([str(args.binary.resolve())],cwd=instance,env=dict(os.environ,AUTH_TOKEN=token,AGENTSHELL_HTTP_PORT=str(port),AGENTSHELL_HTTPS_PORT=str(free_port()),AGENTSHELL_UI_POC='1',TMUX=context,TOKIO_WORKER_THREADS='2',RUST_LOG='error'),stdout=log,stderr=log)
+  backend=subprocess.Popen([str(args.binary.resolve())],cwd=instance,env=dict(os.environ,AUTH_TOKEN=token,AGENTSHELL_HTTP_PORT=str(port),AGENTSHELL_HTTPS_PORT=str(free_port()),TMUX=context,TOKIO_WORKER_THREADS='2',RUST_LOG='error'),stdout=log,stderr=log)
   deadline=time.monotonic()+10
   while True:
    assert backend.poll() is None
@@ -58,7 +58,8 @@ def main():
    except OSError:
     assert time.monotonic()<deadline;time.sleep(.05)
   class Assets(SimpleHTTPRequestHandler):
-   def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(ROOT/'android-native/app/src/debug/assets'),**kwargs)
+   def translate_path(self,path):return super().translate_path(path.replace('/ui-poc/','/ui/',1))
+   def __init__(self,*args,**kwargs):super().__init__(*args,directory=str(ROOT/'android-native/app/src/main/assets'),**kwargs)
    def log_message(self,*args):pass
   asset_port=free_port();http=ThreadingHTTPServer(('127.0.0.1',asset_port),Assets);threading.Thread(target=http.serve_forever,daemon=True).start()
   documents=widgets('https://appassets.androidplatform.net/assets/ui-poc');published=[]

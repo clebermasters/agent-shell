@@ -1,4 +1,4 @@
-//! Opt-in POC delivery of complete UI documents. No inference providers are used.
+//! Authenticated, conversation-scoped interactive UI publication.
 use crate::{
     chat_log::{ChatMessage, ContentBlock},
     types::ServerMessage,
@@ -7,10 +7,6 @@ use crate::{
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 use std::sync::Arc;
-
-pub(crate) fn enabled() -> bool {
-    std::env::var("AGENTSHELL_UI_POC").as_deref() == Ok("1")
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -26,9 +22,6 @@ pub async fn publish(
     State(app): State<Arc<AppState>>,
     Json(payload): Json<PublishWidget>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    if !enabled() {
-        return Err((StatusCode::NOT_FOUND, "UI POC is disabled".into()));
-    }
     let result = async {
         anyhow::ensure!(!payload.title.trim().is_empty() && payload.title.len() <= 160, "Invalid widget title");
         anyhow::ensure!(!payload.html.trim().is_empty() && payload.html.len() <= 256 * 1024, "Widget document must contain 1–262144 bytes");
@@ -46,8 +39,8 @@ pub async fn publish(
         let store = app.chat_event_store.clone();
         let stored = message.clone();
         let key = binding.conversation_key.clone();
-        tokio::task::spawn_blocking(move || store.append_message(&key, 0, "ui-poc", &stored)).await??;
-        app.client_manager.broadcast_bound(ServerMessage::ChatEvent { session_name: session.into(), window_index: window.parse()?, message, source: Some("ui-poc".into()) }, &binding).await;
+        tokio::task::spawn_blocking(move || store.append_message(&key, 0, "interactive-ui", &stored)).await??;
+        app.client_manager.broadcast_bound(ServerMessage::ChatEvent { session_name: session.into(), window_index: window.parse()?, message, source: Some("interactive-ui".into()) }, &binding).await;
         Ok::<_, anyhow::Error>(Json(serde_json::json!({"widgetId":id,"conversationKey":binding.conversation_key,"bindingId":binding.binding_id})))
     }.await;
     result.map_err(|error| (StatusCode::CONFLICT, error.to_string()))

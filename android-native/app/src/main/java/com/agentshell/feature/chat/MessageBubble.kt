@@ -22,6 +22,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -71,6 +75,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -90,6 +95,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
@@ -127,15 +134,18 @@ fun MessageBubble(
     modifier: Modifier = Modifier,
 ) {
     var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    val parentNavigationBottom = ViewCompat.getRootWindowInsets(LocalView.current)
+        ?.getInsets(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
     var widgetState by rememberSaveable(message.id) { mutableStateOf(Bundle()) }
     val saveWidget: (String, String) -> Unit = { id, value ->
         widgetState = Bundle(widgetState).apply { putString(id, value) }
     }
     if (expanded) {
         Dialog(onDismissRequest = { expanded = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+                val safeInsets = WindowInsets.safeDrawing.union(WindowInsets(bottom = parentNavigationBottom))
+                Column(Modifier.fillMaxSize().windowInsetsPadding(safeInsets).imePadding()) {
                     Row(Modifier.fillMaxWidth().padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("Expanded message", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                         CopyMessageButton(message)

@@ -272,7 +272,6 @@ pub(crate) async fn handle(
             message,
         } => {
             let result = async {
-                anyhow::ensure!(crate::ui_poc::enabled(), "Interactive UI POC is disabled on this daemon");
                 anyhow::ensure!(!message.trim().is_empty() && message.len() <= 4000, "Widget action must contain 1–4000 bytes");
                 let binding = require_binding(state, &session_name, window_index).await?;
                 anyhow::ensure!(binding.binding_id == binding_id, "This conversation changed; the widget action was not sent");

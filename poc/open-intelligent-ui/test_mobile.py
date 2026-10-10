@@ -13,7 +13,7 @@ from playwright.async_api import async_playwright
 from fixtures import widgets
 
 ROOT = Path(__file__).resolve().parents[2]
-ASSETS = ROOT / "android-native/app/src/debug/assets"
+ASSETS = ROOT / "android-native/app/src/main/assets"
 
 LAYOUT = """() => {
  const visible=e=>e.getClientRects().length && !e.closest('[hidden]');
@@ -49,7 +49,7 @@ async def run():
         page.on("request", lambda request: report["external_requests"].append(request.url)
             if urlparse(request.url).hostname not in ["127.0.0.1", "appassets.androidplatform.net", None] else None)
         async def asset(route):
-            target = ASSETS / urlparse(route.request.url).path.removeprefix("/assets/")
+            target = ASSETS / urlparse(route.request.url).path.removeprefix("/assets/").replace("ui-poc/","ui/",1)
             assert target.resolve().is_relative_to(ASSETS.resolve())
             await route.fulfill(path=str(target), content_type=mimetypes.guess_type(target)[0] or "application/octet-stream",
                 headers={"Access-Control-Allow-Origin":"*"})

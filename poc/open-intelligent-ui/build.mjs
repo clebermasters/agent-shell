@@ -4,7 +4,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {execFileSync} from 'node:child_process';
 const require=createRequire(import.meta.url);
-const target=path.resolve('../../android-native/app/src/debug/assets/ui-poc');
+const target=path.resolve('../../android-native/app/src/main/assets/ui');
 fs.mkdirSync(target+'/vendor',{recursive:true});
 await build({entryPoints:['upstream/design-system.ts'],bundle:true,platform:'node',format:'cjs',write:true,outfile:'node_modules/design-system.cjs'});
 const css=require('./node_modules/design-system.cjs');
@@ -15,4 +15,5 @@ fs.copyFileSync('node_modules/leaflet/dist/leaflet.css',target+'/vendor/leaflet.
 fs.cpSync('node_modules/leaflet/dist/images',target+'/vendor/images',{recursive:true});
 for(const name of ['three','leaflet'])fs.copyFileSync('node_modules/'+name+'/LICENSE',target+'/vendor/'+name+'-LICENSE');
 fs.copyFileSync('upstream/LICENSE',target+'/OPENINTELLIGENTUI-LICENSE');
+for(const file of ['mobile.css','runtime.js'])fs.copyFileSync('widgets/'+file,target+'/'+file);
 execFileSync('python3',['fixtures.py'],{stdio:'inherit'});

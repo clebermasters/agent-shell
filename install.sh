@@ -110,9 +110,12 @@ sudo systemctl stop agentshell 2>/dev/null || true
 sudo mkdir -p "$INSTALL_DIR/backend"
 sudo mkdir -p "$INSTALL_DIR/certs"
 sudo mkdir -p "$INSTALL_DIR/hooks"
+sudo mkdir -p "$INSTALL_DIR/ui"
 
 sudo cp "$PROJECT_DIR/backend-rust/target/release/agentshell-backend" "$INSTALL_DIR/backend/"
 sudo cp "$PROJECT_DIR/scripts/chat-binding-hook.py" "$INSTALL_DIR/hooks/"
+sudo cp "$PROJECT_DIR/scripts/agent-ui-mcp.py" "$INSTALL_DIR/ui/"
+sudo cp "$PROJECT_DIR/android-native/app/src/main/assets/ui/mobile.css" "$INSTALL_DIR/ui/"
 sudo cp -r "$PROJECT_DIR/certs/"* "$INSTALL_DIR/certs/" 2>/dev/null || true
 
 cd "$INSTALL_DIR/backend"
@@ -165,6 +168,15 @@ if [ "$EUID" -eq 0 ] && [ "$SERVICE_USER" != "root" ]; then
 else
     AUTH_TOKEN="$AUTH_TOKEN" /usr/bin/python3 "$PROJECT_DIR/scripts/install-chat-binding-hooks.py" \
         --user-home "$SERVICE_HOME" --script "$INSTALL_DIR/hooks/chat-binding-hook.py" --url "http://127.0.0.1:$BACKEND_PORT"
+fi
+
+echo "Installing interactive UI tools for native agents..."
+if [ "$EUID" -eq 0 ] && [ "$SERVICE_USER" != "root" ]; then
+    sudo -u "$SERVICE_USER" env AUTH_TOKEN="$AUTH_TOKEN" /usr/bin/python3 "$PROJECT_DIR/scripts/install-ui-mcp.py" \
+        --user-home "$SERVICE_HOME" --script "$INSTALL_DIR/ui/agent-ui-mcp.py" --url "http://127.0.0.1:$BACKEND_PORT"
+else
+    AUTH_TOKEN="$AUTH_TOKEN" /usr/bin/python3 "$PROJECT_DIR/scripts/install-ui-mcp.py" \
+        --user-home "$SERVICE_HOME" --script "$INSTALL_DIR/ui/agent-ui-mcp.py" --url "http://127.0.0.1:$BACKEND_PORT"
 fi
 
 echo ""

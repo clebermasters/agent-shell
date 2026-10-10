@@ -1,8 +1,9 @@
 # Mobile interactive canvas acceptance
 
-The requested goal is a useful, polished, mobile-first version of the isolated
-interactive chat experiment. This remains on `poc/open-intelligent-ui`; it does
-not deploy or configure production agents.
+The original isolated experiment is preserved on `poc/open-intelligent-ui`.
+Main includes the production renderer, saved application theme, MCP installation
+and sandbox hardening. See [production setup](../../docs/interactive-ui.md).
+The harness below continues to use isolated agents and temporary storage.
 
 | Requirement | Verification |
 | --- | --- |

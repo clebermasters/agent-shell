@@ -20,6 +20,8 @@ The **maintained and feature-complete client is the native Android app** (`andro
 
 ## What’s new since the original docs
 
+- [Interactive chat messages and appearance](docs/interactive-ui.md): charts, diagrams, calculators, 3D and maps; expand messages, share images, and switch the saved light/dark/system theme. Native agents publish through the installed AgentShell UI MCP tools.
+
 - Direct Chat support for both:
   - **OpenCode ACP** (shared ACP transport)
   - **Codex app-server** (provider-aware integration)

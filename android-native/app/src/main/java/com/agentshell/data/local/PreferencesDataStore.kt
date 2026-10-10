@@ -65,6 +65,7 @@ class PreferencesDataStore @Inject constructor(
         get() = dataStore.data.map { it[Keys.THEME_MODE] ?: "system" }
 
     suspend fun setThemeMode(value: String) {
+        require(value in setOf("system", "light", "dark")) { "Invalid theme mode" }
         dataStore.edit { it[Keys.THEME_MODE] = value }
     }
 

@@ -1,0 +1,8 @@
+{
+  "authentication_required": true,
+  "publisher_incarnation_checked": true,
+  "document_size_limited": true,
+  "empty_title_rejected": true,
+  "caller_cannot_choose_conversation": true,
+  "disabled_without_explicit_flag": true
+}

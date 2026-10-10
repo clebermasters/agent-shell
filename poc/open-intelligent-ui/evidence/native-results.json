@@ -1,0 +1,11 @@
+{
+  "Interactive itinerary": "actual WebView render, interaction, native callback and A-only reply passed",
+  "3D orientation explorer": "actual WebView render, interaction, native callback and A-only reply passed",
+  "Process explorer": "actual WebView render, interaction, native callback and A-only reply passed",
+  "Bill splitter": "actual WebView render, interaction, native callback and A-only reply passed",
+  "Interactive sample chart": "actual WebView render, interaction, native callback and A-only reply passed",
+  "android_api": 35,
+  "webview": "124.0.6367.219",
+  "iframe_parent_isolation": true,
+  "provider_inference_calls": 0
+}

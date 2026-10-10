@@ -373,6 +373,14 @@ pub enum WebSocketMessage {
         #[serde(rename = "windowIndex")] window_index: u32,
         message: String,
     },
+    SendBoundUiAction {
+        #[serde(rename = "bindingId")] binding_id: String,
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "sessionName")] session_name: String,
+        #[serde(rename = "windowIndex")] window_index: u32,
+        #[serde(rename = "widgetId")] widget_id: String,
+        message: String,
+    },
     SendBoundFileToChat {
         #[serde(rename = "bindingId")] binding_id: String,
         #[serde(rename = "requestId")] request_id: String,

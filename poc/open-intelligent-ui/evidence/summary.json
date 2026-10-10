@@ -1,0 +1,9 @@
+{
+  "branch": "poc/open-intelligent-ui",
+  "rust_tests": 603,
+  "android_tests": 113,
+  "android_failures": 0,
+  "provider_inference_calls": 0,
+  "upstream_revision": "f6e4388b26a64b9a0714943b08a1ce622b924eec",
+  "scope": "Complete HTML widgets, MCP publishing, scoped persistence and follow-ups; no AG-UI streaming or automatic model router."
+}

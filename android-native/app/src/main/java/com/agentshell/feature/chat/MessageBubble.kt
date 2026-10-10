@@ -115,6 +115,7 @@ fun MessageBubble(
     audioPlayerManager: AudioPlayerManager,
     serverPathBase: String? = null,
     onOpenServerPath: (String) -> Unit = {},
+    onWidgetAction: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val isUser = message.messageType == ChatMessageType.USER
@@ -179,6 +180,7 @@ fun MessageBubble(
                     message.blocks.forEach { block ->
                         BlockContent(
                             block = block,
+                            onWidgetAction = onWidgetAction,
                             showThinking = showThinking,
                             showToolCalls = showToolCalls,
                             fileBaseUrl = fileBaseUrl,
@@ -305,8 +307,10 @@ private fun BlockContent(
     audioPlayerManager: AudioPlayerManager,
     serverPathBase: String? = null,
     onOpenServerPath: (String) -> Unit = {},
+    onWidgetAction: (String, String) -> Unit = { _, _ -> },
 ) {
     when (block.blockType) {
+        ChatBlockType.UI_WIDGET -> UiWidgetBlock(block, onWidgetAction)
         ChatBlockType.TEXT -> {
             if (!block.text.isNullOrBlank()) {
                 MarkdownText(

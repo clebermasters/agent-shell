@@ -18,6 +18,8 @@ object ChatMessageParser {
                 }
             ChatBlock(
                 type = block["type"] as? String ?: "text",
+                title = block["title"] as? String,
+                html = block["html"] as? String,
                 text = block["text"] as? String,
                 content = block["content"] as? String,
                 toolName = (block["name"] ?: block["toolName"]) as? String,

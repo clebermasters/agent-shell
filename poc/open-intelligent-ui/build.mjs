@@ -1,0 +1,16 @@
+import {build} from 'esbuild';
+import fs from 'node:fs';
+import path from 'node:path';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+const target=path.resolve('../../android-native/app/src/debug/assets/ui-poc');
+fs.mkdirSync(target+'/vendor',{recursive:true});
+await build({entryPoints:['upstream/design-system.ts'],bundle:true,platform:'node',format:'cjs',write:true,outfile:'node_modules/design-system.cjs'});
+const css=require('./node_modules/design-system.cjs');
+fs.writeFileSync(target+'/theme.css',css.THEME_CSS+'\n'+css.SVG_CLASSES_CSS+'\n'+css.FORM_STYLES_CSS);
+await build({stdin:{contents:"import * as THREE from 'three';window.THREE=THREE;",resolveDir:process.cwd()},bundle:true,format:'iife',minify:true,outfile:target+'/vendor/three.js'});
+fs.copyFileSync('node_modules/leaflet/dist/leaflet.js',target+'/vendor/leaflet.js');
+fs.copyFileSync('node_modules/leaflet/dist/leaflet.css',target+'/vendor/leaflet.css');
+fs.cpSync('node_modules/leaflet/dist/images',target+'/vendor/images',{recursive:true});
+for(const name of ['three','leaflet'])fs.copyFileSync('node_modules/'+name+'/LICENSE',target+'/vendor/'+name+'-LICENSE');
+fs.copyFileSync('upstream/LICENSE',target+'/OPENINTELLIGENTUI-LICENSE');

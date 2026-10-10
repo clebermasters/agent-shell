@@ -354,6 +354,9 @@ async fn handle_message(
         | WebSocketMessage::ClearBoundChatLog { .. } => {
             binding_cmds::handle(msg, state, app_state).await?;
         }
+        WebSocketMessage::SendBoundUiAction { .. } => {
+            binding_cmds::handle(msg, state, app_state).await?;
+        }
         WebSocketMessage::WatchChatLog { .. }
         | WebSocketMessage::GetAgentActivities
         | WebSocketMessage::WatchAcpChatLog { .. }

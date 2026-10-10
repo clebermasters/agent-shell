@@ -26,6 +26,7 @@ enum class ChatMessageType {
 }
 
 enum class ChatBlockType {
+    UI_WIDGET,
     TEXT,
     TOOL_CALL,
     TOOL_RESULT,
@@ -36,6 +37,7 @@ enum class ChatBlockType {
 
     companion object {
         fun fromString(value: String?): ChatBlockType = when (value?.lowercase()) {
+            "ui_widget" -> UI_WIDGET
             "text" -> TEXT
             "toolcall", "tool_call" -> TOOL_CALL
             "toolresult", "tool_result" -> TOOL_RESULT
@@ -51,6 +53,8 @@ enum class ChatBlockType {
 @Serializable
 data class ChatBlock(
     val type: String,
+    val title: String? = null,
+    val html: String? = null,
     val text: String? = null,
     val toolName: String? = null,
     val summary: String? = null,

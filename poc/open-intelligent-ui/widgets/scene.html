@@ -1,0 +1,8 @@
+<div class="eyebrow">Product design · interactive preview</div><h3>Spatial preview</h3>
+<p class="subtitle">Inspect a product from any angle. Drag sideways to rotate.</p>
+<div id="scene" class="visual" aria-label="Interactive three dimensional product preview"><span class="hint">Drag to rotate · use controls to inspect</span></div>
+<p id="sceneError" class="error" role="status" hidden>3D is unavailable on this device. You can still explore the orientation with the controls.</p>
+<div class="chips" role="group" aria-label="Camera presets" style="margin-top:12px"><button id="iso" aria-pressed="true">Isometric</button><button id="front">Front</button><button id="top">Top</button></div>
+<div class="panel" style="margin-top:14px"><div class="row between"><label for="yaw">Rotation</label><span><output id="angle">0</output>°</span></div><input id="yaw" type="range" min="-180" max="180" value="0"><div class="row between"><label for="pitch">Elevation</label><span><output id="elevation">28</output>°</span></div><input id="pitch" type="range" min="0" max="85" value="28"></div>
+<div class="row between" style="margin-top:12px"><div class="row"><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomIn" aria-label="Zoom in">+</button></div><button id="reset">Reset view</button></div>
+<button class="primary" id="ask">Discuss this view with the agent</button>

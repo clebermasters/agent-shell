@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
+    UiWidget {
+        id: String,
+        title: String,
+        html: String,
+    },
     Text {
         text: String,
     },

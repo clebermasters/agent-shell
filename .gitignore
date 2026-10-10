@@ -127,6 +127,7 @@ tramp
 *.pdf
 # Ignore PNGs except project assets
 *.png
+!poc/open-intelligent-ui/evidence/*.png
 !logo-square.png
 
 # Temporary files

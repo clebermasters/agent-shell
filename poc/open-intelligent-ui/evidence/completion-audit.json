@@ -1,0 +1,13 @@
+{
+  "requirements": "../ACCEPTANCE.md",
+  "all_five_useful_widgets": "mobile-results.json + native-mobile-results.json",
+  "responsive_visual_quality": "50 measured layouts + reviewed native/browser screenshots",
+  "full_message_and_widget_expansion": "native-mobile-results.json; 356px phone / 1012px tablet; retained controls",
+  "sharing_and_recovery": "verified native PNG, theme, tabs, rotation and error/reopen behavior",
+  "conversation_ownership": "browser-results.json + api-results.json + native A-only follow-ups",
+  "build": "113 Android tests; debug APK v2 signature; release Kotlin compile",
+  "isolation": "isolation-results.json",
+  "scope": "Isolated mobile preview. Real-provider MCP configuration, model output quality, full AG-UI streaming, full split navigation and physical foldable/TalkBack validation are explicitly excluded from claims.",
+  "live_maps": "8 real per-coordinate USGS tiles; saved mode; uncached outage restores schematic",
+  "mobile_keyboard": "Physical tap + actual IME + focused field outline visible above keyboard"
+}

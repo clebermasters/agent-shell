@@ -1,0 +1,12 @@
+{
+  "Chart and table": "rendered, interacted, action delivered to A only",
+  "Calculator": "rendered, interacted, action delivered to A only",
+  "Diagram": "rendered, interacted, action delivered to A only",
+  "3D scene": "rendered, interacted, action delivered to A only",
+  "Map": "rendered, interacted, action delivered to A only",
+  "foreign_widget_rejected": true,
+  "resume_rejects_stale_action": true,
+  "iframe_parent_isolation": true,
+  "forged_host_message_rejected": true,
+  "provider_requests": 0
+}

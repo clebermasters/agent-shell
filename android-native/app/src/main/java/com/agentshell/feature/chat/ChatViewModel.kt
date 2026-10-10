@@ -198,7 +198,7 @@ class ChatViewModel @Inject constructor(
     private var screenActive = false
     private var followingLive = false
     private val transcriptionReceipt = TranscriptionReceipt()
-    private data class PendingSend(val id: String, val text: String, val file: AttachedFile?, val draftKey: String, val bindingId: String)
+    private data class PendingSend(val id: String, val text: String, val file: AttachedFile?, val draftKey: String, val bindingId: String, val widgetId: String? = null)
     private var pendingSend: PendingSend? = null
 
     private fun newMessageList(messages: List<ChatMessage> = emptyList()): SnapshotStateList<ChatMessage> =
@@ -695,7 +695,13 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun sendBoundMessage(text: String, state: ChatUiState) {
+    fun sendWidgetAction(widgetId: String, text: String) {
+        val state = _uiState.value
+        if (state.isSending || state.isUploading || state.bindingState?.canSend != true) return
+        sendBoundMessage(text, state.copy(attachedFile = null), widgetId)
+    }
+
+    private fun sendBoundMessage(text: String, state: ChatUiState, widgetId: String? = null) {
         val binding = state.bindingState?.binding ?: return
         if (text.isBlank() && state.attachedFile == null) return
         val server = webSocketService.currentWebSocketUrl
@@ -703,13 +709,14 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(error = "Wait for this chat’s server connection before sending") }
             return
         }
-        val pending = PendingSend(UUID.randomUUID().toString(), text, state.attachedFile, draftKey(state.sessionName, state.windowIndex), binding.id)
+        val pending = PendingSend(UUID.randomUUID().toString(), text, state.attachedFile, draftKey(state.sessionName, state.windowIndex), binding.id, widgetId)
         pendingSend = pending
         _uiState.update { it.copy(isSending = true, error = null) }
         viewModelScope.launch {
             try {
                 val payload = buildMap<String, Any?> {
-                    put("type", if (pending.file == null) "send-bound-chat-message" else "send-bound-file-to-chat")
+                    put("type", if (widgetId != null) "send-bound-ui-action" else if (pending.file == null) "send-bound-chat-message" else "send-bound-file-to-chat")
+                    if (widgetId != null) put("widgetId", widgetId)
                     put("bindingId", binding.id); put("requestId", pending.id)
                     put("sessionName", state.sessionName); put("windowIndex", state.windowIndex)
                     if (pending.file == null) put("message", text.trim()) else {
@@ -739,6 +746,10 @@ class ChatViewModel @Inject constructor(
         if (message["requestId"] != pending.id) return
         pendingSend = null
         val success = message["success"] == true
+        if (pending.widgetId != null) {
+            _uiState.update { it.copy(isSending = false, error = if (it.bindingState?.binding?.id != pending.bindingId) it.error else if (success) null else message["error"] as? String ?: "Widget action was rejected") }
+            return
+        }
         _uiState.update { current ->
             val sameConversation = current.bindingState?.binding?.id == pending.bindingId
             current.copy(isSending = false,

@@ -1,0 +1,7 @@
+{
+  "signed_v2": true,
+  "isolated_credentials": true,
+  "package": "com.agentshell.debug",
+  "sha256": "564bb286d7eba5496ffbe9dd8e3e0a19e378380c15d9d19ed44f9fa108402cdd",
+  "artifact": "/tmp/agentshell-ui-mobile-evidence/agentshell-interactive-preview.apk"
+}

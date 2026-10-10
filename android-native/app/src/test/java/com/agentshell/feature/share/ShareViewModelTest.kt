@@ -58,7 +58,7 @@ class ShareViewModelTest {
 
     @After fun teardown() {
         stores.forEach { it.clear() }
-        preferencesScope.cancel()
+        runBlocking { preferencesScope.coroutineContext[Job]?.cancelAndJoin() }
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
         Dispatchers.resetMain()
@@ -90,8 +90,11 @@ class ShareViewModelTest {
         val draft = withTimeout(5_000) { model.uiState.first { it.draft != null }.draft!! }
         assertNull(model.uiState.value.error)
         model.consume(discard = true)
+        val draftDirectory = File(ApplicationProvider.getApplicationContext<Application>().filesDir, "shared_drafts/${draft.id}")
         withTimeout(5_000) {
-            while (shares.load(draft.id) != null) delay(10)
+            // The discard removes the JSON file concurrently. Check the final
+            // directory deletion instead of racing a read with that removal.
+            while (draftDirectory.exists()) delay(10)
         }
         assertFalse(saved.contains("incoming_share"))
         assertFalse(saved.contains("share_id"))

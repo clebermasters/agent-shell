@@ -1,0 +1,3 @@
+
+# Preserve upstream CRLF and embedded shader whitespace in POC vendor bundles.
+android-native/app/src/debug/assets/ui-poc/vendor/** linguist-vendored=true whitespace=-blank-at-eol,-space-before-tab,cr-at-eol

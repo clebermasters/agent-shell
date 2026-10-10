@@ -436,6 +436,7 @@ fun ChatScreen(
                                     audioPlayerManager = viewModel.audioPlayerManager,
                                     serverPathBase = uiState.sessionCwd.ifBlank { null },
                                     onOpenServerPath = onOpenServerPath,
+                                    onWidgetAction = viewModel::sendWidgetAction,
                                 )
                             }
                         }

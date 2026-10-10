@@ -1,0 +1,8 @@
+{
+  "physical_field_tap": true,
+  "android_keyboard_shown": true,
+  "focused_field": "bill",
+  "focused_input_outline_visible_above_keyboard": true,
+  "calculation_retained_after_keyboard_close": true,
+  "expanded_and_gallery_containers_apply_ime_insets": true
+}

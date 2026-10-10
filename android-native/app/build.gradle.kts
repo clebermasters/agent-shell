@@ -62,6 +62,8 @@ android {
 // In Docker: Dockerfile generates BuildConfig.kt BEFORE Gradle runs → task skips.
 // Locally: Gradle reads ../.env and generates BuildConfig.kt on every build.
 val generateBuildConfig by tasks.registering {
+    val isolatedUiPoc = providers.gradleProperty("uiPoc").orNull == "true"
+    inputs.property("uiPoc", isolatedUiPoc)
     val envFile = rootProject.file("../.env")
     val outputDir = file("src/main/java/com/agentshell/core/config")
     val outputFile = file("$outputDir/BuildConfig.kt")
@@ -74,13 +76,13 @@ val generateBuildConfig by tasks.registering {
 
     onlyIf {
         // Skip if .env is missing AND BuildConfig.kt already exists (Docker path)
-        envFile.exists() || !outputFile.exists()
+        isolatedUiPoc || envFile.exists() || !outputFile.exists()
     }
 
     doLast {
         val env = mutableMapOf<String, String>()
-        if (envFile.exists()) {
-            envFile.readLines().forEach { line ->
+        if (envFile.exists() || isolatedUiPoc) {
+            (if (envFile.exists()) envFile.readLines() else emptyList()).forEach { line ->
                 val trimmed = line.trim()
                 if (trimmed.isNotEmpty() && !trimmed.startsWith("#")) {
                     val eqIdx = trimmed.indexOf('=')
@@ -90,6 +92,11 @@ val generateBuildConfig by tasks.registering {
                         env[key] = value
                     }
                 }
+            }
+            if (isolatedUiPoc) {
+                env.clear()
+                env["SERVER_LIST"] = "127.0.0.1:40199,Isolated UI POC"
+                env["AUTH_TOKEN"] = "isolated-ui-poc-only"
             }
             val serverList = env["SERVER_LIST"] ?: ""
             val apiKey = env["OPENAI_API_KEY"] ?: ""

@@ -1,0 +1,23 @@
+{
+  "Revenue overview": "native render, controls and scoped A-only follow-up passed",
+  "Split the bill": "native render, controls and scoped A-only follow-up passed",
+  "Release pipeline": "native render, controls and scoped A-only follow-up passed",
+  "Spatial preview": "native render, controls and scoped A-only follow-up passed",
+  "Weekend itinerary": "native render, controls and scoped A-only follow-up passed",
+  "native_fullscreen_theme_and_tabs": "actual UI taps retain each card controls and theme",
+  "activity_recreation": "landscape rotation preserves selected card, theme and controls",
+  "share_png": {
+    "width": 996,
+    "height": 2097,
+    "verified_nonblank": true
+  },
+  "recoverable_failure": "script failure displays native recovery and reopening restores controls",
+  "native_conversation_switch": "B shows only its calculator with the correct label; A restores its own gallery",
+  "whole_message_maximize": {
+    "phone_css_width": 356,
+    "tablet_css_width": 1012,
+    "controls_survive_close_and_display_resize": true
+  },
+  "android_api": "35",
+  "single_active_webview": true
+}

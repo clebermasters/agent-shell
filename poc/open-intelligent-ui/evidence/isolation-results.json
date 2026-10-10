@@ -1,0 +1,11 @@
+{
+  "main_and_remote_unchanged": "526306b6fb90625e19775147e5ec1d45370e9dd8",
+  "production_release_apk_unchanged": "f1e5eed35faa3d83e1efbca42a2a4208a88ebaf630a9c731c54cb81a389e8099",
+  "production_service": [
+    "MainPID=2775816",
+    "NRestarts=0",
+    "ActiveState=active"
+  ],
+  "backend_source_unchanged": true,
+  "global_agent_configuration_changes": false
+}

@@ -263,6 +263,29 @@ pub(crate) async fn handle(
     app: Arc<AppState>,
 ) -> Result<()> {
     match message {
+        WebSocketMessage::SendBoundUiAction {
+            binding_id,
+            request_id,
+            session_name,
+            window_index,
+            widget_id,
+            message,
+        } => {
+            let result = async {
+                anyhow::ensure!(crate::ui_poc::enabled(), "Interactive UI POC is disabled on this daemon");
+                anyhow::ensure!(!message.trim().is_empty() && message.len() <= 4000, "Widget action must contain 1–4000 bytes");
+                let binding = require_binding(state, &session_name, window_index).await?;
+                anyhow::ensure!(binding.binding_id == binding_id, "This conversation changed; the widget action was not sent");
+                let events = state.chat_event_store.clone();
+                let key = binding.conversation_key.clone();
+                let owned = tokio::task::spawn_blocking(move || -> Result<bool> {
+                    Ok(events.list_messages(&key, 0)?.iter().any(|msg| msg.blocks.iter().any(|block| matches!(block, crate::chat_log::ContentBlock::UiWidget { id, .. } if id == &widget_id))))
+                }).await??;
+                anyhow::ensure!(owned, "This widget belongs to another conversation");
+                super::chat_cmds::handle(WebSocketMessage::SendChatMessage { session_name, window_index, message, notify: Some(false) }, state, app).await
+            }.await;
+            send_value(&state.message_tx, serde_json::json!({"type":"chat-send-result","bindingId":binding_id,"requestId":request_id,"success":result.is_ok(),"error":result.err().map(|e| e.to_string())})).await?;
+        }
         WebSocketMessage::ListChatConversations {
             session_name,
             window_index,

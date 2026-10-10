@@ -11,7 +11,10 @@ use std::sync::Arc;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublishWidget {
-    pub pane_id: String,
+    #[serde(default)]
+    pub pane_id: Option<String>,
+    #[serde(default)]
+    pub codex_thread_id: Option<String>,
     pub agent_pid: u32,
     pub agent_start: u64,
     pub title: String,
@@ -25,10 +28,14 @@ pub async fn publish(
     let result = async {
         anyhow::ensure!(!payload.title.trim().is_empty() && payload.title.len() <= 160, "Invalid widget title");
         anyhow::ensure!(!payload.html.trim().is_empty() && payload.html.len() <= 256 * 1024, "Widget document must contain 1–262144 bytes");
-        let pane = crate::chat_binding::inspect_pane(&payload.pane_id).await?;
-        anyhow::ensure!(pane.agent_pid == payload.agent_pid && pane.agent_start == payload.agent_start, "Publisher is not this pane's current agent");
-        let binding = app.chat_event_store.bindings.resolve_inspected_pane(pane).await?.binding
-            .ok_or_else(|| anyhow::anyhow!("The agent has not reported its native conversation ID"))?;
+        let binding = if let Some(id) = &payload.codex_thread_id {
+            crate::chat_binding::resolve_codex_publisher(&app.chat_event_store.bindings, payload.agent_pid, payload.agent_start, id).await?
+        } else {
+            let pane = crate::chat_binding::inspect_pane(payload.pane_id.as_deref().ok_or_else(|| anyhow::anyhow!("The publisher has no terminal identity"))?).await?;
+            anyhow::ensure!(pane.agent_pid == payload.agent_pid && pane.agent_start == payload.agent_start, "Publisher is not this pane's current agent");
+            app.chat_event_store.bindings.resolve_inspected_pane(pane).await?.binding
+                .ok_or_else(|| anyhow::anyhow!("The agent has not reported its native conversation ID"))?
+        };
         app.chat_event_store.bindings.validate(&binding).await?;
         let output = tokio::process::Command::new("tmux").args(["display-message", "-p", "-t", &binding.pane.pane_id, "#{session_name}\t#{window_index}"]).kill_on_drop(true).output().await?;
         anyhow::ensure!(output.status.success(), "Terminal disappeared");

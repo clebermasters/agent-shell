@@ -60,8 +60,9 @@ For manual registration, use a configured private runtime file and:
 
 This is a stdio server. Codex uses `codex mcp add`, Claude uses `mcpServers`,
 and OpenCode uses a local `mcp` entry with a command array and `environment`.
-The server inherits the agent's `TMUX_PANE` and finds the owning process through
-its parent chain. It requires a known native conversation binding. Direct
+For Codex, the server uses the per-call native thread ID, which also supports
+the shared app-server daemon. Claude and OpenCode use the inherited `TMUX_PANE`.
+The server verifies the owning process through its parent chain. It requires a known native conversation binding. Direct
 ACP/app-server sessions without a TMUX pane do not publish through this adapter.
 
 No project `AGENTS.md` change is required. Tool descriptions explain the feature.

@@ -25,13 +25,19 @@ def design_system():
  if not css:raise ValueError('Design system is not installed')
  return css+'\n\nUse the provided classes: eyebrow, subtitle, panel, metric, chips, row, stack, primary, visual. Theme variables --bg, --ink, --muted, --panel, --accent and --line automatically follow Android. Complete HTML/CSS/JS is supported. For actions call parent.postMessage({type:"send-prompt",text:"contextual question"},"*").'
 
-def publish(title,html):
+def publish(title,html,metadata=None):
  if not isinstance(title,str) or not title.strip() or len(title.encode())>160:raise ValueError('Title must contain 1–160 bytes')
  if not isinstance(html,str) or not html.strip() or len(html.encode())>262144:raise ValueError('HTML must contain 1–262144 bytes')
  url,token=runtime_config()
  if not url or not token:raise ValueError('AgentShell UI runtime is not configured')
  pid,start=owner()
- payload={'paneId':os.environ.get('AGENTSHELL_UI_PANE',os.environ.get('TMUX_PANE')),'agentPid':pid,'agentStart':start,'title':title,'html':html}
+ payload={'agentPid':pid,'agentStart':start,'title':title,'html':html}
+ if metadata is not None and not isinstance(metadata,dict):raise ValueError('Invalid MCP metadata')
+ thread_id=(metadata or {}).get('threadId')
+ if (Path('/proc')/str(pid)/'comm').read_text().strip()=='codex' and isinstance(thread_id,str):
+  payload['codexThreadId']=thread_id
+ else:
+  payload['paneId']=os.environ.get('AGENTSHELL_UI_PANE',os.environ.get('TMUX_PANE'))
  request=Request(url.rstrip('/')+'/api/chat/ui',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','X-Auth-Token':token},method='POST')
  with urlopen(request,timeout=10) as response:return json.load(response)
 
@@ -61,7 +67,7 @@ def run():
      print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
      continue
     if request['params']['name']!='render_interactive_ui':raise ValueError('Unknown tool')
-    args=request['params']['arguments'];artifact=publish(args['title'],args['html'])
+    args=request['params']['arguments'];artifact=publish(args['title'],args['html'],request['params'].get('_meta'))
     result={'content':[{'type':'text','text':'Interactive widget published: '+artifact['widgetId']}],'structuredContent':artifact}
    else:raise ValueError('Unsupported method')
    output={'jsonrpc':'2.0','id':request['id'],'result':result}

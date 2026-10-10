@@ -136,12 +136,40 @@ pub(crate) async fn start_watch(
                             pane_target = Some(binding.pane.pane_id.clone());
                         }
                         if send_value(&tx, serde_json::json!({"type":"chat-binding","sessionName":session,"windowIndex":window,"state":resolved})).await.is_err() { return; }
+                        if let Some(binding) = resolved
+                            .binding
+                            .as_ref()
+                            .filter(|b| b.transcript_path.as_os_str().is_empty())
+                        {
+                            let overlay = events
+                                .list_messages(binding.storage_key(), 0)
+                                .unwrap_or_default();
+                            let _ = send_bound(
+                                &tx,
+                                ServerMessage::ChatHistory {
+                                    session_name: session.clone(),
+                                    window_index: window,
+                                    messages: overlay,
+                                    tool: Some(binding.ai_tool()),
+                                    has_more: false,
+                                    total_count: 0,
+                                    context_window_usage: None,
+                                    model_name: None,
+                                },
+                                binding,
+                            )
+                            .await;
+                        }
                         if resolved.status == "required" {
                             let _ = send_message(&tx, ServerMessage::ChatLogError { error: "Waiting for this terminal's conversation to be identified automatically. Start or resume the agent in the terminal if it has not reported a conversation yet".into() }).await;
                         }
                         last = signature;
                     }
                     if let Some(binding) = resolved.binding {
+                        if binding.transcript_path.as_os_str().is_empty() {
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            continue;
+                        }
                         if child.0.as_ref().map(|h| h.is_finished()).unwrap_or(true) {
                             let tx = tx.clone();
                             let events = events.clone();

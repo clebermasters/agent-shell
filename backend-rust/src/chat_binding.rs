@@ -113,7 +113,11 @@ fn remember(binding: &ChatBinding) {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     sources.retain(|_, b| process_start(b.pane.agent_pid).ok() == Some(b.pane.agent_start));
-    sources.insert(binding.pane.root_pid, binding.clone());
+    if binding.transcript_path.as_os_str().is_empty() {
+        sources.remove(&binding.pane.root_pid);
+    } else {
+        sources.insert(binding.pane.root_pid, binding.clone());
+    }
 }
 pub(crate) fn registered_source(root_pid: u32) -> Option<(u32, PathBuf, String, String)> {
     let sources = SOURCES.get_or_init(Mutex::default).lock().ok()?;
@@ -279,6 +283,71 @@ impl BindingStore {
         Ok(binding)
     }
     pub fn resolve_pane(&self, pane: PaneIdentity) -> Result<BindingState> {
+        self.resolve_pane_with_terminal(pane, None)
+    }
+    fn resolve_pane_with_terminal(
+        &self,
+        mut pane: PaneIdentity,
+        terminal_id: Option<String>,
+    ) -> Result<BindingState> {
+        if let Some(id) = terminal_id {
+            // The terminal's current native ID takes precedence over cached hooks,
+            // including when /new or /resume changes threads in the same TUI process.
+            // Codex allocates the ID before the first turn materializes its
+            // transcript. The explicit native footer also identifies that state.
+            let conversation =
+                conversation_by_id("codex", &pane.cwd, &id, None).unwrap_or_else(|_| {
+                    Conversation {
+                        id: id.clone(),
+                        tool: "codex".into(),
+                        title: "New Codex conversation".into(),
+                        updated_at: 0,
+                        path: PathBuf::new(),
+                    }
+                });
+            if let Ok(connection) = Connection::open_with_flags(
+                home()?.join(".codex/state_5.sqlite"),
+                OpenFlags::SQLITE_OPEN_READ_ONLY,
+            ) {
+                if let Ok(cwd) =
+                    connection.query_row("SELECT cwd FROM threads WHERE id=?", [&id], |r| {
+                        r.get::<_, String>(0)
+                    })
+                {
+                    if Path::new(&cwd).is_absolute() {
+                        pane.cwd = cwd;
+                    }
+                }
+            }
+            let observed = self
+                .current(&pane)?
+                .filter(|b| {
+                    b.pane.token() == pane.token()
+                        && b.conversation_id == id
+                        && b.source == "terminal-id"
+                })
+                .map(|b| b.registered_at)
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let binding =
+                self.bind_reported(pane.clone(), conversation, "terminal-id", observed)?;
+            return Ok(bound_state(pane, binding));
+        }
+        if self
+            .current(&pane)?
+            .is_some_and(|b| b.pane.token() == pane.token() && b.source == "terminal-id")
+        {
+            if let Ok(mut sources) = SOURCES.get_or_init(Mutex::default).lock() {
+                sources.remove(&pane.root_pid);
+            }
+            return Ok(BindingState {
+                status: "required".into(),
+                pane_token: pane.token(),
+                tool: pane.tool,
+                binding: None,
+                candidates: vec![],
+                detail: "Show Session ID in Codex /statusline to identify this conversation".into(),
+            });
+        }
         if pane.tool == "kiro" {
             let id = format!(
                 "terminal-{}-{}-{}",
@@ -360,8 +429,14 @@ impl BindingStore {
         self.resolve_inspected_pane(pane).await
     }
     pub async fn resolve_inspected_pane(&self, pane: PaneIdentity) -> Result<BindingState> {
+        let terminal_id = if pane.tool == "codex" {
+            codex_terminal_id(&pane).await?
+        } else {
+            None
+        };
         let store = self.clone();
-        tokio::task::spawn_blocking(move || store.resolve_pane(pane)).await?
+        tokio::task::spawn_blocking(move || store.resolve_pane_with_terminal(pane, terminal_id))
+            .await?
     }
     pub async fn validate(&self, binding: &ChatBinding) -> Result<()> {
         let live = inspect_pane(&binding.pane.pane_id).await?;
@@ -381,6 +456,136 @@ impl BindingStore {
         }
         Ok(())
     }
+}
+
+/// Only read Codex's native footer below the input cursor. UUIDs in assistant
+/// text, the draft, menus, or scrollback are not conversation identity.
+fn parse_codex_terminal_id(screen: &str, cursor_y: usize) -> Option<String> {
+    let lines: Vec<_> = screen.lines().collect();
+    let last = lines.iter().rposition(|line| !line.trim().is_empty())?;
+    let footer_index = if lines[last].trim_end().ends_with("? for shortcuts") {
+        last.checked_sub(1)?
+    } else if last + 2 == lines.len() && lines.last()?.trim().is_empty() {
+        // The shortcuts hint is hidden while the composer contains a draft,
+        // including between our bracketed paste and its guarded Enter.
+        last
+    } else {
+        return None;
+    };
+    if footer_index <= cursor_y + 1 || !lines.get(footer_index - 1)?.trim().is_empty() {
+        return None;
+    }
+    let footer = lines.get(footer_index)?.trim();
+    let id = footer.split(" · ").next()?.trim();
+    if id.len() != 36
+        || !id.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+    {
+        return None;
+    }
+    Some(id.to_ascii_lowercase())
+}
+
+pub(crate) async fn codex_terminal_id(pane: &PaneIdentity) -> Result<Option<String>> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::process::Command::new("tmux")
+            .args([
+                "display-message",
+                "-p",
+                "-t",
+                &pane.pane_id,
+                "#{pid} #{pane_pid} #{cursor_y} #{pane_height}",
+                ";",
+                "capture-pane",
+                "-p",
+                "-t",
+                &pane.pane_id,
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await??;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = String::from_utf8(output.stdout)?;
+    let Some((header, screen)) = text.split_once('\n') else {
+        return Ok(None);
+    };
+    let fields: Vec<_> = header.split_whitespace().collect();
+    if fields.len() != 4
+        || fields[0].parse::<u32>().ok() != Some(pane.server_pid)
+        || fields[1].parse::<u32>().ok() != Some(pane.root_pid)
+    {
+        return Ok(None);
+    }
+    let cursor = fields[2].parse::<usize>()?;
+    Ok(parse_codex_terminal_id(screen, cursor))
+}
+
+/// Resolve MCP's per-call thread ID to one foreground client, independently of
+/// the shared server's inherited TMUX environment. The publisher must actually
+/// own this transcript (or be that terminal's legacy in-process Codex).
+pub(crate) async fn resolve_codex_publisher(
+    store: &BindingStore,
+    pid: u32,
+    start: u64,
+    id: &str,
+) -> Result<ChatBinding> {
+    if native_tool(pid).as_deref() != Some("codex") || process_start(pid)? != start || !valid_id(id)
+    {
+        bail!("The Codex publisher has changed");
+    }
+    let output = tokio::process::Command::new("tmux")
+        .args(["list-panes", "-a", "-F", "#{pane_id}"])
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Unable to identify the current terminal"
+    );
+    let mut matches = Vec::new();
+    for target in String::from_utf8(output.stdout)?.lines() {
+        let Ok(pane) = inspect_pane(target).await else {
+            continue;
+        };
+        if pane.tool != "codex" {
+            continue;
+        }
+        let Ok(state) = store.resolve_inspected_pane(pane).await else {
+            continue;
+        };
+        if let Some(binding) = state.binding {
+            if binding.conversation_id == id {
+                matches.push(binding);
+            }
+        }
+    }
+    anyhow::ensure!(
+        matches.len() == 1,
+        "The Codex conversation must be open in exactly one identified terminal"
+    );
+    let binding = matches.pop().unwrap();
+    let owns_transcript = fs::read_dir(format!("/proc/{pid}/fd"))?
+        .flatten()
+        .filter_map(|f| fs::read_link(f.path()).ok())
+        .any(|p| p == binding.transcript_path);
+    anyhow::ensure!(
+        pid == binding.pane.agent_pid || owns_transcript,
+        "Publisher does not own this conversation"
+    );
+    anyhow::ensure!(
+        process_start(pid)? == start,
+        "The Codex publisher has changed"
+    );
+    Ok(binding)
 }
 
 fn bound_state(pane: PaneIdentity, binding: ChatBinding) -> BindingState {
@@ -1130,5 +1335,41 @@ mod tests {
             assert!(!valid_id(id));
         }
         assert!(valid_id("01a11981-6ad0-7300-94d2-c653ae4a0973"));
+    }
+
+    #[test]
+    fn codex_identity_is_only_the_full_native_footer_below_the_cursor() {
+        let id = "01a11981-6ad0-7300-94d2-c653ae4a0973";
+        assert_eq!(parse_codex_terminal_id(&format!("Agent output\n› draft\n\n  {id} · model · folder\n  ← for agents · ? for shortcuts\n"), 1), Some(id.into()));
+        assert_eq!(
+            parse_codex_terminal_id(&format!("Agent output\n› draft\n\n  {id}\n\n"), 1),
+            Some(id.into())
+        );
+        for screen in [
+            format!("  {id}\n› draft\n\nmodel · folder\n? for shortcuts"),
+            format!("› draft\n  {id}\nmodel\n? for shortcuts"),
+            format!("› {id}\n\nmodel\n? for shortcuts"),
+            "› draft\n\n  01a11981-6ad0-7300-94d2…\n? for shortcuts".into(),
+            format!("› draft\n\nSession ID: {id}\nEnter to select"),
+        ] {
+            assert!(parse_codex_terminal_id(&screen, 1).is_none(), "{screen}");
+        }
+    }
+
+    #[test]
+    fn hiding_terminal_identity_does_not_reuse_a_cached_conversation() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = store(&directory);
+        let identity = pane("%1");
+        store
+            .bind(
+                identity.clone(),
+                conversation("conversation-A"),
+                "terminal-id",
+            )
+            .unwrap();
+        let state = store.resolve_pane_with_terminal(identity, None).unwrap();
+        assert_eq!(state.status, "required");
+        assert!(state.binding.is_none());
     }
 }

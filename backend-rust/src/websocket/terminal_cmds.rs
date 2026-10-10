@@ -604,6 +604,8 @@ mod tests {
             audio_tx: None,
             message_tx: tx,
             chat_log_handle: Arc::new(Mutex::new(None)),
+            chat_target: None,
+            chat_binding: Arc::new(tokio::sync::Mutex::new(None)),
             chat_activity_handle: None,
             chat_file_storage,
             chat_event_store,

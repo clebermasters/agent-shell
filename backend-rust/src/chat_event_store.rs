@@ -10,6 +10,7 @@ use crate::chat_log::ChatMessage;
 #[derive(Debug, Clone)]
 pub struct ChatEventStore {
     db_path: PathBuf,
+    pub bindings: crate::chat_binding::BindingStore,
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +26,8 @@ pub struct StoredChatEvent {
 impl ChatEventStore {
     pub fn new(base_dir: PathBuf) -> Result<Self> {
         let db_path = base_dir.join("chat_events.db");
-        let store = Self { db_path };
+        let bindings = crate::chat_binding::BindingStore::new(db_path.clone())?;
+        let store = Self { db_path, bindings };
         store.init()?;
         Ok(store)
     }

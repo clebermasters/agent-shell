@@ -14,6 +14,8 @@ import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatMessageType
 import com.agentshell.data.model.ChatMessageParser
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.ChatBindingState
+import com.agentshell.data.model.acceptsConversationPacket
 import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.ChatReadState
 import com.agentshell.data.model.ChatCursor
@@ -114,6 +116,8 @@ data class ChatUiState(
     val failedTranscriptionJobId: String? = null,
     val attachedFile: AttachedFile? = null,
     val isUploading: Boolean = false,
+    val isSending: Boolean = false,
+    val bindingState: ChatBindingState? = null,
     val totalMessageCount: Int = 0,
     val hasMoreMessages: Boolean = false,
     val showThinking: Boolean = true,
@@ -183,8 +187,7 @@ class ChatViewModel @Inject constructor(
     private var messageCollectionJob: Job? = null
     private var pendingAcpChunk: PendingAcpChunk? = null
     private var acpChunkFlushJob: Job? = null
-    private var hasSeenConnectedState = false
-    private var shouldResubscribeOnReconnect = false
+    private val connectionRecovery = ChatConnectionRecovery()
     private var readTarget: ChatTarget? = null
     private var readState: ChatReadState? = null
     private var readHostServerUrl: String? = null
@@ -195,6 +198,8 @@ class ChatViewModel @Inject constructor(
     private var screenActive = false
     private var followingLive = false
     private val transcriptionReceipt = TranscriptionReceipt()
+    private data class PendingSend(val id: String, val text: String, val file: AttachedFile?, val draftKey: String, val bindingId: String)
+    private var pendingSend: PendingSend? = null
 
     private fun newMessageList(messages: List<ChatMessage> = emptyList()): SnapshotStateList<ChatMessage> =
         mutableStateListOf<ChatMessage>().apply { addAll(messages) }
@@ -281,7 +286,12 @@ class ChatViewModel @Inject constructor(
         }
         screenActive = active
         chatActivityRepository.setViewing(readOwner, readTarget, active && followingLive)
-        if (active) updateUnreadBoundary()
+        if (active) {
+            updateUnreadBoundary()
+            if (connectionRecovery.pending && webSocketService.isConnected) {
+                resubscribeActiveChat("screen resumed after reconnect")
+            }
+        }
     }
 
     fun setFollowingLive(following: Boolean) {
@@ -382,29 +392,10 @@ class ChatViewModel @Inject constructor(
     private fun observeConnectionRecovery() {
         viewModelScope.launch {
             webSocketService.connectionStatus.collect { status ->
-                    when (status) {
-                        com.agentshell.data.model.ConnectionStatus.CONNECTED -> {
-                            if (!hasSeenConnectedState) {
-                                hasSeenConnectedState = true
-                                logDebug("Chat connection established for session=${_uiState.value.sessionName}")
-                            } else if (shouldResubscribeOnReconnect) {
-                                val state = _uiState.value
-                                logDebug(
-                                    "Chat reconnect detected; resubscribing session=${state.sessionName} window=${state.windowIndex} isAcp=${state.isAcp} messageCount=${state.messages.size}"
-                                )
-                                resubscribeActiveChat("reconnected")
-                            }
-                        }
-                        com.agentshell.data.model.ConnectionStatus.RECONNECTING,
-                        com.agentshell.data.model.ConnectionStatus.OFFLINE -> {
-                            if (hasSeenConnectedState) {
-                                shouldResubscribeOnReconnect = true
-                                logDebug("Chat connection lost; will resubscribe when connected status=${status.name} session=${_uiState.value.sessionName}")
-                            }
-                        }
-                        com.agentshell.data.model.ConnectionStatus.CONNECTING -> Unit
-                    }
+                if (connectionRecovery.onConnection(status, screenActive)) {
+                    resubscribeActiveChat("reconnected")
                 }
+            }
         }
     }
 
@@ -434,7 +425,7 @@ class ChatViewModel @Inject constructor(
             webSocketService.getSessionCwd(state.sessionName)
         }
 
-        shouldResubscribeOnReconnect = false
+        connectionRecovery.pending = false
     }
 
     // -------------------------------------------------------------------------
@@ -468,7 +459,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             transcriptionQueue.successEvents.collect { event ->
                 if (event.source == com.agentshell.data.model.TranscriptionJob.Source.CHAT) {
-                    receiveTranscription(event.jobId, event.text)
+                    receiveTranscription(event.jobId, event.text, event.sourceSessionId)
                 }
             }
         }
@@ -477,7 +468,7 @@ class ChatViewModel @Inject constructor(
             transcriptionQueue.pendingResult.collect { result ->
                 if (result == null || result.source != com.agentshell.data.model.TranscriptionJob.Source.CHAT) return@collect
                 when (result) {
-                    is TranscriptionQueueService.PendingResult.Success -> receiveTranscription(result.jobId, result.text)
+                    is TranscriptionQueueService.PendingResult.Success -> receiveTranscription(result.jobId, result.text, result.sourceSessionId)
                     is TranscriptionQueueService.PendingResult.Failed -> _uiState.update {
                         it.copy(isTranscribing = false, transcriptionError = result.error, failedTranscriptionJobId = result.jobId)
                     }
@@ -511,7 +502,7 @@ class ChatViewModel @Inject constructor(
     fun watchChatLog(sessionName: String, windowIndex: Int) {
         agentActivityJob?.cancel()
         clearPendingAcpChunk()
-        shouldResubscribeOnReconnect = false
+        connectionRecovery.watchStarted(webSocketService.isConnected)
         _uiState.update {
             it.copy(
                 sessionName = sessionName,
@@ -522,10 +513,10 @@ class ChatViewModel @Inject constructor(
                 messages = newMessageList(),
                 error = null,
                 sessionCwd = "",
+                bindingState = ChatBindingState("checking", "", "", null, emptyList(), "Linking this terminal…"),
             )
         }
         logDebug("Initial TMUX chat watch session=$sessionName window=$windowIndex")
-        hasSeenConnectedState = false
         restoreDraft(draftKey(sessionName, windowIndex))
         viewModelScope.launch {
             prepareReadTracking(sessionName, windowIndex, false)
@@ -538,7 +529,7 @@ class ChatViewModel @Inject constructor(
     fun startAcpChat(sessionName: String, cwd: String) {
         agentActivityJob?.cancel()
         clearPendingAcpChunk()
-        shouldResubscribeOnReconnect = false
+        connectionRecovery.watchStarted(webSocketService.isConnected)
         val sessionKey = "acp_$sessionName"
         _uiState.update {
             it.copy(
@@ -551,10 +542,10 @@ class ChatViewModel @Inject constructor(
                 error = null,
                 pendingPermission = null,
                 sessionCwd = cwd,
+                bindingState = null,
             )
         }
         logDebug("Initial ACP chat watch session=$sessionName backend=${directBackendForSession(sessionName)} cwd=${cwd.isNotBlank()}")
-        hasSeenConnectedState = false
         restoreDraft(draftKey(sessionKey, 0))
         viewModelScope.launch {
             prepareReadTracking(sessionName, 0, true, cwd)
@@ -570,7 +561,7 @@ class ChatViewModel @Inject constructor(
     fun unwatchChatLog() {
         val state = _uiState.value
         logDebug("Stopping chat watch session=${state.sessionName} window=${state.windowIndex} isAcp=${state.isAcp}")
-        shouldResubscribeOnReconnect = false
+        connectionRecovery.pending = false
         webSocketService.unwatchChatLog()
     }
 
@@ -578,7 +569,7 @@ class ChatViewModel @Inject constructor(
         val state = _uiState.value
         if (state.sessionName.isBlank()) return
 
-        shouldResubscribeOnReconnect = true
+        connectionRecovery.pending = true
         if (webSocketService.isConnected) {
             logDebug(
                 "Refreshing active chat immediately reason=$reason session=${state.sessionName} window=${state.windowIndex} isAcp=${state.isAcp}"
@@ -617,11 +608,19 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(text: String) {
         val state = _uiState.value
-        if (state.isUploading) return
+        if (state.isUploading || state.isSending) return
         val trimmed = text.trim()
 
         // Guard: don't send to tmux with an empty session name
         if (!state.isAcp && state.sessionName.isBlank()) return
+        if (!state.isAcp && state.bindingState != null) {
+            if (!state.bindingState.canSend) {
+                _uiState.update { it.copy(error = "Waiting for this terminal’s conversation to be identified automatically") }
+                return
+            }
+            sendBoundMessage(text, state)
+            return
+        }
 
         // Handle file attachment upload
         val file = state.attachedFile
@@ -696,6 +695,92 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private fun sendBoundMessage(text: String, state: ChatUiState) {
+        val binding = state.bindingState?.binding ?: return
+        if (text.isBlank() && state.attachedFile == null) return
+        val server = webSocketService.currentWebSocketUrl
+        if (server == null || server.substringBefore('?') != readHostServerUrl) {
+            _uiState.update { it.copy(error = "Wait for this chat’s server connection before sending") }
+            return
+        }
+        val pending = PendingSend(UUID.randomUUID().toString(), text, state.attachedFile, draftKey(state.sessionName, state.windowIndex), binding.id)
+        pendingSend = pending
+        _uiState.update { it.copy(isSending = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val payload = buildMap<String, Any?> {
+                    put("type", if (pending.file == null) "send-bound-chat-message" else "send-bound-file-to-chat")
+                    put("bindingId", binding.id); put("requestId", pending.id)
+                    put("sessionName", state.sessionName); put("windowIndex", state.windowIndex)
+                    if (pending.file == null) put("message", text.trim()) else {
+                        val data = withContext(Dispatchers.IO) { encodeChatAttachment(app.contentResolver.openInputStream(android.net.Uri.parse(pending.file.uri))) }
+                        put("file", mapOf("filename" to pending.file.filename, "mimeType" to pending.file.mimeType, "data" to data))
+                        put("prompt", text.trim().ifBlank { null })
+                    }
+                }
+                if (!webSocketService.sendIfConnected(payload, server)) throw java.io.IOException("Unable to send. Your draft is still here; check the connection")
+                delay(30_000)
+                if (pendingSend?.id == pending.id) {
+                    pendingSend = null
+                    _uiState.update { it.copy(isSending = false, error = "Submission was not confirmed. Your draft is still here; check the conversation before retrying") }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (pendingSend?.id == pending.id) {
+                    pendingSend = null
+                    _uiState.update { it.copy(isSending = false, error = error.message ?: "Unable to send this draft") }
+                }
+            }
+        }
+    }
+
+    private fun handleSendResult(message: Map<String, Any?>) {
+        val pending = pendingSend ?: return
+        if (message["requestId"] != pending.id) return
+        pendingSend = null
+        val success = message["success"] == true
+        _uiState.update { current ->
+            val sameConversation = current.bindingState?.binding?.id == pending.bindingId
+            current.copy(isSending = false,
+                draftMessage = if (success && sameConversation && current.draftMessage == pending.text) "" else current.draftMessage,
+                attachedFile = if (success && sameConversation && current.attachedFile == pending.file) null else current.attachedFile,
+                error = if (success) null else message["error"] as? String ?: "The conversation changed. Your draft has been kept")
+        }
+        if (success) {
+            viewModelScope.launch { if (dataStore.getDraftMessage(pending.draftKey) == pending.text) dataStore.setDraftMessage(pending.draftKey, "") }
+            if (_uiState.value.bindingState?.binding?.id == pending.bindingId) {
+                if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = ""
+                clearSharedAttachment()
+            }
+        }
+    }
+
+    private suspend fun handleBinding(message: Map<String, Any?>) {
+        val current = _uiState.value
+        if (message["sessionName"] != current.sessionName || (message["windowIndex"] as? Number)?.toInt() != current.windowIndex || current.isAcp) return
+        val next = ChatBindingState.parse(message) ?: return
+        val oldKey = current.bindingState?.binding?.conversationKey
+        val newKey = next.binding?.conversationKey
+        val changed = oldKey != newKey
+        if (changed && oldKey != null) saveDraft(draftKey(current.sessionName, current.windowIndex), current.draftMessage)
+        _uiState.update { it.copy(bindingState = next, detectedTool = next.tool.ifBlank { it.detectedTool },
+            isLoading = changed && next.canSend, isLoadingMore = false, error = null,
+            pendingPermission = if (changed) null else it.pendingPermission,
+            firstUnreadMessageId = if (changed) null else it.firstUnreadMessageId) }
+        if (changed) {
+            _uiState.value.messages.clear()
+            visitUnreadCursor = null
+            if (newKey != null) {
+                val key = draftKey(current.sessionName, current.windowIndex)
+                val saved = dataStore.getDraftMessage(key)
+                val draft = saved ?: if (oldKey == null) _uiState.value.draftMessage else ""
+                _uiState.update { it.copy(draftMessage = draft, attachedFile = if (oldKey == null) it.attachedFile else null) }
+                if (saved == null && draft.isNotBlank()) dataStore.setDraftMessage(key, draft)
+            }
+        }
+        readTarget?.let { chatActivityRepository.linkConversation(it, next) }
+    }
+
     // -------------------------------------------------------------------------
     // Pagination
     // -------------------------------------------------------------------------
@@ -709,6 +794,7 @@ class ChatViewModel @Inject constructor(
                 windowIndex = state.windowIndex,
                 offset = state.messages.size,
             limit = 50,
+            bindingId = state.bindingState?.binding?.id,
         )
     }
 
@@ -732,7 +818,7 @@ class ChatViewModel @Inject constructor(
             val rawId = state.sessionName.removePrefix("acp_")
             webSocketService.acpClearHistory(rawId)
         } else {
-            webSocketService.clearChatLog(state.sessionName, state.windowIndex)
+            webSocketService.clearChatLog(state.sessionName, state.windowIndex, state.bindingState?.binding?.id)
         }
     }
 
@@ -752,6 +838,7 @@ class ChatViewModel @Inject constructor(
     // -------------------------------------------------------------------------
 
     fun startVoiceRecording() {
+        if (_uiState.value.bindingState?.canSend == false) { _uiState.update { it.copy(error = "Waiting for this terminal’s conversation before recording") }; return }
         viewModelScope.launch { audioService.startRecording() }
     }
 
@@ -760,12 +847,21 @@ class ChatViewModel @Inject constructor(
             val path = audioService.stopRecording() ?: return@launch
             _uiState.update { it.copy(isTranscribing = true, transcriptionError = null) }
             val apiKey = dataStore.openaiApiKey.first()
-            transcriptionQueue.enqueue(path, apiKey, com.agentshell.data.model.TranscriptionJob.Source.CHAT)
+            val state = _uiState.value
+            transcriptionQueue.enqueue(path, apiKey, com.agentshell.data.model.TranscriptionJob.Source.CHAT, draftKey(state.sessionName, state.windowIndex))
         }
     }
 
-    private fun receiveTranscription(jobId: String, text: String) {
+    private fun receiveTranscription(jobId: String, text: String, context: String?) {
         if (!transcriptionReceipt.accept(jobId)) return
+        val current = _uiState.value
+        if (context != null && context != draftKey(current.sessionName, current.windowIndex)) {
+            viewModelScope.launch {
+                val original = dataStore.getDraftMessage(context).orEmpty()
+                dataStore.setDraftMessage(context, mergeSharedText(original, text))
+            }
+            return // A late recording stays with the conversation it was recorded for.
+        }
         _uiState.update { it.copy(isTranscribing = false, transcribedText = text, transcriptionError = null, failedTranscriptionJobId = null) }
     }
 
@@ -823,8 +919,9 @@ class ChatViewModel @Inject constructor(
         if (navShareId.isNotBlank()) viewModelScope.launch { sharedContentRepository.discard(navShareId) }
     }
 
-    private fun draftKey(sessionName: String, windowIndex: Int) =
-        "chat_draft_${sessionName}_$windowIndex"
+    private fun draftKey(sessionName: String, windowIndex: Int): String = _uiState.value.bindingState?.binding?.conversationKey?.let {
+        "chat_draft_native_${readHostServerUrl.orEmpty()}:$it"
+    } ?: "chat_draft_${sessionName}_$windowIndex"
 
     private fun saveDraft(key: String, text: String) {
         viewModelScope.launch {
@@ -867,6 +964,9 @@ class ChatViewModel @Inject constructor(
             chatRepository.chatMessages.collect { message ->
                 if (readHostServerUrl != null && message["_sourceServerUrl"] != null && message["_sourceServerUrl"] != readHostServerUrl) return@collect
                 if (!chatRepository.isChatMessage(message)) return@collect
+                if (message["type"] == "chat-binding") { handleBinding(message); return@collect }
+                if (message["type"] == "chat-send-result") { handleSendResult(message); return@collect }
+                if (!_uiState.value.bindingState.acceptsConversationPacket(message)) return@collect
                 when (val type = message["type"] as? String) {
                     "chat-history"       -> handleChatHistory(message)
                     "chat-history-chunk" -> handleChatHistoryChunk(message)
@@ -922,7 +1022,8 @@ class ChatViewModel @Inject constructor(
         val totalCount = (message["totalCount"] as? Number)?.toInt() ?: parsed.size
         val hasMore = message["hasMore"] as? Boolean ?: false
 
-        val tool = (message["tool"] as? String)?.lowercase()
+        val tool = (message["tool"] as? String)?.lowercase() ?: state.bindingState?.tool
+        if (message["bindingId"] == null && state.bindingState?.status == "checking") _uiState.update { it.copy(bindingState = null) }
         val ctxUsage = (message["contextWindowUsage"] as? Number)?.toDouble()
         val model = message["modelName"] as? String
 

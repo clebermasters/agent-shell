@@ -37,6 +37,7 @@ data class TranscriptionSuccessEvent(
     val jobId: String,
     val text: String,
     val source: TranscriptionJob.Source,
+    val sourceSessionId: String? = null,
 )
 
 @Singleton
@@ -72,7 +73,7 @@ class TranscriptionQueueService @Inject constructor(
 
     sealed class PendingResult {
         abstract val source: TranscriptionJob.Source
-        data class Success(val text: String, val jobId: String, override val source: TranscriptionJob.Source) : PendingResult()
+        data class Success(val text: String, val jobId: String, override val source: TranscriptionJob.Source, val sourceSessionId: String? = null) : PendingResult()
         data class Failed(val jobId: String, val error: String, override val source: TranscriptionJob.Source) : PendingResult()
     }
 
@@ -172,12 +173,12 @@ class TranscriptionQueueService @Inject constructor(
 
                     // Notify caller
                     if (attempt == 0) {
-                        _pendingResult.value = PendingResult.Success(text, currentJob.id, currentJob.source)
+                        _pendingResult.value = PendingResult.Success(text, currentJob.id, currentJob.source, currentJob.sourceSessionId)
                     }
 
                     // Notify any observers (e.g. for retries that succeed later)
                     _successEvents.emit(
-                        TranscriptionSuccessEvent(currentJob.id, text, currentJob.source)
+                        TranscriptionSuccessEvent(currentJob.id, text, currentJob.source, currentJob.sourceSessionId)
                     )
                     return
                 }

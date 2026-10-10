@@ -11,6 +11,7 @@ struct Source {
     pid: u32,
     path: PathBuf,
     tool: String,
+    conversation_key: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub(super) struct Evidence {
@@ -21,6 +22,7 @@ pub(super) struct Evidence {
     pub turn_id: Option<String>,
     pub source: &'static str,
     pub completion_reason: Option<&'static str>,
+    pub conversation_key: Option<String>,
 }
 
 #[derive(Default)]
@@ -31,7 +33,7 @@ pub(super) struct Reader {
 }
 impl Reader {
     pub fn refresh(mut self, root_pid: u32, discover: bool) -> (Self, Option<Evidence>) {
-        if discover || self.source.is_none() {
+        if discover || self.source.is_none() || crate::chat_binding::registered_source(root_pid).map(|source| Some(source.3) != self.source.as_ref().and_then(|s| s.conversation_key.clone())).unwrap_or(false) {
             let found = discover_source(root_pid);
             if found != self.source {
                 self.source = found;
@@ -90,7 +92,8 @@ impl Reader {
             } // Re-read an incomplete append next time.
             complete_position = reader.stream_position()?;
             if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                if let Some(next) = parse(&source.tool, &value, self.evidence.as_ref()) {
+                if let Some(mut next) = parse(&source.tool, &value, self.evidence.as_ref()) {
+                    next.conversation_key = source.conversation_key.clone();
                     self.evidence = Some(next);
                 }
             }
@@ -102,6 +105,9 @@ impl Reader {
 
 // Never select the newest log by CWD: two agents may share the same directory.
 fn discover_source(root_pid: u32) -> Option<Source> {
+    if let Some((pid, path, tool, key)) = crate::chat_binding::registered_source(root_pid) {
+        if tool == "codex" || tool == "claude" { return Some(Source { pid, path, tool, conversation_key: Some(key) }); }
+    }
     let descendants = crate::chat_log::watcher::get_descendant_pids(root_pid).ok()?;
     for pid in std::iter::once(root_pid).chain(descendants) {
         let Some((tool, _)) = crate::chat_log::watcher::detect_tool_for_pid(pid) else {
@@ -133,6 +139,7 @@ fn discover_source(root_pid: u32) -> Option<Source> {
                 pid,
                 path: paths.remove(0),
                 tool,
+                conversation_key: None,
             });
         }
     }
@@ -189,6 +196,7 @@ fn parse(tool: &str, value: &Value, previous: Option<&Evidence>) -> Option<Evide
             }
         }
         return Some(Evidence {
+            conversation_key: None,
             status,
             detail: match kind {
                 "task_started" => "Agent is working",
@@ -233,6 +241,7 @@ fn parse(tool: &str, value: &Value, previous: Option<&Evidence>) -> Option<Evide
             });
         if completed || is_input {
             return Some(Evidence {
+                conversation_key: None,
                 status: if completed {
                     ActivityStatus::Idle
                 } else {
@@ -376,6 +385,7 @@ mod tests {
                 pid: std::process::id(),
                 path: file.path().into(),
                 tool: "codex".into(),
+                conversation_key: None,
             }),
             ..Reader::default()
         };
@@ -414,6 +424,7 @@ mod tests {
                 pid: std::process::id(),
                 path: file.path().into(),
                 tool: "codex".into(),
+                conversation_key: None,
             }),
             ..Reader::default()
         };
@@ -440,6 +451,7 @@ mod tests {
                 pid: std::process::id(),
                 path: file.path().into(),
                 tool: "codex".into(),
+                conversation_key: None,
             }),
             ..Reader::default()
         };

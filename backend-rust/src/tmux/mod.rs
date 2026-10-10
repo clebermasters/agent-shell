@@ -9,7 +9,7 @@ use crate::chat_log::watcher::detect_tool_name;
 use crate::types::{TmuxSession, TmuxWindow};
 
 mod input;
-pub use input::send_text_and_enter;
+pub use input::{send_text_and_enter, send_bound_text_and_enter};
 
 /// Get the current working directory of a tmux session.
 pub fn get_session_path(session_name: &str) -> Option<PathBuf> {

@@ -23,6 +23,8 @@ class ChatRepository @Inject constructor(
         private val CHAT_MESSAGE_TYPES = setOf(
             // TMUX chat log messages
             "chat-history",
+            "chat-binding",
+            "chat-send-result",
             "chat-history-chunk",
             "chat-event",
             "chat-activity",

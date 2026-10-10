@@ -45,6 +45,8 @@ pub struct ActivityState {
     pub finished_at: Option<i64>,
     pub completion_reason: Option<String>,
     pub quiet_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_key: Option<String>,
 }
 
 impl ActivityState {
@@ -63,6 +65,7 @@ impl ActivityState {
             finished_at: None,
             completion_reason: None,
             quiet_at: None,
+            conversation_key: None,
         }
     }
 }
@@ -178,6 +181,7 @@ impl Tracker {
         self.state.completion_reason = None;
         self.state.quiet_at = None;
         self.state.turn_id = None;
+        self.state.conversation_key = None;
         let signal = terminal::classify(text, &pane.command);
         self.state.status = if pane.dead {
             ActivityStatus::Failed
@@ -242,6 +246,7 @@ impl Tracker {
         self.state.quiet_at = None;
         self.state.finished_at = None;
         self.state.completion_reason = None;
+        self.state.conversation_key = None;
     }
 }
 
@@ -274,8 +279,12 @@ async fn observe_pane(original: Pane, sender: watch::Sender<ActivityState>) {
                             if !pane.dead {
                                 if let Some(native) = evidence {
                                     lifecycle::apply(&mut tracker.state, &native);
+                                    tracker.state.conversation_key = native.conversation_key;
                                 }
                             }
+                        }
+                        if tracker.state.conversation_key.is_none() {
+                            tracker.state.conversation_key = crate::chat_binding::registered_source(root_pid).map(|source| source.3);
                         }
                     }
                     Err(_) => tracker.unavailable(),

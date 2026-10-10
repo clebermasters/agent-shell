@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use super::types::{merge_history_messages, send_message, WsState};
@@ -21,18 +20,6 @@ fn session_key_for_external_id(external_id: &str) -> String {
     format!("acp_{external_id}")
 }
 
-fn resolve_chat_upload_target_dir(session_name: &str) -> Option<PathBuf> {
-    #[cfg(test)]
-    {
-        let _ = session_name;
-        None
-    }
-
-    #[cfg(not(test))]
-    {
-        crate::tmux::get_session_path(session_name)
-    }
-}
 
 async fn load_codex_history(
     app_state: Arc<AppState>,
@@ -93,404 +80,31 @@ pub(crate) async fn handle(
     state: &mut WsState,
     app_state: Arc<AppState>,
 ) -> anyhow::Result<()> {
+    match &msg {
+        WebSocketMessage::LoadMoreChatHistory { session_name, window_index, offset, limit } if !session_name.starts_with("acp_") => {
+            return super::binding_cmds::load_more(state, session_name.clone(), *window_index, *offset, *limit).await;
+        },
+        WebSocketMessage::ClearChatLog { session_name, window_index } if !session_name.starts_with("acp_") => {
+            return super::binding_cmds::clear(state, session_name.clone(), *window_index).await;
+        },
+        _ => {},
+    }
     match msg {
         WebSocketMessage::GetAgentActivities => {
             for snapshot in crate::chat_activity::direct_snapshots() {
                 send_message(&state.message_tx, snapshot).await?;
             }
         }
-        WebSocketMessage::WatchChatLog {
-            session_name,
-            window_index,
-            limit,
-        } => {
-            info!(
-                "Starting chat log watch for client={} session={}:{}",
-                state.client_id, session_name, window_index
-            );
-            let message_tx = state.message_tx.clone();
-            let chat_event_store = state.chat_event_store.clone();
-
-            if let Some(handle) = state.chat_activity_handle.take() {
-                handle.abort();
-            }
-            state.chat_activity_handle = Some(crate::chat_activity::start_tmux_watch(
-                session_name.clone(),
-                window_index,
-                message_tx.clone(),
-            ));
-
-            // Set current session and window for input handling
-            *state.current_session.lock().await = Some(session_name.clone());
-            *state.current_window.lock().await = Some(window_index);
-
-            // Cancel any existing watcher
-            {
-                let mut handle_guard = state.chat_log_handle.lock().await;
-                if let Some(handle) = handle_guard.take() {
-                    tracing::info!(
-                        "Stopping previous chat log watcher for client={} before starting session={}:{}",
-                        state.client_id, session_name, window_index
-                    );
-                    handle.abort();
-                }
-            }
-
-            // Clear any previous kiro sender — the PTY reader dynamically checks
-            // the shared Arc, so clearing ensures no stale forwarding.
-            *state.kiro_chat_output_tx.lock().unwrap() = None;
-            // Clone the shared Arc so the spawned task can set the sender if kiro is detected.
-            let kiro_shared_tx = state.kiro_chat_output_tx.clone();
-
-            let chat_log_handle = state.chat_log_handle.clone();
-            let chat_clear_store = state.chat_clear_store.clone();
-            let handle = tokio::spawn(async move {
-                tracing::info!(
-                    "Detecting chat log for session '{}' window {}",
-                    session_name,
-                    window_index
-                );
-
-                // Get the clear timestamp if one exists
-                let cleared_at = chat_clear_store
-                    .get_cleared_at(&session_name, window_index)
-                    .await;
-
-                match crate::chat_log::watcher::detect_log_file(&session_name, window_index).await {
-                    Ok((path, tool)) => {
-                        // ── Kiro PTY capture ─────────────────────────────────────
-                        // For kiro, the PTY reader forwards raw output to kiro_output_tx.
-                        // We read from kiro_output_rx and parse with kiro_parser.
-                        if matches!(&tool, crate::chat_log::AiTool::Kiro { .. }) {
-                            // Create kiro channel now that kiro is confirmed.
-                            // Store sender in the shared Arc so the PTY reader picks it up dynamically.
-                            let (kiro_tx, kiro_rx) = mpsc::unbounded_channel();
-                            *kiro_shared_tx.lock().unwrap() = Some(kiro_tx);
-
-                            let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-
-                            // Build kiro parser state from the tool variant
-                            let mut kiro_state = if let crate::chat_log::AiTool::Kiro {
-                                cwd,
-                                pid,
-                                session_id,
-                            } = &tool
-                            {
-                                crate::chat_log::kiro_parser::KiroState::new(
-                                    *pid,
-                                    session_id.clone(),
-                                    cwd.clone(),
-                                )
-                            } else {
-                                // Unreachable due to matches! check above, but compiler needs it
-                                return;
-                            };
-
-                            // Load persisted kiro messages from previous sessions
-                            let persisted_messages =
-                                match chat_event_store.list_messages(&session_name, window_index) {
-                                    Ok(stored) => stored,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Failed to load persisted kiro events for {}:{}: {}",
-                                            session_name,
-                                            window_index,
-                                            e
-                                        );
-                                        Vec::new()
-                                    }
-                                };
-                            let total_count = persisted_messages.len();
-                            tracing::info!("Kiro: loaded {} persisted messages", total_count);
-                            let _ = event_tx.send(crate::chat_log::ChatLogEvent::History {
-                                messages: persisted_messages,
-                                tool: tool.clone(),
-                                has_more: false,
-                                total_count,
-                                context_window_usage: None,
-                                model_name: None,
-                            });
-
-                            // Forward parsed events to WebSocket + persist to store
-                            let session_name_owned = session_name.clone();
-                            let chat_event_store_kiro = chat_event_store.clone();
-                            tokio::spawn(async move {
-                                while let Some(event) = event_rx.recv().await {
-                                    let msg = match event {
-                                        crate::chat_log::ChatLogEvent::NewMessage { message } => {
-                                            tracing::info!(
-                                                "Kiro: sending new chat message: role={}",
-                                                message.role
-                                            );
-                                            // Persist to chat_event_store so history survives reconnect
-                                            if let Err(e) = chat_event_store_kiro.append_message(
-                                                &session_name_owned,
-                                                window_index,
-                                                "kiro-pty",
-                                                &message,
-                                            ) {
-                                                tracing::warn!(
-                                                    "Kiro: failed to persist message: {}",
-                                                    e
-                                                );
-                                            }
-                                            ServerMessage::ChatEvent {
-                                                session_name: session_name_owned.clone(),
-                                                window_index,
-                                                message,
-                                                source: None,
-                                            }
-                                        }
-                                        crate::chat_log::ChatLogEvent::History {
-                                            messages,
-                                            tool,
-                                            has_more,
-                                            total_count,
-                                            context_window_usage,
-                                            model_name,
-                                        } => ServerMessage::ChatHistory {
-                                            session_name: session_name_owned.clone(),
-                                            window_index,
-                                            messages,
-                                            tool: Some(tool),
-                                            has_more,
-                                            total_count,
-                                            context_window_usage,
-                                            model_name,
-                                        },
-                                        crate::chat_log::ChatLogEvent::ContextWindowUpdate {
-                                            usage,
-                                            model_name,
-                                        } => ServerMessage::ContextWindowUpdate {
-                                            session_name: session_name_owned.clone(),
-                                            window_index,
-                                            context_window_usage: usage,
-                                            model_name,
-                                        },
-                                        crate::chat_log::ChatLogEvent::Error { error } => {
-                                            tracing::warn!("Kiro chat log error: {}", error);
-                                            ServerMessage::ChatLogError { error }
-                                        }
-                                    };
-                                    if send_message(&message_tx, msg).await.is_err() {
-                                        break;
-                                    }
-                                }
-                            });
-
-                            // Spawn the PTY → kiro parser forwarder
-                            // Read from kiro_output_rx, parse chunks, emit NewMessage events
-                            let event_tx_for_parser = event_tx;
-                            tokio::spawn(async move {
-                                let mut kiro_output_rx = kiro_rx;
-                                const POLL_INTERVAL_MS: u64 = 100;
-
-                                tracing::info!("Kiro PTY forwarder started");
-                                loop {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(
-                                        POLL_INTERVAL_MS,
-                                    ))
-                                    .await;
-
-                                    // Receive all buffered chunks
-                                    while let Ok(chunk) = kiro_output_rx.try_recv() {
-                                        let preview = chunk.chars().take(150).collect::<String>();
-                                        tracing::info!(
-                                            "Kiro PTY chunk received ({} chars): {:?}",
-                                            chunk.len(),
-                                            preview
-                                        );
-                                        let messages =
-                                            crate::chat_log::kiro_parser::parse_pty_chunk(
-                                                &chunk,
-                                                &mut kiro_state,
-                                            );
-                                        tracing::info!(
-                                            "Kiro parse_pty_chunk returned {} messages",
-                                            messages.len()
-                                        );
-                                        for msg in messages {
-                                            tracing::info!(
-                                                "Kiro: emitting message role={}",
-                                                msg.role
-                                            );
-                                            let event = crate::chat_log::ChatLogEvent::NewMessage {
-                                                message: msg,
-                                            };
-                                            if event_tx_for_parser.send(event).is_err() {
-                                                tracing::warn!(
-                                                    "Kiro PTY forwarder: event_tx closed, stopping"
-                                                );
-                                                return;
-                                            }
-                                        }
-                                    }
-
-                                    // Check idle timeout for response completeness
-                                    if crate::chat_log::kiro_parser::is_response_complete(
-                                        &kiro_state,
-                                    ) {
-                                        // Flush any remaining buffered text as a response
-                                        let remaining =
-                                            std::mem::take(&mut kiro_state.response_buffer);
-                                        tracing::info!(
-                                            "Kiro idle timeout hit, flushing buffer ({} chars)",
-                                            remaining.len()
-                                        );
-                                        if !remaining.trim().is_empty() {
-                                            let responses =
-                                                crate::chat_log::kiro_parser::emit_response(
-                                                    &remaining,
-                                                    &mut kiro_state,
-                                                );
-                                            tracing::info!(
-                                                "Kiro emit_response returned {} messages",
-                                                responses.len()
-                                            );
-                                            for response in responses {
-                                                let event =
-                                                    crate::chat_log::ChatLogEvent::NewMessage {
-                                                        message: response,
-                                                    };
-                                                if event_tx_for_parser.send(event).is_err() {
-                                                    return;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            });
-
-                            // The task runs forever until the client disconnects
-                            tracing::info!(
-                                "Kiro PTY capture started for session '{}'",
-                                session_name
-                            );
-                            return;
-                        }
-
-                        // ── Standard file-based watcher ─────────────────────────
-                        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-
-                        // Spawn the file watcher -- the returned
-                        // RecommendedWatcher must be kept alive for as long
-                        // as we want notifications.
-                        let _watcher = match crate::chat_log::watcher::watch_log_file(
-                            &path, tool, event_tx, cleared_at, limit,
-                        )
-                        .await
-                        {
-                            Ok(w) => w,
-                            Err(e) => {
-                                error!("Failed to start chat log watcher: {}", e);
-                                let _ = send_message(
-                                    &message_tx,
-                                    ServerMessage::ChatLogError {
-                                        error: e.to_string(),
-                                    },
-                                )
-                                .await;
-                                return;
-                            }
-                        };
-
-                        // Forward events to WebSocket
-                        let session_name_owned = session_name.clone();
-                        while let Some(event) = event_rx.recv().await {
-                            let msg = match event {
-                                crate::chat_log::ChatLogEvent::History {
-                                    messages,
-                                    tool,
-                                    has_more,
-                                    total_count,
-                                    context_window_usage,
-                                    model_name,
-                                } => {
-                                    let persisted_messages = match chat_event_store
-                                        .list_messages(&session_name_owned, window_index)
-                                    {
-                                        Ok(stored) => stored,
-                                        Err(e) => {
-                                            warn!(
-                                                "Failed to load persisted chat events for {}:{}: {}",
-                                                session_name_owned, window_index, e
-                                            );
-                                            Vec::new()
-                                        }
-                                    };
-
-                                    let merged_messages =
-                                        merge_history_messages(messages, persisted_messages);
-                                    tracing::info!(
-                                        "Sending merged chat history: {} messages for session {}",
-                                        merged_messages.len(),
-                                        session_name_owned
-                                    );
-                                    ServerMessage::ChatHistory {
-                                        session_name: session_name_owned.clone(),
-                                        window_index,
-                                        messages: merged_messages,
-                                        tool: Some(tool),
-                                        has_more,
-                                        total_count,
-                                        context_window_usage,
-                                        model_name,
-                                    }
-                                }
-                                crate::chat_log::ChatLogEvent::NewMessage { message } => {
-                                    tracing::info!(
-                                        "Sending new chat message: role={} for session {}",
-                                        message.role,
-                                        session_name_owned
-                                    );
-                                    ServerMessage::ChatEvent {
-                                        session_name: session_name_owned.clone(),
-                                        window_index,
-                                        message,
-                                        source: None,
-                                    }
-                                }
-                                crate::chat_log::ChatLogEvent::ContextWindowUpdate {
-                                    usage,
-                                    model_name,
-                                } => ServerMessage::ContextWindowUpdate {
-                                    session_name: session_name_owned.clone(),
-                                    window_index,
-                                    context_window_usage: usage,
-                                    model_name,
-                                },
-                                crate::chat_log::ChatLogEvent::Error { error } => {
-                                    tracing::warn!("Chat log error: {}", error);
-                                    ServerMessage::ChatLogError { error }
-                                }
-                            };
-                            if send_message(&message_tx, msg).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = send_message(
-                            &message_tx,
-                            ServerMessage::ChatLogError {
-                                error: e.to_string(),
-                            },
-                        )
-                        .await;
-                    }
-                }
-            });
-
-            {
-                let mut handle_guard = chat_log_handle.lock().await;
-                *handle_guard = Some(handle);
-            }
+        WebSocketMessage::WatchChatLog { session_name, window_index, limit } => {
+            super::binding_cmds::start_watch(state, session_name, window_index, limit).await?;
         }
         WebSocketMessage::WatchAcpChatLog {
             session_id,
             window_index,
             limit,
         } => {
+            state.chat_target = None;
+            *state.chat_binding.lock().await = None;
             if let Some(handle) = state.chat_activity_handle.take() {
                 handle.abort();
             }
@@ -884,6 +498,8 @@ pub(crate) async fn handle(
             }
         }
         WebSocketMessage::UnwatchChatLog => {
+            state.chat_target = None;
+            *state.chat_binding.lock().await = None;
             if let Some(handle) = state.chat_activity_handle.take() {
                 handle.abort();
             }
@@ -1089,13 +705,14 @@ pub(crate) async fn handle(
             file,
             prompt,
         } => {
+            let binding = super::binding_cmds::require_binding(state, &session_name, window_index).await?;
             info!(
                 "Received file to send to chat: {} ({})",
                 file.filename, file.mime_type
             );
 
             // Get tmux session working directory
-            let session_path = resolve_chat_upload_target_dir(&session_name);
+            let session_path = Some(PathBuf::from(&binding.pane.cwd));
 
             // Save file to session directory if we have a valid path
             let file_path_str = if let Some(ref session_path) = session_path {
@@ -1196,9 +813,19 @@ pub(crate) async fn handle(
                 blocks,
             };
 
+            // Send the single-line text (prompt + file path) to the tmux session
+            // so the AI tool (OpenCode/Claude) receives the file reference.
+            if !tmux_text.is_empty() {
+                if let Err(error) = tmux::send_bound_text_and_enter(&binding, &state.chat_event_store.bindings, &tmux_text).await {
+                    error!("SendFileToChat: unable to submit to {}:{}: {}", session_name, window_index, error);
+                    send_message(&state.message_tx, ServerMessage::ChatLogError { error: error.to_string() }).await?;
+                    return Err(error);
+                }
+            }
+
             if let Err(e) = state.chat_event_store.append_message(
-                &session_name,
-                window_index,
+                binding.storage_key(),
+                0,
                 "webhook-file",
                 &chat_message,
             ) {
@@ -1216,16 +843,9 @@ pub(crate) async fn handle(
             };
 
             // Use client_manager.broadcast to send to ALL connected clients
-            state.client_manager.broadcast(msg).await;
+            state.client_manager.broadcast_bound(msg, &binding).await;
 
-            // Send the single-line text (prompt + file path) to the tmux session
-            // so the AI tool (OpenCode/Claude) receives the file reference.
-            if !tmux_text.is_empty() {
-                if let Err(error) = tmux::send_text_and_enter(&session_name, Some(window_index), &tmux_text).await {
-                    error!("SendFileToChat: unable to submit to {}:{}: {}", session_name, window_index, error);
-                    send_message(&state.message_tx, ServerMessage::ChatLogError { error: error.to_string() }).await?;
-                }
-            }
+
         }
         WebSocketMessage::SendChatMessage {
             session_name,
@@ -1243,6 +863,9 @@ pub(crate) async fn handle(
                 return Ok(());
             }
 
+            let binding = super::binding_cmds::require_binding(state, &session_name, window_index).await?;
+            tmux::send_bound_text_and_enter(&binding, &state.chat_event_store.bindings, message.trim()).await?;
+
             let chat_message = crate::chat_log::ChatMessage {
                 role: "user".to_string(),
                 timestamp: Some(chrono::Utc::now()),
@@ -1252,8 +875,8 @@ pub(crate) async fn handle(
             };
 
             if let Err(e) = state.chat_event_store.append_message(
-                &session_name,
-                window_index,
+                binding.storage_key(),
+                0,
                 "webhook",
                 &chat_message,
             ) {
@@ -1270,7 +893,7 @@ pub(crate) async fn handle(
                 source: Some("webhook".to_string()),
             };
 
-            state.client_manager.broadcast(msg).await;
+            state.client_manager.broadcast_bound(msg, &binding).await;
 
             let should_notify = notify.unwrap_or(true);
             if should_notify {
@@ -1283,16 +906,10 @@ pub(crate) async fn handle(
                         message.clone()
                     },
                 };
-                state.client_manager.broadcast(notify_msg).await;
+                state.client_manager.broadcast_bound(notify_msg, &binding).await;
             }
 
-            match tmux::send_text_and_enter(&session_name, Some(window_index), message.trim()).await {
-                Ok(()) => info!("Submitted chat message to tmux {}:{} ({} bytes)", session_name, window_index, message.trim().len()),
-                Err(error) => {
-                    error!("SendChatMessage: unable to submit to {}:{}: {}", session_name, window_index, error);
-                    send_message(&state.message_tx, ServerMessage::ChatLogError { error: error.to_string() }).await?;
-                }
-            }
+            info!("Submitted chat message to verified conversation {}", binding.conversation_id);
         }
         _ => {}
     }
@@ -1329,6 +946,8 @@ mod tests {
             audio_tx: None,
             message_tx: tx,
             chat_log_handle: Arc::new(Mutex::new(None)),
+            chat_target: None,
+            chat_binding: Arc::new(tokio::sync::Mutex::new(None)),
             chat_activity_handle: None,
             chat_file_storage,
             chat_event_store,
@@ -1367,14 +986,8 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
-        // Should have received ChatLogCleared response
-        let msg = rx.try_recv().unwrap();
-        let json = match msg {
-            BroadcastMessage::Text(s) => s.as_ref().clone(),
-            _ => panic!("Expected text"),
-        };
-        assert!(json.contains("Cleared") || json.contains("cleared"));
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
+        assert!(rx.try_recv().is_err(), "Unlinked history must not be cleared");
     }
 
     #[tokio::test]
@@ -1411,7 +1024,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1437,7 +1050,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
         // Should broadcast the file message
         let _ = rx.try_recv();
     }
@@ -1462,7 +1075,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1485,7 +1098,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1523,7 +1136,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1572,13 +1185,13 @@ mod tests {
             app.clone(),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
         // The handler uses state.chat_clear_store (not app's), verify on state's store
         let ts = state
             .chat_clear_store
             .get_cleared_at("test-session", 0)
             .await;
-        assert!(ts.is_some());
+        assert!(ts.is_none());
     }
 
     #[tokio::test]
@@ -1614,10 +1227,10 @@ mod tests {
             app.clone(),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
         // Messages should be cleared
         let msgs = app.chat_event_store.list_messages("test-sess", 0).unwrap();
-        assert_eq!(msgs.len(), 0);
+        assert_eq!(msgs.len(), 1);
     }
 
     #[tokio::test]
@@ -1633,15 +1246,8 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
-        let msg = rx.try_recv().unwrap();
-        let json = match msg {
-            BroadcastMessage::Text(s) => s.as_ref().clone(),
-            _ => panic!("Expected text"),
-        };
-        assert!(json.contains("chat-log-cleared"));
-        assert!(json.contains("true")); // success: true
-        assert!(json.contains("my-session"));
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -1659,7 +1265,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1677,7 +1283,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1696,13 +1302,10 @@ mod tests {
             app.clone(),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
         // The message uses the state's chat_event_store, not app's
-        let msgs = state
-            .chat_event_store
-            .list_messages("persist-test", 0)
-            .unwrap();
-        assert!(!msgs.is_empty());
+        let msgs = state.chat_event_store.list_messages("persist-test", 0).unwrap();
+        assert!(msgs.is_empty(), "Rejected input must not be recorded as sent");
     }
 
     #[tokio::test]
@@ -1781,7 +1384,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1805,7 +1408,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1829,7 +1432,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1853,7 +1456,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1877,7 +1480,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1941,7 +1544,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -1960,7 +1563,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -2095,7 +1698,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -2129,7 +1732,7 @@ mod tests {
             make_app_state(dir.path()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     #[tokio::test]
@@ -2154,7 +1757,7 @@ mod tests {
             app,
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err(), "Unlinked terminals must not be used for chat operations");
     }
 
     fn make_app_state(dir: &std::path::Path) -> Arc<crate::AppState> {

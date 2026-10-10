@@ -464,6 +464,8 @@ fun ChatScreen(
                 }
 
                 // Bottom input bar
+                ConversationLinkBar(uiState.bindingState,
+                    onRetry = { viewModel.refreshActiveChat("conversation link retry") })
                 ChatInputBar(
                     value = uiState.draftMessage,
                     onValueChange = viewModel::updateDraft,
@@ -489,7 +491,8 @@ fun ChatScreen(
                         }
                     },
                     attachedFile = uiState.attachedFile,
-                    isUploading = uiState.isUploading,
+                    isUploading = uiState.isUploading || uiState.isSending,
+                    canSend = uiState.isAcp || uiState.bindingState?.canSend != false,
                     onAttachClick = { filePickerLauncher.launch(arrayOf("*/*")) },
                     onRemoveAttachment = viewModel::removeAttachedFile,
                 )
@@ -579,6 +582,7 @@ private fun ChatInputBar(
     onMicPressed: () -> Unit = {},
     attachedFile: AttachedFile? = null,
     isUploading: Boolean = false,
+    canSend: Boolean = true,
     onAttachClick: () -> Unit = {},
     onRemoveAttachment: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -750,7 +754,7 @@ private fun ChatInputBar(
 
                 IconButton(
                     onClick = onSend,
-                    enabled = (value.isNotBlank() || attachedFile != null) && !isStreaming && !isUploading,
+                    enabled = canSend && (value.isNotBlank() || attachedFile != null) && !isStreaming && !isUploading,
                 ) {
                     if (isStreaming || isUploading) {
                         CircularProgressIndicator(

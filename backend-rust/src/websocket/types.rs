@@ -41,6 +41,10 @@ pub(crate) struct WsState {
     pub audio_tx: Option<mpsc::Sender<BroadcastMessage>>,
     pub message_tx: mpsc::Sender<BroadcastMessage>,
     pub chat_log_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// The chat selected on this socket. Terminal attachments must never change
+    /// this target or make a previous chat's pinned pane look like a new chat.
+    pub chat_target: Option<(String, u32)>,
+    pub chat_binding: Arc<Mutex<Option<crate::chat_binding::ChatBinding>>>,
     pub chat_activity_handle: Option<JoinHandle<()>>,
     pub chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,

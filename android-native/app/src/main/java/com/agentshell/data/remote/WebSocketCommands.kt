@@ -186,13 +186,17 @@ fun WebSocketService.sendChatMessage(
     sessionName: String,
     windowIndex: Int,
     message: String,
+    bindingId: String? = null,
+    requestId: String? = null,
 ) {
     send(mapOf(
-        "type" to "send-chat-message",
+        "type" to if (bindingId == null) "send-chat-message" else "send-bound-chat-message",
         "sessionName" to sessionName,
         "windowIndex" to windowIndex,
         "message" to message,
         "notify" to false,
+        "bindingId" to bindingId,
+        "requestId" to requestId,
     ))
 }
 
@@ -376,9 +380,11 @@ fun WebSocketService.loadMoreChatHistory(
     windowIndex: Int,
     offset: Int,
     limit: Int,
+    bindingId: String? = null,
 ) {
     send(mapOf(
-        "type"        to "load-more-chat-history",
+        "type"        to if (bindingId == null) "load-more-chat-history" else "load-more-bound-chat-history",
+        "bindingId"   to bindingId,
         "sessionName" to sessionName,
         "windowIndex" to windowIndex,
         "offset"      to offset,
@@ -387,9 +393,10 @@ fun WebSocketService.loadMoreChatHistory(
 }
 
 /** Clear the chat log for TMUX window [windowIndex] in [sessionName]. */
-fun WebSocketService.clearChatLog(sessionName: String, windowIndex: Int) {
+fun WebSocketService.clearChatLog(sessionName: String, windowIndex: Int, bindingId: String? = null) {
     send(mapOf(
-        "type"        to "clear-chat-log",
+        "type"        to if (bindingId == null) "clear-chat-log" else "clear-bound-chat-log",
+        "bindingId"   to bindingId,
         "sessionName" to sessionName,
         "windowIndex" to windowIndex,
     ))
@@ -417,9 +424,13 @@ fun WebSocketService.sendFileToChat(
     data: String,
     prompt: String? = null,
     expectedServerUrl: String? = null,
+    bindingId: String? = null,
+    requestId: String? = null,
 ): Boolean {
     val message = buildMap<String, Any?> {
-        put("type",        "send-file-to-chat")
+        put("type",        if (bindingId == null) "send-file-to-chat" else "send-bound-file-to-chat")
+        put("bindingId", bindingId)
+        put("requestId", requestId)
         put("sessionName", sessionName)
         put("windowIndex", windowIndex)
         put("file", mapOf(

@@ -12,6 +12,8 @@ import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.AgentActivityStatus
 import com.agentshell.data.model.AgentSignalLedger
 import com.agentshell.data.model.AgentSignalKind
+import com.agentshell.data.model.ChatBindingState
+import com.agentshell.data.model.acceptsConversationPacket
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.model.Host
 import com.agentshell.data.remote.SessionSocket
@@ -54,6 +56,8 @@ class ChatActivityRepository @Inject constructor(
     private val _states = MutableStateFlow<Map<String, ChatReadState>>(emptyMap())
     val states: StateFlow<Map<String, ChatReadState>> = _states.asStateFlow()
     private val _agentActivities = MutableStateFlow<Map<String, AgentActivity>>(emptyMap())
+    private val _bindings = MutableStateFlow<Map<String, ChatBindingState>>(emptyMap())
+    val bindings = _bindings.asStateFlow()
     val agentActivities: StateFlow<Map<String, AgentActivity>> = _agentActivities.asStateFlow()
     private val viewers = mutableMapOf<String, String>() // owner -> chat key
     private val monitors = mutableMapOf<String, Pair<SessionSocket, CoroutineScope>>()
@@ -177,8 +181,23 @@ class ChatActivityRepository @Inject constructor(
 
     suspend fun clear(target: ChatTarget) {
         ready.await()
-        update(target) { ChatReadState(target, initialized = true) }
+        update(target) { ChatReadState(target, initialized = true, conversationKey = it.conversationKey) }
         NotificationHelper.cancelChat(context, target)
+    }
+
+    suspend fun linkConversation(target: ChatTarget, binding: ChatBindingState) {
+        start(); ready.await()
+        val previous = _bindings.value[target.key]
+        _bindings.value = _bindings.value + (target.key to binding)
+        val key = binding.binding?.conversationKey
+        if (key != null) update(target) { current ->
+            if (current.conversationKey == key) current else ChatReadState(target, conversationKey = key)
+        }
+        if (previous?.binding?.conversationKey != key || !binding.canSend) {
+            invalidateActivity(target)
+            NotificationHelper.cancelChat(context, target)
+            NotificationHelper.cancelAgentSignal(context, target)
+        }
     }
 
     private suspend fun update(target: ChatTarget, transform: (ChatReadState) -> ChatReadState): ChatReadState = mutex.withLock {
@@ -204,6 +223,15 @@ class ChatActivityRepository @Inject constructor(
 
     @Suppress("UNCHECKED_CAST")
     internal suspend fun handleEvent(hostId: String, message: Map<String, Any?>, watchedTarget: ChatTarget? = null) {
+        if (message["type"] == "chat-binding") {
+            val target = eventTarget(hostId, message) ?: watchedTarget ?: return
+            ChatBindingState.parse(message)?.let { linkConversation(target, it) }
+            return
+        }
+        if (message["bindingId"] != null) {
+            val target = eventTarget(hostId, message) ?: watchedTarget ?: return
+            if (!_bindings.value[target.key].acceptsConversationPacket(message)) return
+        }
         handleAgentActivity(hostId, message, watchedTarget)
         when (message["type"] as? String) {
             "sessions-list", "session_list" -> {
@@ -292,6 +320,13 @@ class ChatActivityRepository @Inject constructor(
     internal fun handleAgentActivity(hostId: String, message: Map<String, Any?>, watchedTarget: ChatTarget? = null) {
         val target = eventTarget(hostId, message) ?: return
         if (watchedTarget != null && target.key != watchedTarget.key) return
+        if (!target.isAcp) {
+            if (_bindings.value[target.key]?.canSend == false) return
+            val state = message["state"] as? Map<*, *>
+            val key = state?.get("conversationKey") as? String
+            val expected = _bindings.value[target.key]?.binding?.conversationKey
+            if (key != null && expected != null && key != expected) return
+        }
         val current = _agentActivities.value[target.key] ?: AgentActivity()
         val now = SystemClock.elapsedRealtime()
         val next = if (message["type"] == "chat-activity" || (message["type"] == "acp-prompt-done" && message["activity"] is Map<*, *>)) {
@@ -335,10 +370,13 @@ class ChatActivityRepository @Inject constructor(
         scope.launch {
             ready.await()
             signalMutex.withLock {
-                val ledger = signalLedgers[target.key] ?: AgentSignalLedger()
+                if (_bindings.value[target.key]?.canSend == false) return@withLock
+                val conversation = _states.value[target.key]?.conversationKey.orEmpty()
+                val receiptKey = if (conversation.isBlank()) target.key else "${target.key}:$conversation"
+                val ledger = signalLedgers[receiptKey] ?: AgentSignalLedger()
                 val (updated, signal) = ledger.observe(next)
                 if (updated != ledger) {
-                    signalLedgers = (signalLedgers - target.key).entries.toList().takeLast(255).associate { it.toPair() } + (target.key to updated)
+                    signalLedgers = (signalLedgers - receiptKey).entries.toList().takeLast(255).associate { it.toPair() } + (receiptKey to updated)
                     preferences.setAgentSignalLedgers(json.encodeToString(signalLedgers))
                 }
                 if (signal != null && !isViewing(target) && ((signal.kind == AgentSignalKind.FINISHED && finishedEnabled) || (signal.kind == AgentSignalKind.QUIET && quietEnabled))) {

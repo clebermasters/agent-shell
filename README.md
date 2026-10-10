@@ -74,6 +74,7 @@ The **maintained and feature-complete client is the native Android app** (`andro
 - Cron job manager with schedule + test execution
 - Dotfile editor and history
 - In-chat file attachments for AI workflows
+- Independent terminal conversations can share a working directory. Chat automatically links the selected TMUX pane/process generation to an explicit agent conversation ID, independently of terminal attachments. Startup/resume hooks and exact process-owned transcripts provide identity for Codex and Claude, including existing sessions; unidentified sessions wait for identity rather than guessing by directory. Codex requires one-time trust of the identity hook in `/hooks`.
 - Android share menu: send text, links, images, and files to a chosen server and chat. Content opens as an editable draft; it is sent only when you tap Send. Multiple files are bundled into one ZIP attachment (20 files maximum, 10 MB total).
 
 ## Architecture

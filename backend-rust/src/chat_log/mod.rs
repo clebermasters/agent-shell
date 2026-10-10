@@ -75,6 +75,9 @@ pub enum AiTool {
         cwd: PathBuf,
         pid: u32,
     },
+    OpencodeBound {
+        session_id: String,
+    },
     Kiro {
         cwd: PathBuf,
         pid: u32,

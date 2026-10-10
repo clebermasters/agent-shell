@@ -109,8 +109,10 @@ echo "=== Step 2: Installing files ==="
 sudo systemctl stop agentshell 2>/dev/null || true
 sudo mkdir -p "$INSTALL_DIR/backend"
 sudo mkdir -p "$INSTALL_DIR/certs"
+sudo mkdir -p "$INSTALL_DIR/hooks"
 
 sudo cp "$PROJECT_DIR/backend-rust/target/release/agentshell-backend" "$INSTALL_DIR/backend/"
+sudo cp "$PROJECT_DIR/scripts/chat-binding-hook.py" "$INSTALL_DIR/hooks/"
 sudo cp -r "$PROJECT_DIR/certs/"* "$INSTALL_DIR/certs/" 2>/dev/null || true
 
 cd "$INSTALL_DIR/backend"
@@ -154,6 +156,16 @@ echo "=== Step 4: Starting service ==="
 sudo systemctl daemon-reload
 sudo systemctl enable agentshell
 sudo systemctl start agentshell
+
+echo ""
+echo "=== Step 5: Linking terminal conversations ==="
+if [ "$EUID" -eq 0 ] && [ "$SERVICE_USER" != "root" ]; then
+    sudo -u "$SERVICE_USER" env AUTH_TOKEN="$AUTH_TOKEN" /usr/bin/python3 "$PROJECT_DIR/scripts/install-chat-binding-hooks.py" \
+        --user-home "$SERVICE_HOME" --script "$INSTALL_DIR/hooks/chat-binding-hook.py" --url "http://127.0.0.1:$BACKEND_PORT"
+else
+    AUTH_TOKEN="$AUTH_TOKEN" /usr/bin/python3 "$PROJECT_DIR/scripts/install-chat-binding-hooks.py" \
+        --user-home "$SERVICE_HOME" --script "$INSTALL_DIR/hooks/chat-binding-hook.py" --url "http://127.0.0.1:$BACKEND_PORT"
+fi
 
 echo ""
 echo "=== Installation complete ==="

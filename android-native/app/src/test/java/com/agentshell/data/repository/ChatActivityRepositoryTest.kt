@@ -13,6 +13,8 @@ import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.AgentActivityStatus
 import com.agentshell.data.model.Host
+import com.agentshell.data.model.ChatBindingState
+import com.agentshell.data.model.ConversationBinding
 import com.agentshell.data.remote.WebSocketService
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -87,6 +89,50 @@ class ChatActivityRepositoryTest {
     private fun repository() = ChatActivityRepository(
         app, preferences, HostRepository(hostDao, preferences), WebSocketService(client), client,
     ).also { repositories.add(it); it.start() }
+
+    private fun link(id: String, key: String) = ChatBindingState("bound", "token", "codex", ConversationBinding(id, id, key, "hook"), emptyList(), "linked")
+
+    @Test fun independent_same_folder_conversations_keep_separate_unread_state_and_reject_foreign_packets() = runTest {
+        val repo = repository()
+        val first = target.copy(cwd = "/same/project")
+        val second = target.copy(sessionName = "second", cwd = "/same/project")
+        repo.register(first); repo.register(second)
+        repo.linkConversation(first, link("first", "conversation:first"))
+        repo.linkConversation(second, link("second", "conversation:second"))
+        repo.history(first, listOf(old)); repo.history(second, listOf(old))
+        val packet = mapOf<String, Any?>("type" to "chat-history", "sessionName" to first.sessionName, "windowIndex" to first.windowIndex,
+            "bindingId" to "second", "conversationKey" to "conversation:second", "messages" to emptyList<Any>())
+        repo.handleEvent(first.hostId, packet, first)
+        assertEquals("old", repo.states.value.getValue(first.key).latestReceived?.id)
+        repo.history(first, listOf(old, new))
+        assertEquals(1, repo.states.value.getValue(first.key).unread.size)
+        assertTrue(repo.states.value.getValue(second.key).unread.isEmpty())
+    }
+
+    @Test fun resume_resets_old_unread_receipts_but_reconnecting_same_conversation_preserves_them() = runTest {
+        val repo = repository(); repo.register(target)
+        repo.linkConversation(target, link("old-lease", "conversation:A"))
+        repo.history(target, listOf(old)); repo.history(target, listOf(old, new))
+        repo.linkConversation(target, link("new-lease", "conversation:A"))
+        assertEquals(1, repo.states.value.getValue(target.key).unread.size)
+        repo.linkConversation(target, link("resumed", "conversation:B"))
+        assertTrue(repo.states.value.getValue(target.key).unread.isEmpty())
+        assertFalse(repo.states.value.getValue(target.key).initialized)
+        assertEquals("conversation:B", repo.states.value.getValue(target.key).conversationKey)
+    }
+
+    @Test fun late_completion_from_previous_conversation_does_not_notify_the_resumed_chat() = runTest {
+        val repo = repository(); repo.register(target)
+        repo.linkConversation(target, link("old", "conversation:A"))
+        repo.linkConversation(target, link("new", "conversation:B"))
+        val message = signalActivity("idle", 3, finished = true).toMutableMap()
+        @Suppress("UNCHECKED_CAST")
+        val state = (message["state"] as Map<String, Any?>) + ("conversationKey" to "conversation:A")
+        message["state"] = state
+        repo.handleAgentActivity(target.hostId, message)
+        repo.awaitAgentSignals()
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
 
     private fun activity(session: String, window: Int, status: String, sequence: Long = 1) = mapOf(
         "type" to "chat-activity", "sessionName" to session, "windowIndex" to window, "paneId" to "%1",

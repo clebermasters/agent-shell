@@ -47,6 +47,7 @@ data class ChatReadState(
     val latestReceived: ChatCursor? = null,
     val unread: List<ChatCursor> = emptyList(),
     val seenIds: List<String> = emptyList(),
+    val conversationKey: String = "",
 ) {
     /** A first history load is a baseline, rather than hundreds of new-message alerts. */
     fun reconcileHistory(messages: List<ChatMessage>): Pair<ChatReadState, List<ChatMessage>> {

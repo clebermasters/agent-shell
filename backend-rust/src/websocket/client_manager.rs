@@ -39,6 +39,17 @@ impl ClientManager {
     }
 
     pub async fn broadcast(&self, message: ServerMessage) {
+        self.broadcast_value(serde_json::to_value(message).unwrap_or_default()).await;
+    }
+
+    pub async fn broadcast_bound(&self, message: ServerMessage, binding: &crate::chat_binding::ChatBinding) {
+        let mut value = serde_json::to_value(message).unwrap_or_default();
+        value["bindingId"] = binding.binding_id.clone().into();
+        value["conversationKey"] = binding.conversation_key.clone().into();
+        self.broadcast_value(value).await;
+    }
+
+    async fn broadcast_value(&self, message: serde_json::Value) {
         // Serialize once for all clients
         if let Ok(serialized) = serde_json::to_string(&message) {
             let msg = BroadcastMessage::Text(Arc::new(serialized));

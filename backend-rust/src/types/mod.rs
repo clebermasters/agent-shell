@@ -356,6 +356,42 @@ pub enum WebSocketMessage {
     },
     GetDotfileTemplates,
     // Chat log watching
+    BindChatConversation {
+        #[serde(rename = "sessionName")] session_name: String,
+        #[serde(rename = "windowIndex")] window_index: u32,
+        #[serde(rename = "paneToken")] pane_token: String,
+        #[serde(rename = "conversationId")] conversation_id: String,
+    },
+    ListChatConversations {
+        #[serde(rename = "sessionName")] session_name: String,
+        #[serde(rename = "windowIndex")] window_index: u32,
+    },
+    SendBoundChatMessage {
+        #[serde(rename = "bindingId")] binding_id: String,
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "sessionName")] session_name: String,
+        #[serde(rename = "windowIndex")] window_index: u32,
+        message: String,
+    },
+    SendBoundFileToChat {
+        #[serde(rename = "bindingId")] binding_id: String,
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "sessionName")] session_name: String,
+        #[serde(rename = "windowIndex")] window_index: u32,
+        file: FileAttachment,
+        prompt: Option<String>,
+    },
+    LoadMoreBoundChatHistory {
+        #[serde(rename = "bindingId")] binding_id: String,
+        #[serde(rename = "sessionName")] session_name: String,
+        #[serde(rename = "windowIndex")] window_index: u32,
+        offset: usize, limit: usize,
+    },
+    ClearBoundChatLog {
+        #[serde(rename = "bindingId")] binding_id: String,
+        #[serde(rename = "sessionName")] session_name: String,
+        #[serde(rename = "windowIndex")] window_index: u32,
+    },
     GetAgentActivities,
     WatchChatLog {
         #[serde(rename = "sessionName")]

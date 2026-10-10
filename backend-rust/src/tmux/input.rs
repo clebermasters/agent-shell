@@ -15,6 +15,20 @@ pub async fn send_text_and_enter(session: &str, window: Option<u32>, text: &str)
     InputClient::default().send(session, window, text).await
 }
 
+pub async fn send_bound_text_and_enter(
+    binding: &crate::chat_binding::ChatBinding,
+    store: &crate::chat_binding::BindingStore,
+    text: &str,
+) -> Result<()> {
+    InputClient::default()
+        .send_pane(
+            &binding.pane.pane_id,
+            text,
+            Some((store.clone(), binding.clone())),
+        )
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +247,18 @@ impl InputClient {
             return Ok(());
         }
         let pane = self.pane(session, window).await?;
+        self.send_pane(&pane, text, None).await
+    }
+
+    async fn send_pane(
+        &self,
+        pane: &str,
+        text: &str,
+        binding: Option<(
+            crate::chat_binding::BindingStore,
+            crate::chat_binding::ChatBinding,
+        )>,
+    ) -> Result<()> {
         let key = format!("{}:{pane}", self.socket.as_deref().unwrap_or("default"));
         let lock = {
             let mut locks = PANE_LOCKS
@@ -251,14 +277,28 @@ impl InputClient {
         };
         // Keep concurrent clients from interleaving their text and Enter in one pane.
         let _guard = lock.lock().await;
+        if let Some((store, binding)) = &binding {
+            store.validate(binding).await?;
+        }
         let buffer = format!("agentshell-input-{}", uuid::Uuid::new_v4());
-        let result = self.paste_and_submit(&pane, &buffer, text).await;
+        let result = self
+            .paste_and_submit(pane, &buffer, text, binding.as_ref())
+            .await;
         // Also clean up a named buffer if loading, pasting, or submitting failed.
         let _ = self.output(&["delete-buffer", "-b", &buffer]).await;
         result
     }
 
-    async fn paste_and_submit(&self, pane: &str, buffer: &str, text: &str) -> Result<()> {
+    async fn paste_and_submit(
+        &self,
+        pane: &str,
+        buffer: &str,
+        text: &str,
+        binding: Option<&(
+            crate::chat_binding::BindingStore,
+            crate::chat_binding::ChatBinding,
+        )>,
+    ) -> Result<()> {
         let mut child = self
             .command()
             .args(["load-buffer", "-b", buffer, "-"])
@@ -295,6 +335,9 @@ impl InputClient {
         }
         // Leave room for receivers without bracketed-paste support to finish their paste window.
         tokio::time::sleep(Duration::from_millis(250)).await;
+        if let Some((store, binding)) = binding {
+            store.validate(binding).await?;
+        }
         let output = self.output(&["send-keys", "-t", pane, "Enter"]).await?;
         if !output.status.success() {
             bail!(

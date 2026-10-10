@@ -28,6 +28,7 @@ mod acp;
 mod audio;
 mod auth;
 mod chat_activity;
+mod chat_binding;
 mod chat_clear_store;
 mod chat_event_store;
 mod chat_file_storage;
@@ -159,6 +160,7 @@ async fn main() -> Result<()> {
 
     // Build the router — protected routes require auth token
     let protected = Router::new()
+        .route("/api/chat/bind", post(chat_binding::register_hook))
         // API: Get connected clients count
         .route(
             "/api/clients",

@@ -22,10 +22,14 @@ use super::{
 /// file.  Returns the log path and the detected tool variant.
 pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(PathBuf, AiTool)> {
     let target = format!("{session_name}:{window_index}");
-    let pane_pid = get_pane_pid(&target).await?;
-    tokio::task::spawn_blocking(move || detect_log_file_for_pane_pid(pane_pid))
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to join log detection task: {e}"))?
+    let pane = crate::chat_binding::inspect_pane(&target).await?;
+    if let Some((_, path, tool, _)) = crate::chat_binding::registered_source(pane.root_pid) {
+        return Ok((path, if tool == "claude" { AiTool::Claude } else { AiTool::Codex }));
+    }
+    if let Some(conversation) = crate::chat_binding::exact_open_transcript(&pane)? {
+        return Ok((conversation.path, if pane.tool == "claude" { AiTool::Claude } else { AiTool::Codex }));
+    }
+    bail!("Select or register this terminal's conversation; a working directory cannot identify it")
 }
 
 /// Detect which AI tool (if any) is running in any pane of the given tmux session.
@@ -120,6 +124,9 @@ pub async fn watch_log_file(
     cleared_at: Option<i64>,
     limit: Option<usize>,
 ) -> Result<LogWatcher> {
+    if let AiTool::OpencodeBound { session_id } = &tool {
+        return watch_opencode_session(path, session_id, event_tx, cleared_at, limit).await;
+    }
     if let AiTool::Opencode { cwd, pid } = &tool {
         return watch_opencode_db(path, cwd, *pid, event_tx, cleared_at, limit).await;
     }
@@ -365,6 +372,34 @@ async fn watch_opencode_db(
     Ok(LogWatcher::Task(handle))
 }
 
+async fn watch_opencode_session(
+    db_path: &Path, session_id: &str, event_tx: mpsc::UnboundedSender<ChatLogEvent>,
+    cleared_at: Option<i64>, limit: Option<usize>,
+) -> Result<LogWatcher> {
+    let (messages, last_time_updated) = opencode_parser::fetch_all_messages(db_path, session_id, cleared_at)?;
+    let total_count = messages.len();
+    let count = limit.unwrap_or(total_count).min(total_count);
+    let tool = AiTool::OpencodeBound { session_id: session_id.to_owned() };
+    let _ = event_tx.send(ChatLogEvent::History { messages: messages[total_count-count..].to_vec(), tool,
+        has_more: count < total_count, total_count, context_window_usage: None, model_name: None });
+    let path = db_path.to_owned();
+    let mut state = opencode_parser::OpencodeState { pid: 0, session_id: session_id.to_owned(), last_time_updated,
+        cleared_at, seen_text_lengths: HashMap::new(), seen_tool_calls: Default::default(), seen_tool_results: Default::default() };
+    let handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            match opencode_parser::fetch_new_messages(&path, &mut state) {
+                Ok(messages) => for message in messages {
+                    if event_tx.send(ChatLogEvent::NewMessage { message }).is_err() { return; }
+                },
+                Err(error) => { if event_tx.send(ChatLogEvent::Error { error: error.to_string() }).is_err() { return; } },
+            }
+        }
+    });
+    Ok(LogWatcher::Task(handle))
+}
+
 // ---------------------------------------------------------------------------
 // File reading helpers
 // ---------------------------------------------------------------------------
@@ -431,7 +466,7 @@ fn parse_line(line: &str, tool: &AiTool) -> Option<ChatMessage> {
     match tool {
         AiTool::Claude => claude_parser::parse_line(line),
         AiTool::Codex => codex_parser::parse_line(line),
-        AiTool::Opencode { .. } => None, // Opencode parser is handled by DB polling
+        AiTool::Opencode { .. } | AiTool::OpencodeBound { .. } => None, // Opencode parser is handled by DB polling
         AiTool::Kiro { .. } => None,     // Kiro parser handles PTY capture via polling
     }
 }
@@ -640,6 +675,7 @@ pub(crate) fn detect_tool_for_pid(pid: u32) -> Option<(String, u32)> {
     None
 }
 
+#[cfg(test)]
 fn detect_log_file_for_pane_pid(pane_pid: u32) -> Result<(PathBuf, AiTool)> {
     let descendants = get_descendant_pids(pane_pid)?;
 
@@ -802,6 +838,7 @@ fn find_opencode_pid_for_cwd(cwd: &Path) -> Result<u32> {
 /// `<encoded_cwd>` is the absolute path with `/` replaced by `-` (with the
 /// leading slash also replaced, so `/home/user/proj` becomes `-home-user-proj`
 /// but the leading `-` is actually present in the directory name).
+#[cfg(test)]
 fn find_claude_log(cwd: &Path) -> Result<PathBuf> {
     let home = dirs::home_dir().context("cannot determine home directory")?;
     let encoded_cwd = cwd
@@ -827,6 +864,7 @@ fn find_claude_log(cwd: &Path) -> Result<PathBuf> {
 /// Primary strategy: query `~/.codex/state_5.sqlite` threads table by CWD to
 /// find the active session's `rollout_path`.
 /// Fallback: scan `~/.codex/sessions/` for the newest rollout JSONL.
+#[cfg(test)]
 fn find_codex_log(cwd: &Path) -> Result<PathBuf> {
     let home = dirs::home_dir().context("cannot determine home directory")?;
     let db_path = home.join(".codex/state_5.sqlite");
@@ -855,6 +893,7 @@ fn find_codex_log(cwd: &Path) -> Result<PathBuf> {
 }
 
 /// Query the Codex state SQLite database for the active session matching CWD.
+#[cfg(test)]
 fn query_codex_state_db(db_path: &Path, cwd: &Path) -> Result<PathBuf> {
     let conn = rusqlite::Connection::open(db_path)
         .with_context(|| format!("failed to open Codex state DB: {}", db_path.display()))?;
@@ -885,6 +924,7 @@ fn query_codex_state_db(db_path: &Path, cwd: &Path) -> Result<PathBuf> {
 }
 
 /// Recursively find the newest `rollout-*.jsonl` file under the given directory.
+#[cfg(test)]
 fn find_newest_rollout(dir: &Path) -> Option<PathBuf> {
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
 
@@ -914,6 +954,7 @@ fn find_newest_rollout(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Return the path of the newest `.jsonl` file inside `dir`.
+#[cfg(test)]
 fn newest_jsonl_in(dir: &Path) -> Option<PathBuf> {
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
 

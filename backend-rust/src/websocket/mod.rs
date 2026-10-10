@@ -1,5 +1,6 @@
 mod acp_cmds;
 mod chat_cmds;
+mod binding_cmds;
 mod client_manager;
 mod cron_cmds;
 mod dotfiles_cmds;
@@ -65,6 +66,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         audio_tx: None,
         message_tx: tx.clone(),
         chat_log_handle: Arc::new(Mutex::new(None)),
+        chat_target: None,
+        chat_binding: Arc::new(tokio::sync::Mutex::new(None)),
         chat_activity_handle: None,
         chat_file_storage: state.chat_file_storage.clone(),
         chat_event_store: state.chat_event_store.clone(),
@@ -343,6 +346,14 @@ async fn handle_message(
         }
 
         // Chat handlers — delegated to chat_cmds
+        WebSocketMessage::BindChatConversation { .. }
+        | WebSocketMessage::ListChatConversations { .. }
+        | WebSocketMessage::SendBoundChatMessage { .. }
+        | WebSocketMessage::SendBoundFileToChat { .. }
+        | WebSocketMessage::LoadMoreBoundChatHistory { .. }
+        | WebSocketMessage::ClearBoundChatLog { .. } => {
+            binding_cmds::handle(msg, state, app_state).await?;
+        }
         WebSocketMessage::WatchChatLog { .. }
         | WebSocketMessage::GetAgentActivities
         | WebSocketMessage::WatchAcpChatLog { .. }

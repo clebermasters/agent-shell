@@ -3,6 +3,10 @@
 import json,os,sys
 from pathlib import Path
 from urllib.request import Request,urlopen
+from urllib.error import HTTPError
+
+class PublicationError(RuntimeError):
+ """A backend rejection with its bounded, credential-free explanation."""
 
 def owner():
  pid=int(os.environ.get('AGENTSHELL_UI_AGENT_PID',os.getppid()))
@@ -39,7 +43,16 @@ def publish(title,html,metadata=None):
  else:
   payload['paneId']=os.environ.get('AGENTSHELL_UI_PANE',os.environ.get('TMUX_PANE'))
  request=Request(url.rstrip('/')+'/api/chat/ui',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','X-Auth-Token':token},method='POST')
- with urlopen(request,timeout=10) as response:return json.load(response)
+ try:
+  with urlopen(request,timeout=10) as response:return json.load(response)
+ except HTTPError as error:
+  with error:
+   body=error.read(8193)
+  detail=body[:8192].decode('utf-8',errors='replace').strip()
+  if len(body)>8192:detail+=' [truncated]'
+  # Neither the request URL nor authentication headers belong in tool output.
+  detail=detail.replace(token,'[redacted]')
+  raise PublicationError(f'AgentShell publication rejected (HTTP {error.code}): {detail or error.reason}') from None
 
 def run():
  for line in sys.stdin:

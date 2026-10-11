@@ -32,6 +32,8 @@ application data. Tablet layouts use the available width.
 
 See [MCP setup](mcp-setup.md) for exact Codex, Claude and OpenCode registration
 commands, configuration entries and troubleshooting.
+See the [publication recovery guide](interactive-ui-troubleshooting.md) for
+HTTP 409 errors after an adapter update and the required native MCP reload.
 
 `./install.sh` builds and installs the backend, installs the stdio MCP server and
 its stylesheet in `/opt/agentshell/ui`, and registers **agentshell-ui** globally
@@ -41,10 +43,13 @@ The daemon URL and authentication token live in the owner's private
 `~/.config/agentshell/interactive-ui.json` (mode `0600`). They are never passed
 into the rendered document.
 
-New agent processes load the MCP configuration. Existing running agents need
-their usual restart/reload before they discover the new tools. The installer
-does not restart live agents. OpenCode JSONC configuration is preserved and
-requires adding the documented server entry manually if JSONC is in use.
+New agent processes load the MCP configuration. The installer queues a native
+MCP refresh for a live local Codex daemon and reports a pending reload if it
+cannot refresh it. Other running clients need their usual MCP reload before
+discovering new tools. Live agents are not restarted. OpenCode JSONC files are
+merged automatically with comments and unrelated settings retained.
+The [portable installation reference](../deployment/README.md) lists every
+dependency and the repository files needed on a new computer.
 
 For manual registration, use a configured private runtime file and:
 
@@ -53,10 +58,14 @@ For manual registration, use a configured private runtime file and:
   "command": "/usr/bin/python3",
   "args": ["/opt/agentshell/ui/agent-ui-mcp.py"],
   "env": {
-    "AGENTSHELL_UI_CONFIG": "/home/YOUR_USER/.config/agentshell/interactive-ui.json"
+    "AGENTSHELL_UI_CONFIG": "/home/YOUR_USER/.config/agentshell/interactive-ui.json",
+    "AGENTSHELL_UI_REVISION": "<SHA256_OF_INSTALLED_ADAPTER>"
   }
 }
 ```
+
+Replace the revision placeholder with the installed adapter's SHA-256 and update
+it when that file changes. The installer sets it automatically.
 
 This is a stdio server. Codex uses `codex mcp add`, Claude uses `mcpServers`,
 and OpenCode uses a local `mcp` entry with a command array and `environment`.

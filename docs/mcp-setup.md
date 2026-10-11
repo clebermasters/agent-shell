@@ -21,11 +21,13 @@ From the AgentShell repository, run:
 ./install.sh
 ```
 
-The installer builds/restarts the backend, installs
+The installer bootstraps missing backend/native-agent dependencies, builds/restarts the backend, installs
 `/opt/agentshell/ui/agent-ui-mcp.py` and `mobile.css`, and registers the server
 globally for installed Codex, Claude and OpenCode CLIs. It preserves unrelated
 configuration and creates timestamped backups before editing existing files.
-OpenCode JSONC files are retained; use the manual entry below when JSONC is used.
+OpenCode JSONC files are merged automatically while retaining comments and
+unrelated configuration. See the [portable installation reference](../deployment/README.md)
+for dependency versions, source backups and credential-free templates.
 
 The installer writes the daemon URL and authentication token to:
 
@@ -41,7 +43,23 @@ using the daemon's configured authentication token. Its default URL is
 the MCP URL is the base URL, without `/api/chat/ui` or `/ws`.
 
 Restart/reload the agent to discover the new server. Installing MCP configuration
-does not change the tools of an already-running agent process.
+does not change the tools of an already-running agent process. The backend
+installer also requests a native MCP configuration refresh from a live local
+Codex daemon, and reports when that refresh is pending.
+
+The installer includes an `AGENTSHELL_UI_REVISION` content hash in the server's
+environment. Updating the adapter changes that configuration value so a native
+MCP reload replaces the old stdio process. Restarting only the AgentShell backend
+does not update Python code already loaded by an agent's MCP process. Codex's
+app-server `config/mcpServer/reload` refreshes its configuration and queues a
+refresh for loaded threads; reconnecting/resuming the same conversation is also
+an option when the agent client does not expose a reload control.
+
+Publication failures include the backend's explanation after the HTTP status,
+for example `HTTP 409: The publisher has no terminal identity`. The adapter caps
+the response detail at 8 KiB and redacts its authentication token. A successful
+`get_ui_design_system` call only reads the stylesheet; it does not test the
+publisher's conversation identity or connectivity to the backend.
 
 ## Codex
 
@@ -65,8 +83,10 @@ ambiguous conversations fail rather than publishing to another chat.
 Register using the official CLI:
 
 ```bash
+AGENTSHELL_UI_REVISION="$(sha256sum /opt/agentshell/ui/agent-ui-mcp.py | cut -d ' ' -f1)"
 codex mcp add agentshell-ui \
   --env "AGENTSHELL_UI_CONFIG=$HOME/.config/agentshell/interactive-ui.json" \
+  --env "AGENTSHELL_UI_REVISION=$AGENTSHELL_UI_REVISION" \
   -- /usr/bin/python3 /opt/agentshell/ui/agent-ui-mcp.py
 codex mcp get agentshell-ui
 ```
@@ -80,7 +100,13 @@ args = ["/opt/agentshell/ui/agent-ui-mcp.py"]
 
 [mcp_servers.agentshell-ui.env]
 AGENTSHELL_UI_CONFIG = "/home/YOUR_USER/.config/agentshell/interactive-ui.json"
+AGENTSHELL_UI_REVISION = "<SHA256_OF_INSTALLED_ADAPTER>"
 ```
+
+For manual entries, replace the revision placeholder with the installed
+adapter's hash and update it whenever that file changes. `./install.sh` computes
+it automatically. Reload the native MCP connection after registering an update;
+see the [409 recovery guide](interactive-ui-troubleshooting.md).
 
 Codex's conversation-identity hook may require its normal one-time review in
 `/hooks`. Review that hook when prompted; MCP registration does not bypass trust.
@@ -90,8 +116,10 @@ Codex's conversation-identity hook may require its normal one-time review in
 Use user scope so the tools are available in every folder:
 
 ```bash
+AGENTSHELL_UI_REVISION="$(sha256sum /opt/agentshell/ui/agent-ui-mcp.py | cut -d ' ' -f1)"
 claude mcp add --scope user --transport stdio agentshell-ui \
   --env "AGENTSHELL_UI_CONFIG=$HOME/.config/agentshell/interactive-ui.json" \
+  --env "AGENTSHELL_UI_REVISION=$AGENTSHELL_UI_REVISION" \
   -- /usr/bin/python3 /opt/agentshell/ui/agent-ui-mcp.py
 claude mcp get agentshell-ui
 ```
@@ -105,7 +133,8 @@ The equivalent entry under `mcpServers` in `~/.claude.json` is:
     "command": "/usr/bin/python3",
     "args": ["/opt/agentshell/ui/agent-ui-mcp.py"],
     "env": {
-      "AGENTSHELL_UI_CONFIG": "/home/YOUR_USER/.config/agentshell/interactive-ui.json"
+      "AGENTSHELL_UI_CONFIG": "/home/YOUR_USER/.config/agentshell/interactive-ui.json",
+      "AGENTSHELL_UI_REVISION": "<SHA256_OF_INSTALLED_ADAPTER>"
     }
   }
 }
@@ -128,15 +157,18 @@ configuration used by your installation):
     "command": ["/usr/bin/python3", "/opt/agentshell/ui/agent-ui-mcp.py"],
     "enabled": true,
     "environment": {
-      "AGENTSHELL_UI_CONFIG": "/home/YOUR_USER/.config/agentshell/interactive-ui.json"
+      "AGENTSHELL_UI_CONFIG": "/home/YOUR_USER/.config/agentshell/interactive-ui.json",
+      "AGENTSHELL_UI_REVISION": "<SHA256_OF_INSTALLED_ADAPTER>"
     }
   }
 }
 ```
 
-Retain every other server and setting. On another machine, install the local
-daemon and server there; the stdio publisher must inherit the owning local
-agent's `TMUX_PANE`. Do not point it at an unrelated remote pane by directory.
+Retain every other server and setting. Replace the revision placeholder with
+the installed adapter's hash and update it after adapter upgrades. On another
+machine, install the local daemon and server there. Claude and OpenCode inherit
+the owning local agent's `TMUX_PANE`; Codex uses per-call native thread metadata.
+Do not point a publisher at an unrelated remote pane by directory.
 
 ## Verify and use
 
@@ -154,6 +186,14 @@ Smart UI** guidance. Keep a short text explanation alongside each interactive vi
 See [interactive UI](interactive-ui.md) for libraries, state and sandbox boundaries.
 
 ## Troubleshooting
+
+For a 409 after an adapter update, follow the
+[publication recovery guide](interactive-ui-troubleshooting.md). It records the
+ClaudeAssist incident, the permanent fix, native reload requests and delivery
+checks. A backend restart alone does not refresh a running MCP adapter.
+For an existing Android chat waiting for its conversation identity, follow the
+[Codex chat-binding guide](codex-chat-binding-troubleshooting.md), including the
+scrollback footer regression.
 
 - **Tools absent:** restart/reload the agent; check its registered server entry,
   disabled-server settings and any strict MCP configuration supplied by a wrapper.

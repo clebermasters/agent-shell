@@ -1,0 +1,18 @@
+[Unit]
+Description=AgentShell backend and terminal chat
+After=network.target
+
+[Service]
+Type=simple
+User=$service_user
+WorkingDirectory=$working_directory
+ExecStart=$executable
+EnvironmentFile=$environment_file
+Environment="PATH=$service_path"
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

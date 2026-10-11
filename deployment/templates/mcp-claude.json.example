@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agentshell-ui": {
+      "type": "stdio",
+      "command": "/usr/bin/python3",
+      "args": ["/opt/agentshell/ui/agent-ui-mcp.py"],
+      "env": {
+        "AGENTSHELL_UI_CONFIG": "/home/YOUR_USER/.config/agentshell/interactive-ui.json",
+        "AGENTSHELL_UI_REVISION": "<SHA256_OF_INSTALLED_ADAPTER>"
+      }
+    }
+  }
+}

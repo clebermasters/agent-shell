@@ -21,6 +21,9 @@ The **maintained and feature-complete client is the native Android app** (`andro
 ## What’s new since the original docs
 
 - [Interactive chat messages and appearance](docs/interactive-ui.md): charts, diagrams, calculators, 3D and maps; expand messages, share images, and switch the saved light/dark/system theme. Native agents publish through the installed AgentShell UI MCP tools.
+- [Smart UI publication troubleshooting](docs/interactive-ui-troubleshooting.md): recover from HTTP 409 after an adapter update, reload the native MCP connection and verify the correct conversation.
+- [Existing Codex chat binding troubleshooting](docs/codex-chat-binding-troubleshooting.md): diagnose an existing chat losing its identity while Codex terminal history is scrolled.
+- [One-script backend and MCP installation](deployment/README.md): bootstrap missing dependencies on a new Linux computer using the repository's dependency manifest and configuration templates.
 
 - Direct Chat support for both:
   - **OpenCode ACP** (shared ACP transport)

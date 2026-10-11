@@ -1,0 +1,14 @@
+{
+  // Merge the AgentShell entry with existing servers; retain other settings.
+  "mcp": {
+    "agentshell-ui": {
+      "type": "local",
+      "command": ["/usr/bin/python3", "/opt/agentshell/ui/agent-ui-mcp.py"],
+      "enabled": true,
+      "environment": {
+        "AGENTSHELL_UI_CONFIG": "/home/YOUR_USER/.config/agentshell/interactive-ui.json",
+        "AGENTSHELL_UI_REVISION": "<SHA256_OF_INSTALLED_ADAPTER>"
+      }
+    }
+  }
+}

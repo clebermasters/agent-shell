@@ -462,17 +462,14 @@ impl BindingStore {
 /// text, the draft, menus, or scrollback are not conversation identity.
 fn parse_codex_terminal_id(screen: &str, cursor_y: usize) -> Option<String> {
     let lines: Vec<_> = screen.lines().collect();
-    let last = lines.iter().rposition(|line| !line.trim().is_empty())?;
-    let footer_index = if lines[last].trim_end().ends_with("? for shortcuts") {
-        last.checked_sub(1)?
-    } else if last + 2 == lines.len() && lines.last()?.trim().is_empty() {
-        // The shortcuts hint is hidden while the composer contains a draft,
-        // including between our bracketed paste and its guarded Enter.
-        last
-    } else {
-        return None;
-    };
-    if footer_index <= cursor_y + 1 || !lines.get(footer_index - 1)?.trim().is_empty() {
+    // Native Codex reserves the penultimate viewport row for the status line.
+    // The final row is a context-dependent hint (or blank): typing, scrollback
+    // and active turns all change it. Identity must not depend on those words,
+    // especially between bracketed paste and the guarded Enter.
+    let footer_index = lines.len().checked_sub(2)?;
+    if footer_index <= cursor_y.saturating_add(1)
+        || !lines.get(footer_index - 1)?.trim().is_empty()
+    {
         return None;
     }
     let footer = lines.get(footer_index)?.trim();
@@ -526,6 +523,11 @@ pub(crate) async fn codex_terminal_id(pane: &PaneIdentity) -> Result<Option<Stri
         return Ok(None);
     }
     let cursor = fields[2].parse::<usize>()?;
+    let height = fields[3].parse::<usize>()?;
+    // A resize between header and capture must not shift the presumed footer.
+    if screen.lines().count() != height || cursor >= height {
+        return Ok(None);
+    }
     Ok(parse_codex_terminal_id(screen, cursor))
 }
 
@@ -1354,6 +1356,46 @@ mod tests {
         ] {
             assert!(parse_codex_terminal_id(&screen, 1).is_none(), "{screen}");
         }
+    }
+
+    #[test]
+    fn codex_identity_survives_the_scrollback_shortcuts_hint() {
+        let id = "01a1278e-30c6-7af3-bcc6-8641b02f261a";
+        let screen = format!(
+            "  ↓ Back to bottom · esc\n\n› Ask Codex to do anything\n\n  {id} · model · folder\n  enter/esc latest · ? shortcuts\n"
+        );
+        assert_eq!(parse_codex_terminal_id(&screen, 2), Some(id.into()));
+        // The same hint cannot turn a draft or assistant-text UUID into identity.
+        assert!(parse_codex_terminal_id(&screen, 4).is_none());
+        for screen in [
+            format!("  {id}\n› draft\n\nmodel · folder\nenter/esc latest · ? shortcuts"),
+            format!("› {id}\n\nmodel\nenter/esc latest · ? shortcuts"),
+            "› draft\n\n  01a1278e-30c6-7af3-bcc6…\nenter/esc latest · ? shortcuts".into(),
+        ] {
+            assert!(parse_codex_terminal_id(&screen, 1).is_none(), "{screen}");
+        }
+    }
+
+    #[test]
+    fn codex_identity_does_not_depend_on_bottom_key_hints() {
+        let id = "01a1278e-30c6-7af3-bcc6-8641b02f261a";
+        for hint in [
+            "? for shortcuts",
+            "enter/esc latest · ? shortcuts",
+            "esc latest",
+            "tab queue message",
+            "esc to interrupt",
+            "",
+        ] {
+            let screen = format!("Agent output\n› draft\n\n  {id} · model\n  {hint}\n");
+            assert_eq!(parse_codex_terminal_id(&screen, 1), Some(id.into()), "{hint}");
+        }
+        // A UUID above the footer is not identity, even beside a plausible hint.
+        assert!(parse_codex_terminal_id(
+            &format!("› draft\n\n  {id}\n? for shortcuts\nother footer\n"),
+            0
+        )
+        .is_none());
     }
 
     #[test]

@@ -22,7 +22,7 @@ import com.agentshell.data.model.SessionTagAssignment
         SessionTag::class,
         SessionTagAssignment::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -33,6 +33,11 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sessionTagDao(): SessionTagDao
 
     companion object {
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE hosts ADD COLUMN tls INTEGER DEFAULT NULL")
+            }
+        }
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("""

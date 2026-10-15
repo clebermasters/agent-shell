@@ -57,14 +57,8 @@ class HostsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // If no hosts exist, load build-time defaults
-            repository.getHosts().collect { hosts ->
-                if (hosts.isEmpty()) {
-                    val buildTimeHosts = repository.loadBuildTimeHosts()
-                    buildTimeHosts.forEach { repository.saveHost(it) }
-                }
-                _isLoading.update { false }
-            }
+            repository.ensureDefaultHosts()
+            _isLoading.update { false }
         }
     }
 

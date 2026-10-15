@@ -1,0 +1,16 @@
+{
+  "version": "1.5.0",
+  "aptPackages": ["openbox", "xauth", "fonts-dejavu-core", "dbus-user-session", "libsecret-1-0", "gnome-keyring", "libpam-gnome-keyring", "xdg-dbus-proxy", "python3-gi", "gir1.2-gtk-3.0", "gir1.2-webkit2-4.0"],
+  "executables": ["Xvnc", "kasmvncpasswd", "openbox", "xauth", "google-chrome", "xdg-dbus-proxy", "busctl", "gnome-keyring-daemon"],
+  "packages": {
+    "jammy-amd64": {
+      "url": "https://github.com/kasmtech/KasmVNC/releases/download/v1.5.0/kasmvncserver_jammy_1.5.0_amd64.deb",
+      "sha256": "485c190b1d9269fc40fc7205f850ecf71292d737cdb5482e778f2e52f128cd8a"
+    }
+  },
+  "clientHashes": {
+    "vnc.html": "e83beef3521001888e20a47a261165f9507acc1e5588f3ba2b384ac3d7a68844",
+    "assets/ui-BOjwDkC7.js": "351b7a0b3b05261b8bff17419e28a8216f691e2eee1e6800842f4773a143c727"
+  },
+  "chromeIfMissing": "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+}

@@ -6,6 +6,32 @@ Run **one script** from a clone of this repository:
 ./install.sh
 ```
 
+For the complete setup including remote Chrome on a new Ubuntu/Pop!_OS 22.04
+amd64 computer, use the same entry point with the browser component enabled:
+
+```bash
+./install.sh --with-browser kasmvnc --browser-origin https://your-agentshell-host
+```
+
+This installs missing agent CLIs and registers their MCP servers as well as the
+browser dependencies. The browser uses Chrome's automatic default/last-used
+profile selection; no fixed profile name is required. Provide the trusted HTTPS
+origin that Android will use. Browser setup does not sign in to accounts or
+unlock an existing password-protected keyring; those use the normal user login.
+
+Fresh installations use `~/.local/share/agentshell/chrome`; upgrades retain their
+configured browser directory. The same browser installation provisions the GTK/
+WebKit **AgentShell Chrome** desktop launcher and the `agentshell-browser phone`
+and `agentshell-browser desktop` commands. These transfer the viewer/controller
+while the managed Chrome keeps running. See [remote browser](../docs/remote-browser.md)
+for the full workflow, including standalone shortcut scripts and private-CA setup.
+It also installs the graphical-session handoff service and autostart entry needed
+for Android's **Send to computer** action to open a closed viewer. A headless/SSH
+installation waits for the user's next graphical login; it never guesses DISPLAY.
+The optional native action also installs `browser-native.py` and the native
+Chrome user service. This is a separate restart-and-restore handoff using the
+same managed profile; normal viewer transfer continues to keep Chrome running.
+
 Supported hosts are Ubuntu/Pop!_OS 22.04+, Debian 12+, and compatible Debian-based
 Linux systems with Bash, apt and systemd. Automatic Node installation supports
 x64 and ARM64. The first installation needs internet access and sudo/root access
@@ -37,6 +63,11 @@ agents, conversation logs and MCP registration use that account.
    configuration refresh for a live local Codex daemon. Existing model turns are
    not restarted. If refresh fails, the script explicitly reports the pending
    reload rather than silently claiming a running client is updated.
+8. With `--with-browser kasmvnc`: pinned KasmVNC and matching viewer assets,
+   Chrome when absent, Openbox, fonts, Xauthority, D-Bus, the filtered credential
+   proxy, GNOME Keyring and its login integration, plus the independently
+   supervised browser runtime. Missing or damaged pinned viewer assets are
+   reinstalled even when the package database reports the package installed.
 
 The script verifies the installed MCP handshake, both tools and design system
 without publishing a card into a user conversation. New agent accounts still
@@ -57,6 +88,8 @@ credentials is needed to recreate its software setup.
 | [Native MCP refresh](../scripts/reload-codex-mcp.py) | Locates the current daemon socket and queues a configuration refresh. |
 | [UI assets](../android-native/app/src/main/assets/ui/) | Complete renderer/library reference, bundled in Android and copied by backend installation. |
 | [Cargo.lock](../backend-rust/Cargo.lock) | Rust dependency versions for the backend build. |
+| [browser/dependencies.json](browser/dependencies.json) | Browser packages, required executables, upstream downloads and pinned viewer hashes. |
+| [Browser runtime](../scripts/browser-runtime.py) | Chrome process ownership, default profile selection and filtered credential access. |
 
 The dependency manifest pins fresh-install versions. Existing working versions
 are not automatically downgraded to match it. Node archives are checked against
@@ -90,6 +123,7 @@ the reference templates or copied from this computer into Git.
 
 ```bash
 ./install.sh --check                         # Read-only dependency/source report
+./install.sh --check --with-browser kasmvnc  # Include browser software, executables and asset hashes
 ./install.sh --deps-only                     # Provision dependencies without deploying
 ./install.sh --agents codex                  # Install/register only Codex
 ./install.sh --agents installed              # Register working existing agents
@@ -97,6 +131,7 @@ the reference templates or copied from this computer into Git.
 ./install.sh --no-start                      # Prepare an image without starting systemd
 ./install.sh --skip-dependencies             # Use an already provisioned host
 ./install.sh --binary /path/to/backend       # Deploy a prebuilt backend
+./install.sh --with-browser kasmvnc --browser-origin https://your-host
 ```
 
 `--install-dir`, `--unit-dir`, `--service-user`, `--http-port` and `--https-port`
@@ -113,12 +148,30 @@ build an APK or modify a phone. See [interactive UI](../docs/interactive-ui.md).
 ```bash
 python3 scripts/test_backend_install.py
 python3 scripts/test_ui_mcp.py
+python3 scripts/test_browser_runtime.py
+# Verify automatic selection using an existing isolated Chrome profile:
+python3 scripts/test_browser_streaming.py --automatic-profile-check
+# Use a new/empty output directory for a clean Ubuntu container:
+python3 scripts/test_fresh_browser_install.py --output /tmp/agentshell-fresh-install
 ```
 
 Installer validation must include a clean Linux environment with dependencies
 missing, a second install preserving token/history/settings, installed asset
 hashes, MCP tools/design-system discovery, and authenticated backend access.
 Never use production credentials or user databases in that clean-machine test.
+
+The fresh-browser test starts without Python, Chrome or agent tooling and with
+empty home/install directories. It installs all three agent CLIs, checks MCP
+registration and tool/design-system discovery, activates the installed secret
+service, verifies native shared libraries, removes a viewer asset and verifies
+repair, and repeats installation while preserving browser identity, token and
+unrelated MCP entries. It deploys a prebuilt backend to keep this dependency
+check separate from the earlier source-build test.
+
+The browser requires an actual credential-store provider: the libsecret client
+library alone does not provide one. Ubuntu's [GNOME Keyring package](https://packages.ubuntu.com/jammy/gnome-keyring)
+provides the daemon and recommends its login integration; both are explicitly
+installed because this installer disables APT's optional recommendations.
 
 ### Validation record: 2026-10-10
 
@@ -141,3 +194,16 @@ before restart. The final run passed authentication and health checks and
 refreshed the existing Codex MCP connection. Current agent conversations and
 history stayed in place. Nine installer/configuration tests and seven MCP
 adapter tests passed.
+
+On 2026-10-12, the expanded clean Ubuntu 22.04 test installed the complete
+browser and all three agent CLIs, activated the keyring service, checked MCP
+registration/discovery and native libraries, repaired a removed pinned viewer
+asset, and preserved identity/token/unrelated MCP entries on reinstallation.
+Eleven installer tests, twelve runtime tests and seven MCP tests passed. Eight
+live gateway/profile checks verified that Chrome reused its own previously
+selected fixture profile without a forced profile argument. The existing
+production browser was not restarted during this audit.
+
+## Trusted direct LAN HTTPS
+
+The same installer can prepare a DNS-only LAN hostname, a publicly trusted certificate, renewal and DHCP address tracking. See [LAN browser HTTPS](../docs/lan-browser-https.md) for the complete command and private credential configuration. Use `--lan-hostname HOST --lan-interface IFACE` with the existing backend/browser installation command.

@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -23,6 +24,7 @@ class PreferencesDataStore @Inject constructor(
 
     private object Keys {
         val SELECTED_HOST_ID = stringPreferencesKey("selected_host_id")
+        val IMPORTED_DEFAULT_HOSTS = stringSetPreferencesKey("imported_default_hosts")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val TERMINAL_FONT_SIZE = floatPreferencesKey("terminal_font_size")
         val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
@@ -56,6 +58,15 @@ class PreferencesDataStore @Inject constructor(
         dataStore.edit { prefs ->
             if (value != null) prefs[Keys.SELECTED_HOST_ID] = value
             else prefs.remove(Keys.SELECTED_HOST_ID)
+        }
+    }
+
+    val importedDefaultHosts: Flow<Set<String>>
+        get() = dataStore.data.map { it[Keys.IMPORTED_DEFAULT_HOSTS] ?: emptySet() }
+
+    suspend fun markDefaultHostsImported(endpoints: Set<String>) {
+        dataStore.edit { prefs ->
+            prefs[Keys.IMPORTED_DEFAULT_HOSTS] = (prefs[Keys.IMPORTED_DEFAULT_HOSTS] ?: emptySet()) + endpoints
         }
     }
 

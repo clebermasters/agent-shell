@@ -55,6 +55,8 @@ base64 = "0.21"
 
 # Constant-time comparison for auth tokens
 subtle = "2.6"
+sha2 = "0.10"
+tokio-tungstenite = "0.24"
 
 # Lazy static for global state
 lazy_static = "1.4"

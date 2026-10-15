@@ -1,0 +1,18 @@
+[Unit]
+Description=AgentShell desktop browser handoff
+PartOf=graphical-session.target
+After=graphical-session-pre.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $runner --config $config
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=5
+Environment=HOME=$user_home
+Environment=XDG_RUNTIME_DIR=/run/user/$uid
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus
+UMask=0077
+
+[Install]
+WantedBy=graphical-session.target

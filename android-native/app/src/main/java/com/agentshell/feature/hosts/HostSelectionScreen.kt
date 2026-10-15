@@ -243,6 +243,7 @@ private fun HostFormDialog(
     var name by rememberSaveable { mutableStateOf(initialHost?.name ?: "") }
     var address by rememberSaveable { mutableStateOf(initialHost?.address ?: "") }
     var portText by rememberSaveable { mutableStateOf(initialHost?.port?.toString() ?: "4010") }
+    var tls by rememberSaveable { mutableStateOf(initialHost?.tls) }
 
     var nameError by remember { mutableStateOf<String?>(null) }
     var addressError by remember { mutableStateOf<String?>(null) }
@@ -261,6 +262,7 @@ private fun HostFormDialog(
             name = name.trim(),
             address = address.trim(),
             port = port!!,
+            tls = tls,
         )
     }
 
@@ -313,6 +315,10 @@ private fun HostFormDialog(
                 )
 
                 Spacer(Modifier.height(4.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Use HTTPS / WSS", Modifier.weight(1f))
+                    androidx.compose.material3.Switch(checked = tls ?: (portText == "443"), onCheckedChange = { tls = it })
+                }
 
                 // Test Connection button
                 TextButton(

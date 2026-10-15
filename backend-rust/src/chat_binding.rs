@@ -458,34 +458,114 @@ impl BindingStore {
     }
 }
 
-/// Only read Codex's native footer below the input cursor. UUIDs in assistant
-/// text, the draft, menus, or scrollback are not conversation identity.
-fn parse_codex_terminal_id(screen: &str, cursor_y: usize) -> Option<String> {
-    let lines: Vec<_> = screen.lines().collect();
-    // Native Codex reserves the penultimate viewport row for the status line.
-    // The final row is a context-dependent hint (or blank): typing, scrollback
-    // and active turns all change it. Identity must not depend on those words,
-    // especially between bracketed paste and the guarded Enter.
-    let footer_index = lines.len().checked_sub(2)?;
-    if footer_index <= cursor_y.saturating_add(1)
-        || !lines.get(footer_index - 1)?.trim().is_empty()
-    {
-        return None;
-    }
-    let footer = lines.get(footer_index)?.trim();
-    let id = footer.split(" · ").next()?.trim();
-    if id.len() != 36
-        || !id.bytes().enumerate().all(|(i, b)| {
+#[derive(Debug, PartialEq, Eq)]
+enum CodexTerminalId {
+    Complete(String),
+    Prefix(String),
+    GoalPrefix(String),
+}
+
+fn valid_codex_uuid_prefix(id: &str) -> bool {
+    id.len() <= 36
+        && id.bytes().enumerate().all(|(i, b)| {
             if [8, 13, 18, 23].contains(&i) {
                 b == b'-'
             } else {
                 b.is_ascii_hexdigit()
             }
         })
+}
+
+/// Only read Codex's native footer below the input cursor. UUIDs in assistant
+/// text, the draft, menus, or scrollback are not conversation identity.
+fn parse_codex_terminal_id(screen: &str, cursor_y: usize) -> Option<CodexTerminalId> {
+    let lines: Vec<_> = screen.lines().collect();
+    // Native Codex reserves the penultimate viewport row for the status line.
+    // The final row is a context-dependent hint (or blank): typing, scrollback
+    // and active turns all change it. Identity must not depend on those words,
+    // especially between bracketed paste and the guarded Enter.
+    let footer_index = lines.len().checked_sub(2)?;
+    if footer_index <= cursor_y.saturating_add(1) || !lines.get(footer_index - 1)?.trim().is_empty()
     {
         return None;
     }
-    Some(id.to_ascii_lowercase())
+    let footer = lines.get(footer_index)?.trim();
+    // Goals append a separate banner without the ordinary middle-dot separator
+    // and can truncate the ID even when it is the first configured status item.
+    let token = footer.split_whitespace().next()?;
+    if token.len() == 36 && valid_codex_uuid_prefix(token) {
+        return Some(CodexTerminalId::Complete(token.to_ascii_lowercase()));
+    }
+    let prefix = token.strip_suffix('…')?;
+    let banner = footer.strip_prefix(token)?.trim_start();
+    // A native goal banner (without the normal field separator) has a persisted
+    // full thread ID in the goal database, even before the first rollout exists.
+    // Corroborate it there and in the global index; do not depend on its wording
+    // or a status update racing the terminal redraw.
+    if banner.starts_with("Goal ")
+        && (8..36).contains(&prefix.len())
+        && valid_codex_uuid_prefix(prefix)
+    {
+        return Some(CodexTerminalId::GoalPrefix(prefix.to_ascii_lowercase()));
+    }
+    // Require the first three UUID groups (16 hex digits); an eight-character
+    // UUIDv7 timestamp alone is weak evidence, especially for a new thread.
+    if (18..36).contains(&prefix.len()) && valid_codex_uuid_prefix(prefix) {
+        return Some(CodexTerminalId::Prefix(prefix.to_ascii_lowercase()));
+    }
+    None
+}
+
+fn codex_id_from_prefix(database: &Path, prefix: &str) -> Result<Option<String>> {
+    if !(18..36).contains(&prefix.len()) || !valid_codex_uuid_prefix(prefix) {
+        return Ok(None);
+    }
+    let connection = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // Match every recorded thread, including other folders and archived threads.
+    // CWD, recency, and a cached pane binding must never break an ID collision.
+    let mut statement = connection.prepare("SELECT id FROM threads WHERE id GLOB ? LIMIT 2")?;
+    let ids = statement
+        .query_map([format!("{prefix}*")], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(match ids.as_slice() {
+        [id] if id.len() == 36 && valid_codex_uuid_prefix(id) => Some(id.clone()),
+        _ => None,
+    })
+}
+
+fn codex_goal_id_from_prefix(
+    database: &Path,
+    goals_database: &Path,
+    prefix: &str,
+) -> Result<Option<String>> {
+    if !(8..36).contains(&prefix.len()) || !valid_codex_uuid_prefix(prefix) {
+        return Ok(None);
+    }
+    let goals = Connection::open_with_flags(goals_database, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut statement =
+        goals.prepare("SELECT thread_id FROM thread_goals WHERE thread_id GLOB ? LIMIT 2")?;
+    let matches = statement
+        .query_map([format!("{prefix}*")], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let [id] = matches.as_slice() else {
+        return Ok(None);
+    };
+    if id.len() != 36 || !valid_codex_uuid_prefix(id) {
+        return Ok(None);
+    }
+    let connection = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut statement = connection.prepare("SELECT id FROM threads WHERE id GLOB ? LIMIT 2")?;
+    let ids = statement
+        .query_map([format!("{prefix}*")], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    // Goal state is persisted independently and can exist before a thread's
+    // first rollout. Include that ID in uniqueness checks even without an index
+    // row; another folder, archived thread, or goal must never break a collision.
+    Ok(if ids.iter().all(|known| known == id) {
+        Some(id.clone())
+    } else {
+        None
+    })
 }
 
 pub(crate) async fn codex_terminal_id(pane: &PaneIdentity) -> Result<Option<String>> {
@@ -528,7 +608,25 @@ pub(crate) async fn codex_terminal_id(pane: &PaneIdentity) -> Result<Option<Stri
     if screen.lines().count() != height || cursor >= height {
         return Ok(None);
     }
-    Ok(parse_codex_terminal_id(screen, cursor))
+    match parse_codex_terminal_id(screen, cursor) {
+        Some(CodexTerminalId::Complete(id)) => Ok(Some(id)),
+        Some(CodexTerminalId::Prefix(prefix)) => {
+            let path = home()?.join(".codex/state_5.sqlite");
+            tokio::task::spawn_blocking(move || codex_id_from_prefix(&path, &prefix)).await?
+        }
+        Some(CodexTerminalId::GoalPrefix(prefix)) => {
+            let home = home()?;
+            tokio::task::spawn_blocking(move || {
+                codex_goal_id_from_prefix(
+                    &home.join(".codex/state_5.sqlite"),
+                    &home.join(".codex/goals_1.sqlite"),
+                    &prefix,
+                )
+            })
+            .await?
+        }
+        None => Ok(None),
+    }
 }
 
 /// Resolve MCP's per-call thread ID to one foreground client, independently of
@@ -1342,10 +1440,10 @@ mod tests {
     #[test]
     fn codex_identity_is_only_the_full_native_footer_below_the_cursor() {
         let id = "01a11981-6ad0-7300-94d2-c653ae4a0973";
-        assert_eq!(parse_codex_terminal_id(&format!("Agent output\n› draft\n\n  {id} · model · folder\n  ← for agents · ? for shortcuts\n"), 1), Some(id.into()));
+        assert_eq!(parse_codex_terminal_id(&format!("Agent output\n› draft\n\n  {id} · model · folder\n  ← for agents · ? for shortcuts\n"), 1), Some(CodexTerminalId::Complete(id.into())));
         assert_eq!(
             parse_codex_terminal_id(&format!("Agent output\n› draft\n\n  {id}\n\n"), 1),
-            Some(id.into())
+            Some(CodexTerminalId::Complete(id.into()))
         );
         for screen in [
             format!("  {id}\n› draft\n\nmodel · folder\n? for shortcuts"),
@@ -1364,7 +1462,10 @@ mod tests {
         let screen = format!(
             "  ↓ Back to bottom · esc\n\n› Ask Codex to do anything\n\n  {id} · model · folder\n  enter/esc latest · ? shortcuts\n"
         );
-        assert_eq!(parse_codex_terminal_id(&screen, 2), Some(id.into()));
+        assert_eq!(
+            parse_codex_terminal_id(&screen, 2),
+            Some(CodexTerminalId::Complete(id.into()))
+        );
         // The same hint cannot turn a draft or assistant-text UUID into identity.
         assert!(parse_codex_terminal_id(&screen, 4).is_none());
         for screen in [
@@ -1388,7 +1489,11 @@ mod tests {
             "",
         ] {
             let screen = format!("Agent output\n› draft\n\n  {id} · model\n  {hint}\n");
-            assert_eq!(parse_codex_terminal_id(&screen, 1), Some(id.into()), "{hint}");
+            assert_eq!(
+                parse_codex_terminal_id(&screen, 1),
+                Some(CodexTerminalId::Complete(id.into())),
+                "{hint}"
+            );
         }
         // A UUID above the footer is not identity, even beside a plausible hint.
         assert!(parse_codex_terminal_id(
@@ -1396,6 +1501,206 @@ mod tests {
             0
         )
         .is_none());
+    }
+
+    #[test]
+    fn codex_goal_banner_keeps_the_complete_native_identity() {
+        let id = "01a1289e-5db8-76c1-a826-d4835b6537d9";
+        let screen = format!("Agent output\n› draft\n\n  {id} Goal achieved (2h 41m)\n  ← for agents · ? for shortcuts\n");
+        assert_eq!(
+            parse_codex_terminal_id(&screen, 1),
+            Some(CodexTerminalId::Complete(id.into()))
+        );
+    }
+
+    #[test]
+    fn codex_goal_footer_reports_truncation_instead_of_losing_identity() {
+        let prefix = "01a1289e-5db8-76c1-";
+        for banner in [
+            "Goal achieved (2h 41m)",
+            "Goal paused",
+            "Goal budget reached",
+            "",
+        ] {
+            let screen = format!(
+                "Agent output\n› draft\n\n  {prefix}… {banner}\n  ← for agents · ? for shortcuts\n"
+            );
+            assert_eq!(
+                parse_codex_terminal_id(&screen, 1),
+                Some(if banner.starts_with("Goal ") {
+                    CodexTerminalId::GoalPrefix(prefix.into())
+                } else {
+                    CodexTerminalId::Prefix(prefix.into())
+                })
+            );
+        }
+        for screen in [
+            format!("  {prefix}…\n› draft\n\nmodel · folder\n? for shortcuts\n"),
+            format!("› {prefix}…\n\nmodel · folder\n? for shortcuts\n"),
+            format!("Agent output\n› draft\n\nSession ID: {prefix}…\nEnter to select\n"),
+            format!("Agent output\n› draft\n\n  {prefix}\n? for shortcuts\n"),
+            "Agent output\n› draft\n\n  01a1289… Goal achieved\n? for shortcuts\n".into(),
+            "Agent output\n› draft\n\n  01a1289e_bad8-76c1-… Goal achieved\n? for shortcuts\n"
+                .into(),
+        ] {
+            assert!(parse_codex_terminal_id(&screen, 1).is_none(), "{screen}");
+        }
+    }
+
+    fn codex_index(directory: &tempfile::TempDir, threads: &[(&str, &str, bool)]) -> PathBuf {
+        let path = directory.path().join("codex-index.sqlite");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY, cwd TEXT, archived INTEGER)")
+            .unwrap();
+        for (id, cwd, archived) in threads {
+            connection
+                .execute(
+                    "INSERT INTO threads VALUES(?,?,?)",
+                    params![id, cwd, archived],
+                )
+                .unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn codex_truncated_identity_distinguishes_two_conversations_in_the_same_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = "01a1289e-5db8-76c1-a826-d4835b6537d9";
+        let second = "01a0da32-841e-7100-9e6e-a200cbd74290";
+        let path = codex_index(
+            &directory,
+            &[
+                (first, "/same/project", false),
+                (second, "/same/project", false),
+            ],
+        );
+        assert_eq!(
+            codex_id_from_prefix(&path, &first[..19]).unwrap(),
+            Some(first.into())
+        );
+        assert_eq!(
+            codex_id_from_prefix(&path, &second[..19]).unwrap(),
+            Some(second.into())
+        );
+        // Reopening the database must not depend on an in-memory registration.
+        assert_eq!(
+            codex_id_from_prefix(&path, &first[..19]).unwrap(),
+            Some(first.into())
+        );
+        assert!(codex_id_from_prefix(&path, "01a1289e-5db8-76c0-")
+            .unwrap()
+            .is_none());
+        assert!(codex_id_from_prefix(&path, "01a1289e").unwrap().is_none());
+    }
+
+    #[test]
+    fn codex_truncated_identity_rejects_collisions_across_folders_and_archived_threads() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = "01a1289e-5db8-76c1-a826-d4835b6537d9";
+        let second = "01a1289e-5db8-76c1-b826-d4835b6537d9";
+        let path = codex_index(
+            &directory,
+            &[
+                (first, "/first/project", false),
+                (second, "/other/project", true),
+            ],
+        );
+        assert!(codex_id_from_prefix(&path, &first[..19]).unwrap().is_none());
+        // A longer native prefix can disambiguate them; a directory cannot.
+        assert_eq!(
+            codex_id_from_prefix(&path, &first[..20]).unwrap(),
+            Some(first.into())
+        );
+    }
+
+    #[test]
+    fn codex_paused_goal_requires_matching_persisted_goal_identity() {
+        let id = "01a12d3c-09b3-7f41-b4ce-d4835b6537d9";
+        let prefix = &id[..14];
+        let screen = format!(
+            "Agent output\n› draft\n\n  {prefix}… Goal paused (/goal resume)\n  ? for shortcuts\n"
+        );
+        assert_eq!(
+            parse_codex_terminal_id(&screen, 1),
+            Some(CodexTerminalId::GoalPrefix(prefix.into()))
+        );
+        assert!(parse_codex_terminal_id(
+            &screen.replace("Goal paused (/goal resume)", "model · folder"),
+            1
+        )
+        .is_none());
+        let directory = tempfile::tempdir().unwrap();
+        let path = codex_index(&directory, &[(id, "/same/project", false)]);
+        let goals_path = directory.path().join("goals.sqlite");
+        let goals = Connection::open(&goals_path).unwrap();
+        goals
+            .execute_batch("CREATE TABLE thread_goals(thread_id TEXT PRIMARY KEY,status TEXT)")
+            .unwrap();
+        assert!(codex_goal_id_from_prefix(&path, &goals_path, prefix)
+            .unwrap()
+            .is_none());
+        goals
+            .execute("INSERT INTO thread_goals VALUES(?, 'paused')", [id])
+            .unwrap();
+        assert_eq!(
+            codex_goal_id_from_prefix(&path, &goals_path, prefix).unwrap(),
+            Some(id.into())
+        );
+        goals
+            .execute("UPDATE thread_goals SET status='complete'", [])
+            .unwrap();
+        assert_eq!(
+            codex_goal_id_from_prefix(&path, &goals_path, prefix).unwrap(),
+            Some(id.into())
+        );
+        assert_eq!(
+            codex_goal_id_from_prefix(&path, &goals_path, &id[..8]).unwrap(),
+            Some(id.into())
+        );
+    }
+
+    #[test]
+    fn codex_short_goal_prefix_cannot_choose_between_thread_or_goal_collisions() {
+        let first = "01a12d3c-09b3-7f41-b4ce-d4835b6537d9";
+        let second = "01a12d3c-09b3-7a41-b4ce-d4835b6537d9";
+        let prefix = &first[..14];
+        let directory = tempfile::tempdir().unwrap();
+        let path = codex_index(
+            &directory,
+            &[
+                (first, "/same/project", false),
+                (second, "/other/project", true),
+            ],
+        );
+        let goals_path = directory.path().join("goals.sqlite");
+        let goals = Connection::open(&goals_path).unwrap();
+        goals
+            .execute_batch("CREATE TABLE thread_goals(thread_id TEXT PRIMARY KEY,status TEXT)")
+            .unwrap();
+        goals
+            .execute("INSERT INTO thread_goals VALUES(?, 'paused')", [first])
+            .unwrap();
+        assert!(codex_goal_id_from_prefix(&path, &goals_path, prefix)
+            .unwrap()
+            .is_none());
+        Connection::open(&path)
+            .unwrap()
+            .execute("DELETE FROM threads", [])
+            .unwrap();
+        // A new goal without its first transcript can still be identified.
+        assert_eq!(
+            codex_goal_id_from_prefix(&path, &goals_path, prefix).unwrap(),
+            Some(first.into())
+        );
+        goals
+            .execute("INSERT INTO thread_goals VALUES(?, 'complete')", [second])
+            .unwrap();
+        // A different goal status cannot be used to break a UUID collision.
+        assert!(codex_goal_id_from_prefix(&path, &goals_path, prefix)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

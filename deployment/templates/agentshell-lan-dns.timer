@@ -1,0 +1,10 @@
+[Unit]
+Description=Track AgentShell host LAN address changes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=15
+
+[Install]
+WantedBy=timers.target

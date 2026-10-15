@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsNone
@@ -38,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.layout.Layout
@@ -55,6 +57,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.agentshell.core.widgets.ConnectionStatusBanner
 import com.agentshell.data.model.AiUsage
+import com.agentshell.data.model.Host
+import com.agentshell.data.model.ConnectionStatus
+import com.agentshell.feature.hosts.ServerSwitcherButton
+import com.agentshell.feature.hosts.ServerSwitcherSheet
+import kotlinx.coroutines.launch
 import com.agentshell.feature.system.AlertBanner
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -79,12 +86,14 @@ private const val TAB_SYSTEM = 3
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
+    onNavigateToBrowser: () -> Unit = {},
     onNavigateToTerminal: (sessionName: String) -> Unit,
     onNavigateToChat: (sessionName: String, windowIndex: Int) -> Unit,
     onNavigateToAcpChat: (sessionId: String, cwd: String) -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToAlerts: () -> Unit,
     onNavigateToHosts: () -> Unit,
+    onServerSwitched: () -> Unit = {},
     onNavigateToSplitScreen: (layoutId: String?) -> Unit = {},
     allowAutoAttach: Boolean = true,
     sessionsContent: @Composable (Boolean) -> Unit,
@@ -95,6 +104,9 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
+    val hosts by viewModel.hosts.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var showServerSwitcher by rememberSaveable { mutableStateOf(false) }
     val paletteSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showPalette by rememberSaveable { mutableStateOf(false) }
 
@@ -171,6 +183,9 @@ fun HomeScreen(
         ) {
             // ── Top bar row: alert banner + notifications bell + settings ──
             TopBarRow(
+                selectedHost = uiState.selectedHost,
+                connectionStatus = uiState.connectionStatus,
+                onServerClick = { showServerSwitcher = true },
                 unreadAlertCount = uiState.unreadAlertCount,
                 onAlertsClick = {
                     viewModel.clearUnreadAlerts()
@@ -178,6 +193,7 @@ fun HomeScreen(
                 },
                 onSplitScreenClick = { onNavigateToSplitScreen(null) },
                 onSettingsClick = onNavigateToSettings,
+                onBrowserClick = onNavigateToBrowser,
             )
 
             // ── Alert banner (CPU/RAM/Disk warnings) ──
@@ -200,6 +216,20 @@ fun HomeScreen(
                 KeepAliveTabContent(visible = uiState.currentTabIndex == TAB_SYSTEM, content = systemContent)
             }
         }
+    }
+
+    if (showServerSwitcher) {
+        ServerSwitcherSheet(
+            hosts = hosts,
+            selectedHost = uiState.selectedHost,
+            connectionStatus = uiState.connectionStatus,
+            onSelect = { host ->
+                showServerSwitcher = false
+                scope.launch { if (viewModel.switchHost(host)) onServerSwitched() }
+            },
+            onManage = { showServerSwitcher = false; onNavigateToHosts() },
+            onDismiss = { showServerSwitcher = false },
+        )
     }
 
     // ── Command Palette Sheet ──
@@ -229,6 +259,10 @@ fun HomeScreen(
 
 @Composable
 private fun TopBarRow(
+    selectedHost: Host?,
+    connectionStatus: ConnectionStatus,
+    onServerClick: () -> Unit,
+    onBrowserClick: () -> Unit = {},
     unreadAlertCount: Int,
     onAlertsClick: () -> Unit,
     onSplitScreenClick: () -> Unit = {},
@@ -240,13 +274,17 @@ private fun TopBarRow(
             .padding(horizontal = 8.dp, vertical = 0.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
-        Text(
-            text = "AgentShell",
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.weight(1f).padding(start = 8.dp),
+        ServerSwitcherButton(
+            host = selectedHost,
+            connectionStatus = connectionStatus,
+            onClick = onServerClick,
+            modifier = Modifier.weight(1f).padding(vertical = 4.dp),
         )
 
         com.agentshell.core.theme.ThemeToggleButton()
+        IconButton(onClick = onBrowserClick, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.Language, contentDescription = "Remote browser", modifier = Modifier.size(20.dp))
+        }
         IconButton(onClick = onSplitScreenClick, modifier = Modifier.size(36.dp)) {
             Icon(Icons.Default.Dashboard, contentDescription = "Split Screen", modifier = Modifier.size(20.dp))
         }

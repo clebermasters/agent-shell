@@ -27,6 +27,7 @@ struct TmuxInput {
 mod acp;
 mod audio;
 mod auth;
+mod browser;
 mod chat_activity;
 mod chat_binding;
 mod chat_clear_store;
@@ -161,6 +162,7 @@ async fn main() -> Result<()> {
 
     // Build the router — protected routes require auth token
     let protected = Router::new()
+        .merge(browser::api_router())
         .route("/api/chat/bind", post(chat_binding::register_hook))
         .route("/api/chat/ui", post(interactive_ui::publish))
         // API: Get connected clients count
@@ -302,6 +304,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .merge(protected)
+        .merge(browser::viewer_router())
         // Serve static files (Vue app) — no auth required
         .fallback_service(serve_dir)
         // Add CORS — restrict to localhost and optional configured domain
@@ -315,8 +318,8 @@ async fn main() -> Result<()> {
     info!("  Network:  http://0.0.0.0:{}", http_port);
 
     // Check if HTTPS certificates exist
-    let cert_path = PathBuf::from("../certs/cert.pem");
-    let key_path = PathBuf::from("../certs/key.pem");
+    let cert_path = std::env::var_os("AGENTSHELL_TLS_CERT_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("../certs/cert.pem"));
+    let key_path = std::env::var_os("AGENTSHELL_TLS_KEY_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("../certs/key.pem"));
 
     if cert_path.exists() && key_path.exists() {
         // Start HTTPS server in a separate task
@@ -330,6 +333,19 @@ async fn main() -> Result<()> {
                     return;
                 }
             };
+            #[cfg(unix)]
+            {
+                let reload = config.clone();
+                tokio::spawn(async move {
+                    let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) else { return };
+                    while signal.recv().await.is_some() {
+                        match reload.reload_from_pem_file(&cert_path, &key_path).await {
+                            Ok(()) => info!("HTTPS certificate reloaded"),
+                            Err(error) => error!("HTTPS certificate reload failed; keeping previous certificate: {}", error),
+                        }
+                    }
+                });
+            }
 
             info!("AgentShell HTTPS server running on {}", https_addr);
             info!("  Local:    https://localhost:{}", https_port);

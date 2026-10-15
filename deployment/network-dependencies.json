@@ -1,0 +1,11 @@
+{
+  "cloudflared": {
+    "version": "2026.10.0",
+    "packages": {
+      "linux-amd64": {
+        "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-amd64.deb",
+        "sha256": "9721287c28f78cb623e77c7b95a63feea87e909054d75666a0ec9eff20e5d548"
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+[Unit]
+Description=AgentShell HTTPS tunnel to homelab Nginx
+After=network-online.target nginx.service agentshell.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{SERVICE_USER}}
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --config {{CONFIG_FILE}} run {{TUNNEL_ID}}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=AgentShell native desktop Chrome
+PartOf=graphical-session.target
+After=graphical-session-pre.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $runner --config $config run
+WorkingDirectory=$runtime_directory
+Environment=HOME=$user_home
+Environment=XDG_RUNTIME_DIR=/run/user/$uid
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus
+UMask=0077
+KillMode=mixed
+TimeoutStopSec=45
+Restart=no

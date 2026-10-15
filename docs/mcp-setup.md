@@ -65,14 +65,19 @@ publisher's conversation identity or connectivity to the backend.
 
 Codex 0.162's shared app-server can own transcripts outside the terminal process.
 The installer puts the native session/thread ID first in `tui.status_line`, preserving your other
-footer items. AgentShell reads the full native UUID from the live footer below
-Codex's input cursor; it never identifies a conversation by directory or title.
+footer items. AgentShell reads the native UUID from the live footer below
+Codex's input cursor, recovering an explicitly truncated ID only when native
+metadata identifies exactly one full thread. Goal banners use Codex's persisted
+goal IDs plus the global thread index. It never chooses by directory or title.
 New conversations are usable before their first transcript is written.
 
 For an already-running Codex terminal, use **/statusline**, enable **Thread ID** (called Session ID in older versions),
 move it first and confirm. This updates the footer immediately without creating
-another conversation. The full ID must fit in the terminal. If it is hidden or
-truncated, a terminal-derived binding cannot authorize a send.
+another conversation. This is needed when the ID is not configured; an existing
+configured terminal can recover automatically when a goal banner truncates it.
+A hidden, too-short, or ambiguous identity still cannot authorize a send. See
+[binding troubleshooting](codex-chat-binding-troubleshooting.md) for diagnosis
+and the repeatable real-client regression.
 
 Codex's per-call MCP `_meta.threadId` routes widgets even when the shared server
 has no TMUX environment or inherited an old one. The backend checks the current

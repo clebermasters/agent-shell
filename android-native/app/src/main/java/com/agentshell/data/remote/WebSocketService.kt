@@ -134,6 +134,8 @@ class WebSocketService @Inject constructor(
             _isConnected = false
             _isConnecting = false
             cancelTimers()
+            // Buffered terminal input and mutations belong to the previous server only.
+            synchronized(pendingQueueLock) { pendingQueue.clear() }
         }
         currentUrl = finalUrl
         reconnectAttempts = 0
@@ -313,17 +315,18 @@ class WebSocketService @Inject constructor(
         }
     }
 
-    private fun flushPendingQueue() {
+    private fun flushPendingQueue(socket: WebSocket, listenerId: Long) {
         val snapshot = synchronized(pendingQueueLock) {
+            if (listenerId != activeListenerId || webSocket !== socket) return
             if (pendingQueue.isEmpty()) return
             val drained = pendingQueue.map(PendingMessage::payload)
             pendingQueue.clear()
             drained
         }
-        val ws = webSocket ?: return
         log("Flushing ${snapshot.size} queued message(s) after reconnect")
         for (json in snapshot) {
-            ws.send(json)
+            if (listenerId != activeListenerId) return
+            socket.send(json)
         }
     }
 
@@ -359,7 +362,7 @@ class WebSocketService @Inject constructor(
             _isConnected = true
             reconnectAttempts = 0
             _connectionStatus.value = ConnectionStatus.CONNECTED
-            flushPendingQueue()
+            flushPendingQueue(webSocket, id)
             startPingTimer()
         }
 
@@ -391,7 +394,7 @@ class WebSocketService @Inject constructor(
                 }
 
                 val messageMap = jsonObjectToMap(json) + ("_sourceServerUrl" to sourceServerUrl)
-                scope.launch { _messages.emit(messageMap) }
+                scope.launch { if (!isStale()) _messages.emit(messageMap) }
             } catch (e: Exception) {
                 log("Failed to parse message: $e")
             }

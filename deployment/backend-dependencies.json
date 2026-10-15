@@ -3,6 +3,7 @@
   "supportedLinuxFamilies": ["debian", "ubuntu"],
   "aptPackages": ["build-essential", "pkg-config", "libssl-dev", "ca-certificates", "curl", "python3", "python3-venv", "tmux", "git", "cron", "ffmpeg", "ripgrep", "xz-utils", "openssl", "systemd"],
   "pythonPackages": {"websockets": "14.2"},
+  "lanHttps": {"aptPackages": ["certbot", "python3-certbot-dns-cloudflare", "iproute2"], "renewalTimer": "certbot.timer", "dnsTimer": "agentshell-lan-dns.timer"},
   "rust": {"version": "1.95.0", "minimum": "1.85.0", "installer": "https://sh.rustup.rs"},
   "node": {"version": "24.21.0", "minimumMajor": 22, "distribution": "https://nodejs.org/dist"},
   "agents": {
@@ -10,7 +11,25 @@
     "claude": {"package": "@anthropic-ai/claude-code", "version": "2.1.295", "docs": "https://code.claude.com/docs/en/setup#install-with-npm"},
     "opencode": {"package": "opencode-ai", "version": "1.18.35", "docs": "https://opencode.ai/docs/"}
   },
+  "installerFiles": [
+    "install.sh",
+    "scripts/install-backend.py",
+    "scripts/lan-https.py",
+    "deployment/templates/agentshell-lan-dns.service",
+    "deployment/templates/agentshell-lan-dns.timer",
+    "scripts/install-ui-mcp.py",
+    "scripts/install-chat-binding-hooks.py",
+    "scripts/jsonc_config.py",
+    "deployment/templates/agentshell.service",
+    "deployment/templates/agentshell-path.sh",
+    "backend-rust/Cargo.lock"
+  ],
   "files": [
+    {"source": "scripts/browser-runtime.py", "destination": "browser/browser-runtime.py", "mode": "755"},
+    {"source": "scripts/browser-desktop.py", "destination": "browser/browser-desktop.py", "mode": "755"},
+    {"source": "scripts/browser-desktop-agent.py", "destination": "browser/browser-desktop-agent.py", "mode": "755"},
+    {"source": "scripts/browser-native.py", "destination": "browser/browser-native.py", "mode": "755"},
+    {"source": "deployment/browser", "destination": "browser", "mode": "644", "directory": true},
     {"source": "scripts/chat-binding-hook.py", "destination": "hooks/chat-binding-hook.py", "mode": "755"},
     {"source": "scripts/agent-ui-mcp.py", "destination": "ui/agent-ui-mcp.py", "mode": "755"},
     {"source": "scripts/reload-codex-mcp.py", "destination": "hooks/reload-codex-mcp.py", "mode": "755"},

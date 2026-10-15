@@ -1,0 +1,14 @@
+[Unit]
+Description=Maintain AgentShell direct LAN DNS address
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/agentshell/lan-https.py sync
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StateDirectory=agentshell-lan
+ReadWritePaths=/var/lib/agentshell-lan

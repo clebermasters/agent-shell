@@ -30,6 +30,12 @@ class SystemRepository @Inject constructor(
     private val _codexUsage = MutableStateFlow<AiUsage?>(null)
     val codexUsage: StateFlow<AiUsage?> = _codexUsage.asStateFlow()
 
+    fun clearForServerSwitch() {
+        _stats.value = null
+        _claudeUsage.value = null
+        _codexUsage.value = null
+    }
+
     fun requestStats(includeContainers: Boolean = false) {
         wsService.requestSystemStats(includeContainers = includeContainers)
     }

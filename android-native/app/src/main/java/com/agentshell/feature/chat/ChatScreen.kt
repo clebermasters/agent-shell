@@ -8,7 +8,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,9 +59,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -77,7 +77,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.launch
 import android.Manifest
 import android.content.pm.PackageManager
 import android.provider.OpenableColumns
@@ -118,11 +117,13 @@ fun ChatScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
     val codexUsage by viewModel.codexUsage.collectAsStateWithLifecycle()
-    val listState = rememberLazyListState()
-    val isDragging by listState.interactionSource.collectIsDraggedAsState()
-    val coroutineScope = rememberCoroutineScope()
-    var showScrollButton by remember { mutableStateOf(false) }
-    var autoScroll by remember { mutableStateOf(true) }
+    val chatKey = if (isAcp) "acp:$sessionName" else "tmux:$sessionName\u0000$windowIndex"
+    // Preserve the current conversation scope while its reconnect is checking.
+    var lastConversationKey by rememberSaveable(chatKey) { mutableStateOf<String?>(null) }
+    val conversationKey = uiState.bindingState?.binding?.conversationKey
+    SideEffect { if (conversationKey != null) lastConversationKey = conversationKey }
+    val scrollKey = "$chatKey|${conversationKey ?: lastConversationKey.orEmpty()}"
+    val listState = key(scrollKey) { rememberLazyListState() }
     var showMenu by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
     var showVoiceButton by remember { mutableStateOf(false) }
@@ -131,11 +132,15 @@ fun ChatScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // Swipe navigation state
-    val chatKey = if (isAcp) "acp:$sessionName" else "tmux:$sessionName\u0000$windowIndex"
     var recentChatSessions by remember { mutableStateOf<List<String>>(emptyList()) }
     var hasSkippedInitialResume by remember(chatKey) { mutableStateOf(false) }
-    var initialScrollComplete by remember(chatKey) { mutableStateOf(false) }
     var screenActive by remember(chatKey) { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
+    val chatScroll = rememberChatScrollState(
+        scrollKey, listState, uiState.messages, uiState.isStreaming,
+        ready = !uiState.isLoading && uiState.readTrackingReady && !uiState.isLocatingUnread,
+        active = screenActive,
+        firstUnreadId = uiState.firstUnreadMessageId,
+    )
 
     LaunchedEffect(chatKey) {
         if (!isSwipeNavigation) {
@@ -228,7 +233,6 @@ fun ChatScreen(
             } else if (event == Lifecycle.Event.ON_PAUSE) {
                 screenActive = false
                 viewModel.setScreenActive(false)
-                initialScrollComplete = false
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -238,31 +242,15 @@ fun ChatScreen(
         }
     }
 
-    // Restore the unread boundary before following live replies at the bottom.
-    LaunchedEffect(chatKey, screenActive, initialScrollComplete, uiState.isLoading, uiState.readTrackingReady, uiState.isLocatingUnread, uiState.firstUnreadMessageId, uiState.messages.size) {
-        if (!screenActive || uiState.isLoading || !uiState.readTrackingReady || uiState.isLocatingUnread || uiState.messages.isEmpty()) return@LaunchedEffect
-        if (!initialScrollComplete) {
-            val unreadIndex = uiState.messages.indexOfFirst { it.id == uiState.firstUnreadMessageId }
-            listState.scrollToItem(if (unreadIndex >= 0) unreadIndex else uiState.messages.lastIndex)
-            autoScroll = unreadIndex < 0
-            initialScrollComplete = true
-        } else if (autoScroll && !listState.isScrollInProgress) {
-            listState.animateScrollToItem(uiState.messages.lastIndex)
-        }
-    }
-
-    LaunchedEffect(isDragging) {
-        if (isDragging) autoScroll = false
-    }
-
     // A reply is read only when its row has actually entered the foreground viewport.
-    LaunchedEffect(listState, lifecycleOwner, chatKey, screenActive, initialScrollComplete, uiState.readTrackingReady) {
-        if (!screenActive || !initialScrollComplete || !uiState.readTrackingReady) return@LaunchedEffect
+    LaunchedEffect(listState, lifecycleOwner, chatKey, screenActive, chatScroll.initialized, uiState.readTrackingReady) {
+        if (!screenActive || !chatScroll.initialized || !uiState.readTrackingReady) return@LaunchedEffect
         snapshotFlow {
             val layout = listState.layoutInfo
             val visibleKeys = layout.visibleItemsInfo.map { it.key }.toSet()
             val lastVisibleMessage = uiState.messages.lastOrNull { it.id in visibleKeys }?.id
-            val viewingLatest = lastVisibleMessage != null && lastVisibleMessage == uiState.messages.lastOrNull()?.id
+            val viewingLatest = chatScroll.followingLatest && chatScroll.atEnd &&
+                lastVisibleMessage != null && lastVisibleMessage == uiState.messages.lastOrNull()?.id
             lastVisibleMessage to viewingLatest
         }.distinctUntilChanged().collect { (messageId, viewingLatest) ->
             viewModel.setFollowingLive(viewingLatest)
@@ -279,18 +267,6 @@ fun ChatScreen(
                     viewModel.loadMore()
                 }
             }
-    }
-
-    // Track scroll position for the "scroll to bottom" FAB
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            val info = listState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible < (info.totalItemsCount - 2)
-        }.distinctUntilChanged().collect { notAtBottom ->
-            showScrollButton = notAtBottom
-            if (initialScrollComplete && !notAtBottom) autoScroll = true
-        }
     }
 
     Scaffold(
@@ -417,6 +393,8 @@ fun ChatScreen(
                         CircularProgressIndicator()
                     }
                 } else {
+                    val unreadIndex = uiState.messages.indexOfFirst { it.id == uiState.firstUnreadMessageId }
+                    val hasUnreadDivider = unreadIndex >= 0
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.weight(1f),
@@ -424,11 +402,18 @@ fun ChatScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         items(
-                            items = uiState.messages,
-                            key = { it.id },
-                        ) { message ->
-                            Column {
-                                if (message.id == uiState.firstUnreadMessageId) UnreadDivider()
+                            count = uiState.messages.size + if (hasUnreadDivider) 1 else 0,
+                            key = { index ->
+                                if (hasUnreadDivider && index == unreadIndex) ChatListAnchor.Unread
+                                else uiState.messages[index - if (hasUnreadDivider && index > unreadIndex) 1 else 0].id
+                            },
+                        ) { index ->
+                            // Keep the divider outside the message's scroll anchor:
+                            // removing it on resume must not shift a tall reply's text.
+                            if (hasUnreadDivider && index == unreadIndex) {
+                                UnreadDivider()
+                            } else {
+                                val message = uiState.messages[index - if (hasUnreadDivider && index > unreadIndex) 1 else 0]
                                 MessageBubble(
                                     message = message,
                                     showThinking = uiState.showThinking,
@@ -446,6 +431,9 @@ fun ChatScreen(
                             item(key = "streaming_indicator") {
                                 StreamingIndicator()
                             }
+                        }
+                        item(key = ChatListAnchor.End) {
+                            Spacer(Modifier.height(1.dp))
                         }
                     }
                 }
@@ -502,7 +490,7 @@ fun ChatScreen(
 
             // Scroll to bottom FAB
             AnimatedVisibility(
-                visible = showScrollButton,
+                visible = chatScroll.initialized && !chatScroll.atEnd && uiState.messages.isNotEmpty(),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = 80.dp),
@@ -510,13 +498,7 @@ fun ChatScreen(
                 exit = fadeOut() + slideOutVertically { it },
             ) {
                 SmallFloatingActionButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            val count = listState.layoutInfo.totalItemsCount
-                            if (count > 0) listState.animateScrollToItem(count - 1)
-                        }
-                        autoScroll = true
-                    },
+                    onClick = chatScroll::jumpToLatest,
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                 ) {
                     Icon(Icons.Default.ArrowDownward, contentDescription = "Scroll to bottom")

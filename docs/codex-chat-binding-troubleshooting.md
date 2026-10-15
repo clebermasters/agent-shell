@@ -1,5 +1,96 @@
 # Existing Codex chat loses its conversation binding
 
+## Incident: AssistClaude, 2026-10-11
+
+The same existing-session error recurred at **47×43**, while `tesy` used the same
+working directory and remained linked. Read-only inspection confirmed that the
+backend was running the previously corrected binary. The conversation and its
+transcript still existed. The failed pane's native footer looked like this:
+
+```text
+<UUID prefix>… Goal achieved (2h 41m)
+```
+
+Codex's goal banner takes space from the configured status line, even with Thread
+ID first. It also uses whitespace instead of the normal middle-dot separator.
+A paused goal hides more of the ID:
+
+```text
+<shorter UUID prefix>… Goal paused (/goal resume)
+```
+
+Earlier fixes handled changing keyboard hints but still required a full UUID and
+the usual separator. The backend therefore suspended the binding when the goal
+completed or its narrow footer changed. Widening the pane or manually registering
+an ID could temporarily hide this bug.
+
+The backend now recognizes the leading native UUID independently of other status
+fields. Explicitly ellipsized prefixes use **read-only global native metadata**:
+
+- Normal prefixes require the first three UUID groups and exactly one matching
+  full ID in `~/.codex/state_5.sqlite`.
+- Goal-related prefixes can be shorter (at least eight characters), but must
+  match exactly one full thread ID in `~/.codex/goals_1.sqlite`. All matching IDs
+  in the global thread index must agree with it. This includes goals whose first
+  transcript has not been created yet.
+- Other directories, archived threads, and other goals participate in collision
+  checks. Folder, recency, goal status, and cached bindings never choose between
+  matching IDs. Zero or multiple matches suspend sending.
+- Cursor, blank separator, footer location, pane/process generation, and capture
+  height guards remain. IDs in drafts, messages, menus, or unmarked partial IDs
+  cannot authorize a conversation.
+- The same exact native thread retains its binding lease across reconnects and
+  backend restarts. `/new` or `/resume` with a different ID changes the lease;
+  an old lease cannot submit text there.
+
+The goal database is private runtime state created by Codex automatically, not an
+additional server, MCP dependency, or file to copy into the project. Identity
+does not depend on goal status or elapsed-time wording. The
+[official app-server goal API](https://developers.openai.com/codex/app-server#manage-a-thread-goal)
+describes its persisted, thread-scoped goal contract.
+
+This correction requires a backend deployment. Existing terminals keep running;
+there is no need to recreate them, change directories, manually bind them, or
+install a different Android APK. The watch resolves the same conversation
+automatically after the corrected backend starts.
+
+### Repeat the real-client regression
+
+```bash
+cd backend-rust
+cargo test --locked
+cargo build --release --locked
+cd ..
+python3 scripts/test_codex_goal_binding.py \
+  --before-binary /PATH/TO/PRE_FIX_BACKEND \
+  --binary backend-rust/target/release/agentshell-backend \
+  --evidence-dir /PATH/TO/PRIVATE_TEST_EVIDENCE
+```
+
+The opt-in fixture creates two real Codex TUIs in the same owned folder, with
+isolated TMUX and backend storage. It reproduces both existing chats losing their
+bindings against the old binary, then checks automatic recovery, stable leases,
+backend restart, exactly-once sends to separate conversations, goal/resize
+transitions, and rejection of stale sends after `/new` in the same TUI process.
+It uses existing Codex login for small model calls and disables global MCP tools
+in the fixture. Cleanup removes only its own conversations and trust entry.
+`--before-binary` is optional on later runs.
+
+### Verification and deployment
+
+On 2026-10-11, all **613 backend tests** passed. The real-client before/after
+fixture passed automatic recovery without terminal input, retained leases after
+backend restart, exactly-once sends isolated by conversation, paused/completed
+goal and resize transitions, and stale-send rejection after `/new`.
+
+The corrected release binary was installed using the normal installer, with
+existing dependencies retained, and systemd restarted successfully. Read-only
+production WebSocket checks confirmed that **AssistClaude** and **tesy** bound
+to their own exact native IDs, returned their existing histories (38 and 10
+messages), and reported **idle**. Both retained their existing pane/process and
+47×43 dimensions, and their native footers were unchanged. No session recreation,
+manual binding registration, or widening was used for recovery.
+
 ## Incident: ClaudeAssist, 2026-10-10
 
 Android showed an empty chat, **Unknown / Live status is unavailable**, and:
@@ -36,12 +127,13 @@ composer changes the hint to `esc latest`. Binding validation failed between
 paste and Enter, leaving the message in Codex's draft instead of submitting it.
 Testing history loading alone did not cover that transition.
 
-The parser now reads the native status line from the penultimate viewport row,
-independently of the hint text or whether the last row is blank. It still requires
-a complete 36-character UUID below the input cursor, separated from input by a
-blank row. Capture height must match the TMUX header so a concurrent resize
-cannot shift the presumed footer. UUIDs in messages, drafts, menus and truncated
-footer text cannot authorize a conversation. Missing identity still suspends the
+The 2026-10-10 correction read the native status line from the penultimate viewport
+row independently of the hint text or whether the last row was blank. It required
+a complete 36-character UUID below the input cursor, separated by a blank row.
+The corroborated-prefix rules added on 2026-10-11 supersede that full-ID-only rule.
+Capture height must match the TMUX header so a concurrent resize cannot shift the
+presumed footer. UUIDs in messages, drafts and menus cannot authorize a
+conversation. Missing or ambiguous identity still suspends the
 binding rather than falling back to a different chat in the same folder.
 
 The pre-paste and pre-Enter identity checks remain in place. Removing those checks
@@ -63,14 +155,16 @@ changing the parser.
    tmux capture-pane -p -t ClaudeAssist
    ```
 
-   Replace the target with the affected session. Check that the full native
-   thread UUID is visible below the input cursor. Treat terminal captures as
+   Replace the target with the affected session. Check that the native UUID or
+   an explicitly ellipsized prefix is below the input cursor. Treat captures as
    private; their message text is unnecessary for diagnosing the footer.
 3. If the footer ID is absent, use Codex `/statusline`, enable **Thread ID**
-   (called Session ID in older versions), and put it first. If truncated, widen
-   the terminal. If a menu covers the footer, close that menu normally.
-4. If the ID is complete but Android still requires identity, record the exact
-   keyboard hint and layout. Compare them with the layouts above. Install the
+   (called Session ID in older versions), and put it first. Truncation should now
+   recover automatically when native metadata has one matching full ID. Widening
+   is a diagnostic fallback when the remaining prefix is ambiguous or too short.
+   If a menu covers the footer, close that menu normally.
+4. If a full ID or an unambiguous prefix is visible but Android still requires
+   identity, record the footer, cursor and native metadata versions. Install the
    corrected backend with `./install.sh`, or use the project's backend deployment
    procedure when only the backend needs updating.
 5. Reconnect the Android chat or press **Retry**. Verify its binding is `bound`
@@ -97,9 +191,10 @@ cargo test codex_identity_does_not_depend_on_bottom_key_hints
 cargo test
 ```
 
-The new targeted test reproduces the native scrollback layout. It failed against
+That targeted test reproduces the native scrollback layout. It failed against
 the original parser. It also checks that the shortened hint cannot authorize IDs
-from drafts, assistant text or truncated footers. See
+from drafts or assistant text. Prefix recovery now has separate metadata and
+collision tests. See
 [Codex daemon validation](codex-daemon-validation.md) for live verification.
 
 The opt-in real-client regression starts two real Codex TUIs against an owned

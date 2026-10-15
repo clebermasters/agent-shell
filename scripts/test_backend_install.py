@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check installer safety and comment-preserving MCP configuration updates."""
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,63 @@ class JsoncTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_fresh_lan_host_bootstraps_dns_and_certificate_dependencies(self):
+        value=installer.Installer.__new__(installer.Installer)
+        value.args=SimpleNamespace(skip_dependencies=False,lan_hostname='lan.example.test',with_browser='none')
+        value.manifest=json.loads((installer.PROJECT/'deployment/backend-dependencies.json').read_text())
+        value.agents=[]
+        value.usable=lambda name:True
+        value.ensure_python_runtime=lambda:None
+        requested=[];calls=[]
+        value.missing_packages=lambda packages:requested.extend(packages) or list(packages)
+        value.run=lambda command,**kwargs:calls.append(command) or subprocess.CompletedProcess(command,0,stdout='rustc 1.95.0')
+        value.dependencies()
+        for name in ['certbot','python3-certbot-dns-cloudflare','iproute2']:
+            self.assertIn(name,requested)
+            self.assertTrue(any(c[0]=='apt-get' and 'install' in c and name in c for c in calls))
+
+    def test_reinstall_preserves_managed_tls_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);value=self.fixture(root)
+            value.runtime=root/'runtime.env';value.runtime.write_text('AUTH_TOKEN="retained-token"\nAGENTSHELL_TLS_CERT_PATH="/etc/agentshell/lan-tls/lan.example.test/cert.pem"\nAGENTSHELL_TLS_KEY_PATH="/etc/agentshell/lan-tls/lan.example.test/key.pem"\n')
+            value.user_home=root/'home';value.args=SimpleNamespace(http_port=4010,https_port=4443)
+            with patch.object(installer,'PROJECT',root),patch.dict(os.environ,{},clear=True):
+                settings=value.settings()
+            self.assertEqual(settings['AGENTSHELL_TLS_CERT_PATH'],'/etc/agentshell/lan-tls/lan.example.test/cert.pem')
+            self.assertEqual(settings['AUTH_TOKEN'],'retained-token')
+
+    def test_missing_installer_helper_is_rejected_before_installation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            value=installer.Installer.__new__(installer.Installer)
+            value.manifest={'files':[], 'installerFiles':['scripts/jsonc_config.py']}
+            with patch.object(installer,'PROJECT',root), self.assertRaisesRegex(ValueError,'jsonc_config.py'):
+                value.validate_sources()
+
+    def test_browser_report_rejects_missing_keyring_and_damaged_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);asset=root/'vnc.html';asset.write_bytes(b'pinned client')
+            specification={'version':'1.5.0','aptPackages':['gnome-keyring'],
+                           'executables':['Xvnc','google-chrome'], 'packages':{'jammy-amd64':{}},
+                           'clientHashes':{'vnc.html':hashlib.sha256(asset.read_bytes()).hexdigest()}}
+            value=installer.Installer.__new__(installer.Installer)
+            value.user_env={'PATH':os.defpath}
+            value.browser_specification=lambda:specification
+            value.browser_platform=lambda:'jammy-amd64'
+            value.run=lambda *args,**kwargs:subprocess.CompletedProcess([],0,stdout='1.5.0-1')
+            value.usable=lambda name:True
+            with patch.object(installer,'BROWSER_ASSETS',root), patch.object(installer.shutil,'which',return_value='/fixture/bin'), patch.object(value,'missing_packages',return_value=['gnome-keyring']):
+                report=value.browser_dependency_report()
+                self.assertFalse(report['softwareReady'])
+                self.assertEqual(report['missingSystemPackages'],['gnome-keyring'])
+            value.missing_packages=lambda packages=None:[]
+            with patch.object(installer,'BROWSER_ASSETS',root), patch.object(installer.shutil,'which',return_value='/fixture/bin'):
+                self.assertTrue(value.browser_dependency_report()['softwareReady'])
+                asset.write_bytes(b'damaged client')
+                report=value.browser_dependency_report()
+                self.assertFalse(report['softwareReady'])
+                self.assertFalse(report['clientAssets']['vnc.html'])
+
     def test_node_prefix_and_agent_versions(self):
         self.assertEqual(installer.version('v24.15.0\n'), (24, 15, 0))
         self.assertEqual(installer.version('codex-cli 0.162.1'), (0, 162, 1))

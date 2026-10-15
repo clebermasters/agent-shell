@@ -7,6 +7,7 @@ Type=simple
 User=$service_user
 WorkingDirectory=$working_directory
 ExecStart=$executable
+ExecReload=/bin/kill -HUP $$MAINPID
 EnvironmentFile=$environment_file
 Environment="PATH=$service_path"
 Restart=always

@@ -3,6 +3,7 @@
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -18,8 +19,11 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.parse
+import uuid
 
 PROJECT = Path(__file__).resolve().parents[1]
+BROWSER_ASSETS = Path('/usr/share/kasmvnc/www')
 
 
 def dotenv(path):
@@ -105,9 +109,10 @@ class Installer:
         except OSError:
             return False
 
-    def missing_packages(self):
+    def missing_packages(self, packages=None):
         result = []
-        for package in self.manifest['aptPackages']:
+        requested = self.manifest['aptPackages'] if packages is None else packages
+        for package in requested:
             found = subprocess.run(['dpkg-query', '-W', '-f=${Status}', package], text=True, capture_output=True)
             if found.returncode or found.stdout != 'install ok installed':
                 result.append(package)
@@ -118,7 +123,7 @@ class Installer:
             path = PROJECT / entry['source']
             if not path.exists():
                 raise ValueError('Required repository file is missing: ' + entry['source'])
-        for path in ['deployment/templates/agentshell.service', 'deployment/templates/agentshell-path.sh', 'backend-rust/Cargo.lock']:
+        for path in self.manifest['installerFiles']:
             if not (PROJECT / path).is_file():
                 raise ValueError('Required repository file is missing: ' + path)
 
@@ -126,7 +131,10 @@ class Installer:
         if self.args.skip_dependencies:
             print('Dependency bootstrap skipped explicitly.', flush=True)
             return
-        missing = self.missing_packages()
+        packages = list(self.manifest['aptPackages'])
+        if getattr(self.args, 'lan_hostname', None):
+            packages += self.manifest['lanHttps']['aptPackages']
+        missing = self.missing_packages(packages)
         if missing:
             print('Installing missing system packages: ' + ', '.join(missing), flush=True)
             refreshed = self.run(['apt-get', 'update'], root=True, check=False)
@@ -135,6 +143,8 @@ class Installer:
             self.run(['apt-get', '-o', 'DPkg::Lock::Timeout=120', 'install', '-y', '--no-install-recommends', *missing], root=True,
                      env={'DEBIAN_FRONTEND': 'noninteractive'})
         self.ensure_python_runtime()
+        if getattr(self.args, 'with_browser', 'none') == 'kasmvnc':
+            self.browser_dependencies()
         rust = self.manifest['rust']
         current = self.run(['rustc', '--version'], user=True, capture=True, check=False) if self.usable('rustc') else None
         if current is None or version(current.stdout) < version(rust['minimum']):
@@ -186,7 +196,182 @@ class Installer:
         self.mkdir(self.install_dir / 'cache/pip')
         self.run([str(python), '-m', 'pip', 'install', '--disable-pip-version-check', '--index-url', 'https://pypi.org/simple',
                   *[name + '==' + release for name, release in expected.items()]], user=True,
-                 env={'PIP_CACHE_DIR': str(self.install_dir / 'cache/pip')})
+                  env={'PIP_CACHE_DIR': str(self.install_dir / 'cache/pip')})
+
+    def browser_specification(self):
+        return json.loads((PROJECT / 'deployment/browser/dependencies.json').read_text())
+
+    def browser_platform(self):
+        release = dotenv(Path('/etc/os-release'))
+        codename = release.get('UBUNTU_CODENAME', release.get('VERSION_CODENAME', ''))
+        architecture = {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(platform.machine(), '')
+        return codename + '-' + architecture
+
+    def browser_asset_report(self, spec):
+        return {name: (BROWSER_ASSETS / name).is_file() and
+                hashlib.sha256((BROWSER_ASSETS / name).read_bytes()).hexdigest() == expected
+                for name, expected in spec['clientHashes'].items()}
+
+    def browser_dependency_report(self):
+        spec = self.browser_specification()
+        target = self.browser_platform()
+        current = self.run(['dpkg-query', '-W', '-f=${Version}', 'kasmvncserver'], capture=True, check=False)
+        expected_version = spec['version'] + '-1'
+        missing = self.missing_packages(spec['aptPackages'])
+        commands = {name: bool(shutil.which(name, path=self.user_env.get('PATH', os.defpath)))
+                    for name in spec['executables']}
+        assets = self.browser_asset_report(spec)
+        chrome = self.usable('google-chrome')
+        desktop = self.run(['/usr/bin/python3', '-c',
+            'import gi;gi.require_version("Gtk","3.0");gi.require_version("WebKit2","4.0");gi.require_version("Soup","2.4");from gi.repository import Gtk,WebKit2,Soup'],
+            user=True, capture=True, check=False).returncode == 0
+        ready = (target in spec['packages'] and not missing and current.returncode == 0 and
+                 current.stdout.strip() == expected_version and all(commands.values()) and
+                 all(assets.values()) and chrome and desktop)
+        return {'platform': target, 'supported': target in spec['packages'],
+                'missingSystemPackages': missing, 'executables': commands,
+                'runtimeVersion': current.stdout.strip() if current.returncode == 0 else None,
+                'expectedRuntimeVersion': expected_version, 'clientAssets': assets,
+                'chromeAvailable': chrome, 'desktopViewerAvailable': desktop, 'softwareReady': ready}
+
+    def browser_dependencies(self):
+        spec = self.browser_specification()
+        package = spec['packages'].get(self.browser_platform())
+        if not package:
+            raise ValueError('The pinned browser component currently supports Ubuntu/Pop!_OS 22.04 amd64')
+        missing = self.missing_packages(spec['aptPackages'])
+        with tempfile.TemporaryDirectory(prefix='agentshell-browser-deps-') as directory:
+            directory = Path(directory)
+            current = self.run(['dpkg-query', '-W', '-f=${Version}', 'kasmvncserver'], capture=True, check=False)
+            matching_package = current.returncode == 0 and current.stdout.strip() == spec['version'] + '-1'
+            repair_assets = matching_package and not all(self.browser_asset_report(spec).values())
+            if not matching_package or repair_assets:
+                archive = directory / 'kasmvnc.deb'
+                self.download(package['url'], archive)
+                if hashlib.sha256(archive.read_bytes()).hexdigest() != package['sha256']:
+                    raise ValueError('Browser package checksum mismatch')
+                missing.append(str(archive))
+            if not self.usable('google-chrome'):
+                archive = directory / 'google-chrome.deb'
+                self.download(spec['chromeIfMissing'], archive)
+                missing.append(str(archive))
+            if missing:
+                self.run(['apt-get', '-o', 'DPkg::Lock::Timeout=120', 'install', '-y', '--no-install-recommends',
+                          *(['--reinstall'] if repair_assets else []), *missing],
+                         root=True, env={'DEBIAN_FRONTEND': 'noninteractive'})
+        for name, expected in spec['clientHashes'].items():
+            path = BROWSER_ASSETS / name
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                raise ValueError('Installed browser client does not match the pinned release')
+        if not self.browser_dependency_report()['softwareReady']:
+            raise ValueError('Browser software dependencies are incomplete; run ./install.sh --check --with-browser kasmvnc')
+        print('Pinned browser runtime/client verified; working Chrome retained.', flush=True)
+
+    def configure_browser(self):
+        if getattr(self.args, 'with_browser', 'none') != 'kasmvnc':
+            return
+        path = self.user_home / '.config/agentshell/browser.json'
+        previous = json.loads(path.read_text()) if path.exists() else {}
+        origin = self.args.browser_origin or previous.get('publicOrigin')
+        if not origin:
+            servers = dotenv(PROJECT / '.env').get('SERVER_LIST', '').split('|')
+            for server in servers:
+                endpoint = server.split(',', 1)[0]
+                if endpoint.endswith(':443'):
+                    origin = 'https://' + endpoint[:-4]
+                    break
+        if not origin and getattr(self.args, 'lan_hostname', None):
+            origin = 'https://' + self.args.lan_hostname.lower() + ':' + str(self.args.https_port)
+        parsed = urllib.parse.urlparse(origin or '')
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path:
+            raise ValueError('Supply --browser-origin https://trusted-host[:port] without a path')
+        hostname = '[' + parsed.hostname + ']' if ':' in parsed.hostname else parsed.hostname
+        origin = 'https://' + hostname.lower() + (':' + str(parsed.port) if parsed.port and parsed.port != 443 else '')
+        profile = str((self.args.browser_user_data_dir or Path(previous.get('userDataDir', self.user_home / '.local/share/agentshell/chrome'))).resolve())
+        profile_directory = self.args.browser_profile if self.args.browser_profile is not None else previous.get('profileDirectory')
+        if profile_directory is not None and (not isinstance(profile_directory, str) or
+                not re.fullmatch(r'[A-Za-z0-9 _-]{1,64}', profile_directory)):
+            raise ValueError('Invalid Chrome profile directory')
+        if previous and (profile != previous.get('userDataDir') or profile_directory != previous.get('profileDirectory')):
+            raise ValueError('Stop and explicitly reconfigure the existing browser before changing its profile')
+        runtime_directory = self.user_home / '.local/state/agentshell/browser'
+        self.mkdir(runtime_directory)
+        self.run(['chmod', '700', str(runtime_directory)], root=True)
+        runner = self.install_dir / 'browser/browser-runtime.py'
+        value = dict(previous, sessionId=previous.get('sessionId', str(uuid.uuid4())), userDataDir=profile,
+            profileDirectory=profile_directory, runtimeDir=str(runtime_directory), display=previous.get('display', 93),
+            port=previous.get('port', 18996), password=previous.get('password', secrets.token_urlsafe(48)),
+            publicOrigin=origin, runner=str(runner), supervision='systemd-user', requireSecretService=True,
+            displayName=previous.get('displayName', 'Chrome'), allowInsecureLoopback=False)
+        if getattr(self.args, 'lan_hostname', None):
+            lan_origin = 'https://' + self.args.lan_hostname.lower() + (':' + str(self.args.https_port) if self.args.https_port != 443 else '')
+            value['additionalOrigins'] = list(dict.fromkeys([*previous.get('additionalOrigins', []), lan_origin]))
+        self.write(path, json.dumps(value, indent=2) + '\n', '600')
+        unit = self.user_home / '.config/systemd/user/agentshell-browser.service'
+        text = Template((PROJECT / 'deployment/browser/agentshell-browser.service').read_text()).substitute(
+            runner=json.dumps(str(runner)), config=json.dumps(str(path)), runtime_directory=str(runtime_directory),
+            user_home=str(self.user_home), uid=str(self.account.pw_uid))
+        self.write(unit, text)
+        if not self.args.no_start:
+            self.run(['loginctl', 'enable-linger', self.args.service_user], root=True)
+            if not Path('/run/user', str(self.account.pw_uid), 'bus').exists():
+                self.run(['systemctl', 'start', 'user@' + str(self.account.pw_uid) + '.service'], root=True)
+            self.run(['systemctl', '--user', 'daemon-reload'], user=True, env={
+                'XDG_RUNTIME_DIR': '/run/user/' + str(self.account.pw_uid),
+                'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' + str(self.account.pw_uid) + '/bus'})
+        checked = self.run(['/usr/bin/python3', str(runner), '--config', str(path), 'status'], user=True, capture=True)
+        state = json.loads(checked.stdout)
+        if state.get('code') == 'INVALID_RUNTIME_CONFIG':
+            raise ValueError('Browser runtime configuration validation failed')
+        self.configure_desktop_browser(origin)
+        print('Browser component configured; existing desktop Chrome was not stopped or moved.', flush=True)
+
+    def configure_desktop_browser(self, origin):
+        config = self.user_home / '.config/agentshell/browser-desktop.json'
+        previous = json.loads(config.read_text()) if config.exists() else {}
+        state = self.user_home / '.local/state/agentshell/browser-desktop'
+        self.mkdir(state)
+        self.run(['chmod', '700', str(state)], root=True)
+        self.write(config, json.dumps(dict(previous, schemaVersion=1, origin=origin,
+                   runtimeEnv=str(self.runtime), stateDir=str(state)), indent=2) + '\n', '600')
+        runner = self.install_dir / 'browser/browser-desktop.py'
+        commands = self.user_home / '.local/bin'
+        launcher = commands / 'agentshell-browser'
+        self.write(launcher, '#!/bin/sh\nexec /usr/bin/python3 ' + shlex.quote(str(runner)) +
+                   ' --config ' + shlex.quote(str(config)) + ' "$@"\n', '755')
+        for name, action in [('agentshell-send-to-phone', 'phone'), ('agentshell-return-to-computer', 'desktop')]:
+            self.write(commands / name, '#!/bin/sh\nexec ' + shlex.quote(str(launcher)) + ' ' + action + ' "$@"\n', '755')
+        # Desktop Exec uses its own quoting rules, not shell quoting. Percent
+        # signs must also be escaped to avoid being interpreted as field codes.
+        def desktop_quote(path):
+            return '"' + str(path).replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$').replace('%', '%%') + '"'
+        executable = desktop_quote(launcher)
+        self.write(self.user_home / '.local/share/applications/agentshell-browser.desktop',
+            '[Desktop Entry]\nType=Application\nName=AgentShell Chrome\n'
+            'Comment=Continue the same Chrome session on your computer and phone\n'
+            'Icon=google-chrome\nTerminal=false\nCategories=Network;WebBrowser;\n'
+            'StartupWMClass=AgentShellBrowser\nExec=' + executable + ' open\n'
+            'Actions=Phone;Desktop;\n\n[Desktop Action Phone]\nName=Send to phone\nExec=' + executable +
+            ' phone\n\n[Desktop Action Desktop]\nName=Return to computer\nExec=' + executable + ' desktop\n')
+        agent = self.install_dir / 'browser/browser-desktop-agent.py'
+        unit = self.user_home / '.config/systemd/user/agentshell-browser-desktop-agent.service'
+        self.write(unit, Template((PROJECT / 'deployment/browser/agentshell-browser-desktop-agent.service').read_text()).substitute(
+            runner=json.dumps(str(agent)), config=json.dumps(str(config)), user_home=str(self.user_home), uid=str(self.account.pw_uid)))
+        self.write(self.user_home / '.config/systemd/user/agentshell-browser-native.service',
+            Template((PROJECT / 'deployment/browser/agentshell-browser-native.service').read_text()).substitute(
+                runner=json.dumps(str(self.install_dir / 'browser/browser-native.py')),
+                config=json.dumps(str(config.with_name('browser.json'))),runtime_directory=str(self.user_home / '.local/state/agentshell/browser'),
+                user_home=str(self.user_home),uid=str(self.account.pw_uid)))
+        self.write(self.user_home / '.config/autostart/agentshell-browser-desktop-agent.desktop',
+            '[Desktop Entry]\nType=Application\nName=AgentShell browser handoff\nNoDisplay=true\n'
+            'X-GNOME-Autostart-enabled=true\nExec=/usr/bin/python3 ' + desktop_quote(agent) +
+            ' --config ' + desktop_quote(config) + ' --register-session\n')
+        if not getattr(getattr(self, 'args', None), 'no_start', True) and (
+                self.user_env.get('DISPLAY') or self.user_env.get('WAYLAND_DISPLAY')):
+            self.run(['/usr/bin/python3', str(agent), '--config', str(config), '--register-session'], user=True,
+                     env={'XDG_RUNTIME_DIR':'/run/user/' + str(self.account.pw_uid),
+                          'DBUS_SESSION_BUS_ADDRESS':'unix:path=/run/user/' + str(self.account.pw_uid) + '/bus'})
+        print('AgentShell Chrome desktop launcher and viewer-switch commands installed.', flush=True)
 
     def ensure_node(self):
         spec = self.manifest['node']
@@ -222,8 +407,8 @@ class Installer:
         self.run(['install', '-d', '-m', '755', '-o', '0' if system else str(self.account.pw_uid),
                   '-g', '0' if system else str(self.account.pw_gid), str(path)], root=True)
 
-    def copy(self, source, target, mode='644'):
-        system = target == self.unit
+    def copy(self, source, target, mode='644', system=False):
+        system = system or target == self.unit
         owner, group = ('0', '0') if system else (str(self.account.pw_uid), str(self.account.pw_gid))
         self.mkdir(target.parent, system=system)
         if target.exists():
@@ -245,11 +430,11 @@ class Installer:
         finally:
             self.run(['rm', '-f', str(temporary)], root=True)
 
-    def write(self, target, text, mode='644'):
+    def write(self, target, text, mode='644', system=False):
         with tempfile.TemporaryDirectory(prefix='agentshell-file-') as directory:
             source = Path(directory) / 'content'
             source.write_text(text)
-            self.copy(source, target, mode)
+            self.copy(source, target, mode, system=system)
 
     def settings(self):
         previous = dotenv(self.runtime)
@@ -275,8 +460,71 @@ class Installer:
         if not token or token.startswith('<') or token in ['replace-with-a-long-random-token', 'your-secret-token']:
             token = secrets.token_urlsafe(48)
             print('Generated a new backend token; it will be saved in the private runtime configuration.', flush=True)
-        return {'AUTH_TOKEN': token, 'ALLOWED_ORIGIN': combined.get('ALLOWED_ORIGIN', ''), 'RUST_LOG': 'info',
+        runtime = {'AUTH_TOKEN': token, 'ALLOWED_ORIGIN': combined.get('ALLOWED_ORIGIN', ''), 'RUST_LOG': 'info',
                 'AGENTSHELL_HTTP_PORT': str(self.args.http_port), 'AGENTSHELL_HTTPS_PORT': str(self.args.https_port)}
+        for key in ['AGENTSHELL_TLS_CERT_PATH', 'AGENTSHELL_TLS_KEY_PATH']:
+            if previous.get(key): runtime[key] = previous[key]
+        if getattr(self.args, 'lan_hostname', None):
+            directory = Path('/etc/agentshell/lan-tls') / self.args.lan_hostname.lower()
+            runtime.update(AGENTSHELL_TLS_CERT_PATH=str(directory / 'cert.pem'), AGENTSHELL_TLS_KEY_PATH=str(directory / 'key.pem'))
+        return runtime
+
+    def configure_lan_https(self):
+        if not getattr(self.args, 'lan_hostname', None):
+            return
+        settings = dotenv(PROJECT / '.env')
+        base = Path('/etc/agentshell')
+        config = base / 'lan-https.json'
+        existing = self.run(['cat', str(config)], root=True, capture=True, check=False)
+        previous = json.loads(existing.stdout) if existing.returncode == 0 else {}
+        credentials = base / 'cloudflare-lan.ini'
+        if self.args.lan_credentials:
+            content = self.run(['cat', str(self.args.lan_credentials)], capture=True).stdout
+        elif settings.get('CF_API_TOKEN'):
+            content = 'dns_cloudflare_api_token = ' + settings['CF_API_TOKEN'] + '\n'
+        elif settings.get('CF_API_KEY') and settings.get('CF_EMAIL'):
+            content = 'dns_cloudflare_email = ' + settings['CF_EMAIL'] + '\ndns_cloudflare_api_key = ' + settings['CF_API_KEY'] + '\n'
+        else:
+            retained = self.run(['cat', str(credentials)], root=True, capture=True, check=False)
+            if retained.returncode: raise ValueError('Supply --lan-credentials or Cloudflare credentials in the private .env')
+            content = retained.stdout
+        if any(character in settings.get('CF_API_KEY', '') + settings.get('CF_API_TOKEN', '') + settings.get('CF_EMAIL', '') for character in ['\r', '\n']):
+            raise ValueError('Invalid Cloudflare credential formatting')
+        interface = self.args.lan_interface or (None if self.args.lan_address else previous.get('interface'))
+        address = self.args.lan_address or previous.get('address')
+        if not address or interface:
+            command = ['ip', '-j', '-4', 'addr', 'show'] + (['dev', interface] if interface else [])
+            links = json.loads(self.run(command, capture=True).stdout)
+            candidates = [(link['ifname'], entry['local']) for link in links for entry in link.get('addr_info', [])
+                if entry.get('scope') == 'global' and ipaddress.ip_address(entry['local']).is_private
+                and (interface or Path('/sys/class/net', link['ifname'], 'device').exists())]
+            if len(candidates) != 1: raise ValueError('Specify --lan-interface or --lan-address to identify this host on the LAN')
+            interface, address = candidates[0]
+        value = dict(hostname=self.args.lan_hostname.lower(), address=address, interface=interface,
+            zoneId=self.args.lan_zone_id or settings.get('CF_ZONE_ID') or previous.get('zoneId'),
+            credentials=str(credentials), email=settings.get('CF_EMAIL') or previous.get('email'),
+            serviceUser=self.args.service_user, httpsPort=self.args.https_port)
+        # Validation is read-only and happens before writing DNS, credentials, or system units.
+        import importlib.util
+        specification = importlib.util.spec_from_file_location('agentshell_lan', PROJECT / 'scripts/lan-https.py')
+        module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(module)
+        module.validate(value)
+        self.mkdir(base, system=True)
+        self.write(credentials, content, '600', system=True)
+        self.write(config, json.dumps(value, indent=2) + '\n', '600', system=True)
+        helper = Path('/usr/local/lib/agentshell/lan-https.py')
+        self.copy(PROJECT / 'scripts/lan-https.py', helper, '755', system=True)
+        print('Provisioning trusted LAN HTTPS using DNS-01; no public web ports are required.', flush=True)
+        self.run(['/usr/bin/python3', str(helper), 'provision', '--config', str(config)], root=True)
+        hook = Path('/etc/letsencrypt/renewal-hooks/deploy/agentshell-lan')
+        self.write(hook, '#!/bin/sh\nexec /usr/bin/python3 /usr/local/lib/agentshell/lan-https.py deploy\n', '755', system=True)
+        for name in ['agentshell-lan-dns.service', 'agentshell-lan-dns.timer']:
+            self.copy(PROJECT / 'deployment/templates' / name, self.args.unit_dir / name, system=True)
+        if not self.args.no_start:
+            self.run(['systemctl', 'daemon-reload'], root=True)
+            self.run(['systemctl', 'enable', '--now', 'certbot.timer', 'agentshell-lan-dns.timer'], root=True)
+        print('Trusted LAN HTTPS configured; certificates renew automatically and LAN DNS tracks address changes.', flush=True)
 
     def build(self):
         if self.args.binary:
@@ -309,7 +557,7 @@ class Installer:
     def certificates(self):
         directory = self.install_dir / 'certs'
         self.mkdir(directory)
-        if self.args.no_tls:
+        if self.args.no_tls or getattr(self.args, 'lan_hostname', None):
             return
         cert, key = directory / 'cert.pem', directory / 'key.pem'
         if cert.exists() and key.exists():
@@ -448,6 +696,9 @@ finally:Path(temp).unlink(missing_ok=True)
                   'rustAvailable': self.usable('rustc'), 'nodeAvailable': self.usable('node'),
                   'agents': {name: self.usable(name) for name in self.agents},
                   'managedPythonPackages': python_versions,
+                  'browser': self.browser_dependency_report() if self.args.with_browser == 'kasmvnc' else None,
+                  'lanHttps': {'hostname': self.args.lan_hostname,
+                      'missingSystemPackages': self.missing_packages(self.manifest['lanHttps']['aptPackages'])} if self.args.lan_hostname else None,
                   'repositoryFilesPresent': True}, indent=2))
             return
         self.dependencies()
@@ -457,6 +708,8 @@ finally:Path(temp).unlink(missing_ok=True)
         runtime = self.settings()
         binary = self.build()
         self.install_files(binary)
+        self.configure_lan_https()
+        self.configure_browser()
         self.certificates()
         self.configure(runtime)
         self.start()
@@ -477,9 +730,20 @@ def main():
     parser.add_argument('--no-start', action='store_true', help='Prepare files/configuration without starting systemd')
     parser.add_argument('--no-tls', action='store_true', help='Skip creation of a missing TLS pair')
     parser.add_argument('--binary', type=Path, help='Install an already built backend binary')
+    parser.add_argument('--with-browser', choices=['none', 'kasmvnc'], default='none', help='Install optional Chrome streaming support')
+    parser.add_argument('--browser-origin', help='Trusted HTTPS origin used by the Android viewer')
+    parser.add_argument('--browser-user-data-dir', type=Path, help='Existing Chrome user data directory; never copied while live')
+    parser.add_argument('--browser-profile', help='Optional explicit Chrome profile subdirectory; otherwise let Chrome select its default')
+    parser.add_argument('--lan-hostname', help='DNS-only hostname for trusted direct LAN HTTPS')
+    parser.add_argument('--lan-address', help='Private IPv4 address; auto-detected when one physical LAN interface is available')
+    parser.add_argument('--lan-interface', help='Track the private IPv4 address of this network interface')
+    parser.add_argument('--lan-zone-id', help='Cloudflare zone ID; defaults to private .env CF_ZONE_ID')
+    parser.add_argument('--lan-credentials', type=Path, help='Certbot Cloudflare credentials INI; otherwise use private .env credentials')
     args = parser.parse_args()
     if not (1 <= args.http_port <= 65535 and 1 <= args.https_port <= 65535):
         parser.error('Ports must be between 1 and 65535')
+    if args.lan_hostname and args.no_tls:
+        parser.error('--lan-hostname requires TLS; remove --no-tls')
     try:
         Installer(args).execute()
     except subprocess.CalledProcessError as error:

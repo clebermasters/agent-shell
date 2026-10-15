@@ -27,6 +27,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.agentshell.feature.cron.CronViewModel
+import com.agentshell.feature.browser.BrowserScreen
 import com.agentshell.feature.alerts.AlertsScreen
 import com.agentshell.feature.chat.ChatScreen
 import com.agentshell.feature.cron.CronJobEditorScreen
@@ -51,6 +52,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 
 object Routes {
     const val HOME = "home"
+    const val BROWSER = "browser"
     const val TERMINAL = "terminal/{sessionName}?isSwipeNav={isSwipeNav}"
     const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}&isSwipeNav={isSwipeNav}&cwd={cwd}&shareId={shareId}"
     const val SHARE = "share"
@@ -120,6 +122,7 @@ fun AgentShellNavHost(
     val scope = rememberCoroutineScope()
     var openingSharedChat by remember { mutableStateOf(false) }
     var hasOpenedChatNotification by rememberSaveable { mutableStateOf(pendingChatTarget != null || shareState.id != null) }
+    var hasSwitchedServer by rememberSaveable { mutableStateOf(false) }
     val keepScreenOnEnabled by viewModel.keepScreenOn.collectAsStateWithLifecycle()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val keepScreenOn = keepScreenOnEnabled && when (backStackEntry?.destination?.route) {
@@ -168,6 +171,7 @@ fun AgentShellNavHost(
         navController = navController,
         startDestination = Routes.HOME,
     ) {
+        composable(Routes.BROWSER) { BrowserScreen(onBack = { navController.popBackStack() }) }
         composable(Routes.SHARE) {
             ShareScreen(
                 viewModel = shareViewModel,
@@ -197,7 +201,16 @@ fun AgentShellNavHost(
         // ── Home shell (tabs: Sessions, Cron, Dotfiles, System) ──────────────
         composable(Routes.HOME) {
             HomeScreen(
-                allowAutoAttach = !hasOpenedChatNotification,
+                onNavigateToBrowser = { navController.navigate(Routes.BROWSER) { launchSingleTop = true } },
+                allowAutoAttach = !hasOpenedChatNotification && !hasSwitchedServer,
+                onServerSwitched = {
+                    hasSwitchedServer = true
+                    // Drop server-bound ViewModels, dialogs and navigation state before loading the new host.
+                    navController.navigate(Routes.HOME) {
+                        popUpTo(Routes.HOME) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
                 onNavigateToTerminal = { name -> navController.navigate(Routes.terminal(name)) },
                 onNavigateToChat = { name, idx -> navController.navigate(Routes.chat(name, idx)) },
                 onNavigateToAcpChat = { id, cwd -> navController.navigate(Routes.chat(id, 0, isAcp = true, cwd = cwd)) },

@@ -63,6 +63,9 @@ class HomeViewModel @Inject constructor(
     private var autoAttachConsumed = false
 
     val claudeUsage = systemRepository.claudeUsage
+    val hosts = hostRepository.getHosts().stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList(),
+    )
 
     val uiState: StateFlow<HomeUiState> = combine(
         hostRepository.getSelectedHost(),
@@ -126,7 +129,7 @@ class HomeViewModel @Inject constructor(
             // Step 2: Connect once to the selected host, reconnect only on host switch
             hostRepository.getSelectedHost()
                 .filterNotNull()
-                .distinctUntilChangedBy { it.id }
+                .distinctUntilChangedBy { it.id to it.wsUrl }
                 .collect { host ->
                     val url = "${host.wsUrl}/ws"
                     val token = com.agentshell.core.config.BuildConfig.AUTH_TOKEN
@@ -245,5 +248,19 @@ class HomeViewModel @Inject constructor(
 
     fun clearUnreadAlerts() {
         _unreadAlerts.update { 0 }
+    }
+
+    suspend fun switchHost(host: Host): Boolean {
+        val configured = hostRepository.getHosts().first().firstOrNull { it.id == host.id } ?: return false
+        val token = com.agentshell.core.config.BuildConfig.AUTH_TOKEN.ifEmpty { null }
+        if (hostRepository.getSelectedHostOnce()?.id == configured.id) {
+            wsService.connect("${configured.wsUrl}/ws", token)
+            return false
+        }
+        autoAttachConsumed = true
+        hostRepository.selectHost(configured.id)
+        wsService.connect("${configured.wsUrl}/ws", token)
+        systemRepository.clearForServerSwitch()
+        return true
     }
 }

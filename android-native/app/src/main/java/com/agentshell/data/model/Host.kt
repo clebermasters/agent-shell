@@ -1,6 +1,7 @@
 package com.agentshell.data.model
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 
@@ -14,13 +15,14 @@ data class Host(
     val port: Int,
     val lastConnected: Long? = null,
     val sortOrder: Int = 0,
+    @ColumnInfo(defaultValue = "NULL") val tls: Boolean? = null,
 ) {
     val isSecure: Boolean
-        get() = port == 443
+        get() = tls ?: (port == 443)
 
     val wsUrl: String
-        get() = if (isSecure) "wss://$address" else "ws://$address:$port"
+        get() = if (isSecure) "wss://$address${if (port == 443) "" else ":$port"}" else "ws://$address:$port"
 
     val httpUrl: String
-        get() = if (isSecure) "https://$address" else "http://$address:$port"
+        get() = if (isSecure) "https://$address${if (port == 443) "" else ":$port"}" else "http://$address:$port"
 }

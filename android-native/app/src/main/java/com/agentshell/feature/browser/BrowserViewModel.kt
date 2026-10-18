@@ -5,6 +5,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentshell.data.model.Host
 import com.agentshell.data.repository.*
+import com.agentshell.data.local.PreferencesDataStore
+import com.agentshell.data.model.TranscriptionJob
+import com.agentshell.data.services.AudioService
+import com.agentshell.data.services.TranscriptionQueueService
+import com.agentshell.data.services.TranscriptionReceipt
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -20,7 +25,8 @@ data class BrowserUiState(val server: String = "", val title: String = "Chrome",
 
 @HiltViewModel
 class BrowserViewModel @Inject constructor(private val hosts: HostRepository, private val browser: BrowserRepository,
-    saved: SavedStateHandle) : ViewModel() {
+    saved: SavedStateHandle, private val audio: AudioService, private val transcriptions: TranscriptionQueueService,
+    private val preferences: PreferencesDataStore) : ViewModel() {
     private val viewerId = saved.get<String>("browserViewerId") ?: browser.viewerId.also { saved["browserViewerId"] = it }
     private val _ui = MutableStateFlow(BrowserUiState())
     val uiState = _ui.asStateFlow()
@@ -32,20 +38,41 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     private var viewerConnected = false
     private var primaryOrigin: String? = null
     private var attempt = 0L
+    private val _voice = MutableStateFlow(BrowserVoiceUiState())
+    val voiceUiState = _voice.asStateFlow()
+    private val audioOwner = "browser:${UUID.randomUUID()}"
+    private val voiceGate = BrowserVoiceGate()
+    private val voiceReceipt = TranscriptionReceipt()
+    private var recording: BrowserVoiceCapture? = null
+    private var transcriptionContext: String? = null
     init { viewModelScope.launch {
         hosts.getSelectedHost().collect { selected ->
             if (host != selected) {
+                invalidateVoice(); cancelVoiceRecording()
                 host = selected; browserHost=null;primaryOrigin=null;job?.cancel(); attempt++
                 _ui.value = BrowserUiState(server=selected?.name ?: "Choose a server")
                 if (active) connect()
             }
         }
     } }
+    init {
+        viewModelScope.launch { audio.recordingDuration.collect { seconds ->
+            if(recording != null) _voice.update { it.copy(recordingDuration=seconds) }
+        } }
+        viewModelScope.launch { transcriptions.resultEvents.collect(::receiveTranscription) }
+        viewModelScope.launch { transcriptions.pendingResult.collect { result ->
+            if(result?.source == TranscriptionJob.Source.BROWSER) {
+                receiveTranscription(result)
+                transcriptions.clearPendingResult(result)
+            }
+        } }
+    }
     fun resume() { if (!active) { active=true;if (_ui.value.status !in listOf("on-computer","on-native") && transferJob?.isActive!=true) connect() } }
-    fun pause() { active=false;attempt++;job?.cancel();_ui.update { it.copy(launch=null) } }
+    fun pause() { invalidateVoice();cancelVoiceRecording();active=false;attempt++;job?.cancel();_ui.update { it.copy(launch=null) } }
     fun connect(start: Boolean = false, takeControl: Boolean = false, cancelHandoff: String? = null, notice: String? = null) {
         if (!active || (transferJob?.isActive==true && cancelHandoff==null)) return
         val selected=host ?: run { _ui.update{it.copy(status="stopped",error="Select a server first.")};return }
+        invalidateVoice()
         job?.cancel();val current=++attempt
         _ui.update{it.copy(status="connecting",error=null,launch=null,notice=notice)}
         job=viewModelScope.launch {
@@ -96,6 +123,7 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     }
     fun connection(launch:BrowserLaunch,status:String) {
         if(_ui.value.launch!=launch || !active) return
+        if(status!="connected") invalidateVoice()
         viewerConnected=status=="connected"
         if(transferJob?.isActive==true) return
         _ui.update{it.copy(status=status)}
@@ -117,6 +145,7 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
         if(!active || transferJob?.isActive==true || !previous.canNativeHandoff) return
         if(toComputer && previous.status!="connected") return
         if(!toComputer && previous.status!="on-native") return
+        invalidateVoice();cancelVoiceRecording()
         job?.cancel();attempt++
         _ui.update{it.copy(status="switching-native",error=null,notice=null)}
         transferJob=viewModelScope.launch {
@@ -151,6 +180,7 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
         val id=previous.sessionId ?: return
         val generation=previous.generation ?: return
         if(!active || previous.status!="connected" || !previous.canSendToComputer || transferJob?.isActive==true) return
+        invalidateVoice();cancelVoiceRecording()
         job?.cancel();attempt++
         val handoff=UUID.randomUUID().toString()
         _ui.update{it.copy(status="sending-to-computer",error=null,notice=null)}
@@ -190,12 +220,156 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
 
     fun stop() {
         val selected=currentBrowserHost() ?: return;val id=_ui.value.launch?.sessionId ?: return
+        invalidateVoice();cancelVoiceRecording()
         attempt++;job?.cancel();_ui.update{it.copy(status="stopping",launch=null)}
         job=viewModelScope.launch {
             try { browser.request(selected,"/api/browser/sessions/$id/stop",JSONObject());if(active) connect() }
             catch(error:Exception) { if(error is CancellationException) throw error;_ui.update{it.copy(status="offline",error="Unable to stop Chrome. Reconnect to check its state.")} }
         }
     }
+
+    private fun voiceTarget(): BrowserVoiceTarget? {
+        val state=_ui.value
+        return BrowserVoiceTarget(host?.id ?: return null,state.sessionId ?: return null,
+            state.generation ?: return null,viewerId)
+    }
+    private fun voiceConnected()=active && _ui.value.status=="connected" && _ui.value.launch!=null && transferJob?.isActive!=true
+
+    fun voicePermissionTarget(): BrowserVoiceTarget? = voiceTarget().takeIf { voiceConnected() }
+
+    fun startVoiceRecording(expectedTarget: BrowserVoiceTarget? = null) {
+        val target=voiceTarget() ?: return
+        val launch=_ui.value.launch ?: return
+        if(expectedTarget!=null && expectedTarget!=target) return
+        if(!voiceConnected() || recording!=null || _voice.value.isTranscribing || _voice.value.transcripts.isNotEmpty()) return
+        try {
+            if(audio.startRecording(audioOwner)==null) {
+                _voice.update { it.copy(error="Microphone unavailable. Allow microphone access and finish any other recording.") }
+                return
+            }
+            recording=voiceGate.begin(target,launch,attempt)
+            _voice.update { it.copy(isRecording=true,recordingDuration=0,error=null,failedJobId=null,failedContext=null) }
+        } catch(_:Exception) {
+            audio.cancelRecording(audioOwner)
+            _voice.update { it.copy(error="Unable to start the microphone. Try again.") }
+        }
+    }
+
+    fun stopVoiceRecording() {
+        val capture=recording ?: return
+        recording=null
+        val path=audio.stopRecording(audioOwner)
+        _voice.update { it.copy(isRecording=false) }
+        if(path==null) {
+            voiceGate.invalidate()
+            _voice.update { it.copy(error="The recording could not be saved. Record for a moment, then tap Stop again.") }
+            return
+        }
+        transcriptionContext=capture.context
+        _voice.update { it.copy(isTranscribing=true,error=null,failedJobId=null,failedContext=null) }
+        viewModelScope.launch {
+            transcriptions.enqueue(path,preferences.openaiApiKey.first(),TranscriptionJob.Source.BROWSER,capture.context)
+        }
+    }
+
+    fun cancelVoiceRecording() {
+        if(recording==null) return
+        recording=null
+        audio.cancelRecording(audioOwner)
+        voiceGate.invalidate()
+        _voice.update { it.copy(isRecording=false,recordingDuration=0) }
+    }
+
+    private fun receiveTranscription(result: TranscriptionQueueService.PendingResult) {
+        if(result.source!=TranscriptionJob.Source.BROWSER) return
+        when(result) {
+            is TranscriptionQueueService.PendingResult.Failed -> {
+                _voice.update { it.copy(isTranscribing=if(result.sourceSessionId==transcriptionContext) false else it.isTranscribing,
+                    error="Transcription failed: ${result.error}",failedJobId=result.jobId.takeIf { id -> transcriptions.jobs.value.any { job -> job.id==id } },failedContext=result.sourceSessionId) }
+            }
+            is TranscriptionQueueService.PendingResult.Success -> {
+                if(!voiceReceipt.accept(result.jobId)) return
+                val target=browserVoiceTarget(result.sourceSessionId)
+                val text=result.text
+                val auto=voiceGate.canInsert(result.sourceSessionId,voiceTarget(),_ui.value.launch,attempt,voiceConnected())
+                _voice.update { it.copy(isTranscribing=if(result.sourceSessionId==transcriptionContext) false else it.isTranscribing,
+                    error=if(text.isBlank()) "No speech was detected. Try recording again." else null,failedJobId=null,failedContext=null,
+                    transcripts=if(text.isBlank()) it.transcripts else it.transcripts+BrowserVoiceTranscript(result.jobId,text,target,
+                        if(auto) null else "Transcript ready. Focus a field in the original browser, then paste.")) }
+                if(auto && target!=null && text.isNotBlank()) requestVoicePaste(result.jobId)
+            }
+        }
+    }
+
+    fun canPasteVoice(jobId: String): Boolean {
+        val transcript=_voice.value.transcripts.find { it.jobId==jobId } ?: return false
+        return voiceConnected() && transcript.target?.sameRuntime(voiceTarget())==true && _voice.value.delivery==null
+    }
+
+    fun requestVoicePaste(jobId: String) {
+        if(!canPasteVoice(jobId)) return
+        val transcript=_voice.value.transcripts.first { it.jobId==jobId }
+        if(transcript.text.length>8192 || '\u0000' in transcript.text) {
+            _voice.update { it.copy(transcripts=it.transcripts.map { item ->
+                if(item.jobId==jobId) item.copy(message="This transcript cannot be pasted automatically. Copy it instead.") else item }) }
+            return
+        }
+        val delivery=BrowserVoiceDelivery(UUID.randomUUID().toString(),transcript.jobId,transcript.text,voiceTarget() ?: return,
+            _ui.value.launch ?: return,attempt)
+        _voice.update { it.copy(delivery=delivery) }
+    }
+
+    fun isVoiceDeliveryCurrent(delivery: BrowserVoiceDelivery)=_voice.value.delivery==delivery && voiceConnected() &&
+        delivery.launch==_ui.value.launch && delivery.attempt==attempt && delivery.target==voiceTarget()
+
+    fun voiceDeliveryResult(delivery: BrowserVoiceDelivery, result: String?) {
+        if(!isVoiceDeliveryCurrent(delivery)) return
+        val inserted=result in listOf("\"inserted\"","\"duplicate\"")
+        _voice.update { state -> state.copy(delivery=null,transcripts=if(inserted) state.transcripts.filterNot { it.jobId==delivery.jobId }
+            else state.transcripts.map { if(it.jobId!=delivery.jobId) it else it.copy(message=when(result) {
+                "\"unsupported\"" -> "Update the browser component to paste transcripts. You can copy this text now."
+                "\"invalid\"" -> "This transcript cannot be pasted automatically. Copy it instead."
+                else -> "Paste was not confirmed. Check the field before pasting again."
+            }) }) }
+        voiceGate.invalidate()
+    }
+
+    fun dismissVoiceTranscript(jobId: String) {
+        if(_voice.value.delivery?.jobId==jobId) return
+        _voice.update { it.copy(transcripts=it.transcripts.filterNot { item -> item.jobId==jobId }) }
+    }
+
+    fun retryVoiceTranscription() {
+        val state=_voice.value
+        val jobId=state.failedJobId ?: return
+        if(state.isTranscribing || state.isRecording) return
+        if(transcriptions.jobs.value.none { it.id==jobId }) { dismissVoiceError();return }
+        // A manual retry may finish much later; insertion now requires an explicit Paste action.
+        voiceGate.invalidate();transcriptionContext=state.failedContext
+        _voice.update { it.copy(isTranscribing=true,error=null,failedJobId=null,failedContext=null) }
+        viewModelScope.launch { transcriptions.retryJob(jobId,preferences.openaiApiKey.first()) }
+    }
+
+    fun dismissVoiceError() { _voice.update { it.copy(error=null,failedJobId=null,failedContext=null) } }
+    fun voicePermissionDenied() { _voice.update { it.copy(error="Allow microphone access to dictate into the browser.",failedJobId=null,failedContext=null) } }
+
+    private fun invalidateVoice() {
+        voiceGate.invalidate()
+        _voice.update { state -> state.copy(delivery=null,transcripts=state.transcripts.map {
+            if(state.delivery?.jobId==it.jobId) it.copy(message="Paste was interrupted. Check the field before pasting again.") else it
+        }) }
+    }
+
+    /** Debug fixtures feed a completed result through the same delivery path; no audio API is invoked. */
+    internal fun receiveFixtureTranscript(text: String): Boolean {
+        if(com.agentshell.core.config.BuildConfig.AUTH_TOKEN!="isolated-ui-poc-only" || !voiceConnected()) return false
+        val capture=voiceGate.begin(voiceTarget() ?: return false,_ui.value.launch ?: return false,attempt)
+        receiveTranscription(TranscriptionQueueService.PendingResult.Success(text,UUID.randomUUID().toString(),
+            TranscriptionJob.Source.BROWSER,capture.context))
+        return true
+    }
+
+    override fun onCleared() { audio.cancelRecording(audioOwner);super.onCleared() }
 }
 
 internal fun viewerOrigin(capabilities:JSONObject,host:Host):String {

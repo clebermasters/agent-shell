@@ -15,7 +15,7 @@ data class TranscriptionJob(
     val error: String? = null,
     val sourceSessionId: String? = null,
 ) {
-    enum class Source { TERMINAL, CHAT }
+    enum class Source { TERMINAL, CHAT, BROWSER }
     enum class Status { PENDING, RETRYING, FAILED, COMPLETED }
 
     val canRetry: Boolean get() = retryCount < maxRetries && status != Status.COMPLETED

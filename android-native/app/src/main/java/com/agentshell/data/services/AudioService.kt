@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,6 +35,7 @@ class AudioService @Inject constructor(
 
     @Suppress("DEPRECATION")
     private var recorder: MediaRecorder? = null
+    private var recordingOwner: String? = null
     private var currentFilePath: String? = null
     private var recordingStartTime: Long? = null
 
@@ -55,37 +57,39 @@ class AudioService @Inject constructor(
 
     /**
      * Start recording to a temp .m4a file.
-     * Returns the file path on success, or null if permission is missing.
+     * Returns the file path on success, or null if unavailable. An owner cannot
+     * reuse, stop, or cancel a recording started by another feature.
      */
-    fun startRecording(): String? {
+    @Synchronized
+    fun startRecording(owner: String? = null): String? {
         if (!hasPermission()) return null
-        if (_isRecording.value) return currentFilePath
+        if (_isRecording.value) return currentFilePath.takeIf { owner == recordingOwner }
 
-        val timestamp = System.currentTimeMillis()
         val dir  = context.cacheDir
-        val file = File(dir, "whisper_$timestamp.m4a")
-        currentFilePath = file.absolutePath
-
-        @Suppress("DEPRECATION")
-        val mr: MediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            MediaRecorder(context)
-        } else {
+        val file = File(dir, "whisper_${UUID.randomUUID()}.m4a")
+        var mr: MediaRecorder? = null
+        try {
             @Suppress("DEPRECATION")
-            MediaRecorder()
-        }
-
-        mr.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setAudioEncodingBitRate(AppConfig.AUDIO_BIT_RATE)
-            setAudioSamplingRate(AppConfig.AUDIO_SAMPLE_RATE)
-            setOutputFile(file.absolutePath)
-            prepare()
-            start()
+            mr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else MediaRecorder()
+            mr.apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioEncodingBitRate(AppConfig.AUDIO_BIT_RATE)
+                setAudioSamplingRate(AppConfig.AUDIO_SAMPLE_RATE)
+                setOutputFile(file.absolutePath)
+                prepare()
+                start()
+            }
+        } catch (_: Exception) {
+            runCatching { mr?.release() }
+            file.delete()
+            return null
         }
 
         recorder = mr
+        recordingOwner = owner
+        currentFilePath = file.absolutePath
         recordingStartTime = System.currentTimeMillis()
         _recordingDuration.value = 0
         _isRecording.value = true
@@ -105,43 +109,44 @@ class AudioService @Inject constructor(
     /**
      * Stop recording and return the file path, or null if not recording.
      */
-    fun stopRecording(): String? {
-        if (!_isRecording.value) return null
+    @Synchronized
+    fun stopRecording(owner: String? = null): String? {
+        if (!_isRecording.value || owner != recordingOwner) return null
 
         durationJob?.cancel()
         durationJob = null
 
-        try {
-            recorder?.apply {
-                stop()
-                release()
-            }
-        } catch (_: Exception) {
-            // MediaRecorder.stop() can throw if nothing was recorded
-        }
+        val path = currentFilePath
+        val stopped = runCatching { recorder?.stop() }.isSuccess
+        runCatching { recorder?.release() }
 
         recorder = null
+        recordingOwner = null
+        currentFilePath = null
         recordingStartTime = null
         _isRecording.value = false
 
-        return currentFilePath
+        if (!stopped) {
+            path?.let { File(it).delete() }
+            return null
+        }
+        return path
     }
 
     /**
      * Cancel an in-progress recording and delete the file.
      */
-    fun cancelRecording() {
+    @Synchronized
+    fun cancelRecording(owner: String? = null) {
+        if (_isRecording.value && owner != recordingOwner) return
         durationJob?.cancel()
         durationJob = null
 
-        try {
-            recorder?.apply {
-                stop()
-                release()
-            }
-        } catch (_: Exception) {}
+        runCatching { recorder?.stop() }
+        runCatching { recorder?.release() }
 
         recorder = null
+        recordingOwner = null
         recordingStartTime = null
         _isRecording.value = false
         _recordingDuration.value = 0
@@ -154,8 +159,9 @@ class AudioService @Inject constructor(
     }
 
     /** Release all resources. */
+    @Synchronized
     fun dispose() {
-        cancelRecording()
+        cancelRecording(recordingOwner)
         scope.cancel()
     }
 }

@@ -1,18 +1,25 @@
 package com.agentshell.feature.browser
 
 import android.content.Context
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.pm.PackageManager
 import android.app.Activity
 import android.content.ContextWrapper
 import android.view.View
 import android.view.ViewTreeObserver
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebView
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -34,6 +41,9 @@ import com.agentshell.core.theme.ThemeToggleButton
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.delay
 
 private fun Context.browserActivity(): Activity? = when(this) {
     is Activity -> this
@@ -78,6 +88,7 @@ private fun browserKeyboard(view: WebView?) {
 @Composable
 fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
+    val voice by viewModel.voiceUiState.collectAsStateWithLifecycle()
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     var view by remember { mutableStateOf<WebView?>(null) }
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -89,6 +100,45 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
     val context=LocalContext.current
     val window=remember(context){context.browserActivity()?.window}
     val keyboardVisible=WindowInsets.ime.getBottom(LocalDensity.current)>0
+    var permissionTarget by remember { mutableStateOf<BrowserVoiceTarget?>(null) }
+    var grantedVoiceTarget by remember { mutableStateOf<BrowserVoiceTarget?>(null) }
+    val microphone=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if(granted) grantedVoiceTarget=permissionTarget
+        else viewModel.voicePermissionDenied()
+        permissionTarget=null
+    }
+    LaunchedEffect(grantedVoiceTarget,ui.launch,ui.status) {
+        val target=grantedVoiceTarget ?: return@LaunchedEffect
+        // Permission dialogs may pause and reconnect the viewer. Start only after
+        // it returns to the exact browser runtime for which permission was requested.
+        if(ui.status=="connected") {
+            grantedVoiceTarget=null
+            viewModel.startVoiceRecording(target)
+        }
+    }
+    val canRecord=ui.status=="connected" && !transferring && !voice.isTranscribing && voice.transcripts.isEmpty()
+    fun voicePressed() {
+        if(voice.isRecording) viewModel.stopVoiceRecording()
+        else if(ContextCompat.checkSelfPermission(context,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED)
+            viewModel.startVoiceRecording()
+        else {
+            permissionTarget=viewModel.voicePermissionTarget()
+            if(permissionTarget!=null) microphone.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+    LaunchedEffect(view,voice.delivery) {
+        val delivery=voice.delivery ?: return@LaunchedEffect
+        val viewer=view
+        if(viewer==null || !viewer.isAttachedToWindow || !viewModel.isVoiceDeliveryCurrent(delivery) ||
+            viewer.url?.startsWith(delivery.launch.origin+delivery.launch.basePath)!=true) {
+            viewModel.voiceDeliveryResult(delivery,null)
+            return@LaunchedEffect
+        }
+        viewer.evaluateJavascript(browserVoiceScript(delivery)) { result -> viewModel.voiceDeliveryResult(delivery,result) }
+        // Losing the WebView or its acknowledgement must never automatically repeat a paste.
+        delay(3000)
+        viewModel.voiceDeliveryResult(delivery,null)
+    }
     fun sendToComputer() {
         transferMenu=false;fullscreenTools=false
         view?.let { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken,0) }
@@ -165,10 +215,57 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
                     if(ui.canTakeControl) Button(onClick={useOnPhone()},enabled=!transferring && ui.status !in listOf("connecting","loading","stopping")){Text("Use on this phone")}
                     else Button(onClick={viewModel.connect(start=true)},enabled=!transferring && ui.status !in listOf("connecting","loading","stopping")){Text("Start browser")}
                 }
+                // Recording, progress and recovery must not resize the remote desktop
+                // or disturb the browser's focused field and selection.
+                Column(Modifier.align(Alignment.TopCenter).padding(8.dp).widthIn(max=640.dp)
+                    .heightIn(max=220.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                    if(voice.isRecording || voice.isTranscribing) Surface(color=MaterialTheme.colorScheme.secondaryContainer) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
+                            if(voice.isTranscribing) CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)
+                            else Icon(Icons.Default.Mic,null,tint=MaterialTheme.colorScheme.error)
+                            Spacer(Modifier.width(8.dp))
+                            Text(if(voice.isRecording) "Recording %d:%02d".format(voice.recordingDuration/60,voice.recordingDuration%60)
+                                else "Transcribing…",Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
+                            if(voice.isRecording) {
+                                TextButton(onClick={viewModel.stopVoiceRecording()}) { Text("Stop") }
+                                TextButton(onClick={viewModel.cancelVoiceRecording()}) { Text("Cancel") }
+                            }
+                        }
+                    }
+                    voice.error?.let { error -> Surface(color=MaterialTheme.colorScheme.errorContainer) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=6.dp)) {
+                            Text(error,style=MaterialTheme.typography.bodySmall)
+                            Row {
+                                if(voice.failedJobId!=null) TextButton(onClick={viewModel.retryVoiceTranscription()},enabled=!voice.isTranscribing) { Text("Retry transcription") }
+                                TextButton(onClick={viewModel.dismissVoiceError()}) { Text("Dismiss") }
+                            }
+                        }
+                    } }
+                    voice.transcripts.firstOrNull()?.takeIf { voice.delivery?.jobId!=it.jobId }?.let { transcript ->
+                        Surface(color=MaterialTheme.colorScheme.surfaceContainerHigh) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=8.dp)) {
+                                Text(transcript.message ?: "Transcript ready. Focus a field, then paste.",style=MaterialTheme.typography.labelMedium)
+                                Text(transcript.text,maxLines=3,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
+                                Row(Modifier.horizontalScroll(rememberScrollState())) {
+                                    TextButton(onClick={viewModel.requestVoicePaste(transcript.jobId)},enabled=viewModel.canPasteVoice(transcript.jobId)) { Text("Paste at cursor") }
+                                    TextButton(onClick={
+                                        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Transcript",transcript.text))
+                                    }) { Text("Copy") }
+                                    TextButton(onClick={viewModel.dismissVoiceTranscript(transcript.jobId)}) { Text("Dismiss") }
+                                }
+                            }
+                        }
+                    }
+                }
                 if(expanded) Box(Modifier.align(Alignment.BottomEnd).padding(12.dp).navigationBarsPadding()) {
                     Surface(shape=RoundedCornerShape(28.dp),tonalElevation=4.dp,shadowElevation=4.dp,
                         color=MaterialTheme.colorScheme.surface.copy(alpha=.94f)) {
                         Row {
+                            IconButton(onClick={voicePressed()},enabled=voice.isRecording || canRecord) {
+                                Icon(if(voice.isRecording) Icons.Default.Stop else Icons.Default.Mic,
+                                    if(voice.isRecording) "Stop voice transcription" else "Dictate at browser cursor")
+                            }
                             IconButton(onClick={fullscreenTools=true}){Icon(Icons.Default.Tune,"Fullscreen controls")}
                             IconButton(onClick={expanded=false;fullscreenTools=false}){Icon(Icons.Default.CloseFullscreen,"Exit fullscreen")}
                         }
@@ -200,6 +297,10 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
             if(ui.launch!=null && !expanded && !transferring) {
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),verticalAlignment=Alignment.CenterVertically) {
+                    TextButton(onClick={voicePressed()},enabled=voice.isRecording || canRecord) {
+                        Icon(if(voice.isRecording) Icons.Default.Stop else Icons.Default.Mic,null,Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp));Text(if(voice.isRecording) "Stop" else "Dictate")
+                    }
                     TextButton(onClick={browserKeyboard(view)}){Icon(Icons.Default.Keyboard,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text("Keyboard")}
                     for((label,code) in listOf("Esc" to 65307,"Tab" to 65289,"Enter" to 65293)) TextButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.key($code)",null)}){Text(label)}
                     IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.zoom(1.25)",null)}){Icon(Icons.Default.ZoomIn,"Zoom browser view in")}

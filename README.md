@@ -75,6 +75,7 @@ The **maintained and feature-complete client is the native Android app** (`andro
 - Real-time system usage (`CPU`, `memory`, `disk`) and process list
 - System alerts and notifications with persistent storage
 - Audio transcription and playback pipeline
+- Remote browser dictation: tap a field, record with **Dictate**, and paste the transcript at its cursor automatically
 - File browser with copy/cut/paste/delete/move/rename and search/sort
 - Cron job manager with schedule + test execution
 - Dotfile editor and history
@@ -195,12 +196,18 @@ If you already have an APK and want install only:
 
 ### REST endpoints (all protected by auth middleware)
 - `GET /api/clients`
+- `GET /api/devices`, `GET /api/devices/:id/adb`, and `GET /api/devices/:id/network` — current phone network addresses and Wi-Fi ADB endpoints
 - `GET /api/chat/files/:id`
 - `GET /api/notifications`
 - `POST /api/notifications`
 - `POST /api/tmux/input`
 - `GET|POST|PUT|DELETE /api/cron/jobs` and `/api/cron/jobs/:id` variants
 - `GET /api/notifications/files/:id`
+
+For automatic native phone discovery and connecting from computer sessions, see
+[Phone ADB discovery](docs/phone-adb.md). Run `python3 scripts/phone-adb.py --connect`
+to fetch the current Wi-Fi endpoint and verify the ADB connection, or
+`python3 scripts/phone-adb.py --transport vpn --ip` for the current cellular VPN address.
 
 ## WebSocket Message Surface
 
@@ -225,6 +232,7 @@ Current high-level message families:
   - `get-tags`, `add-tag`, `assign-tag-to-session`, `remove-tag-from-session`
 - System / resources:
   - `get-stats`, `get-claude-usage`, `get-codex-usage`
+  - `report-device-adb` publishes current Wi-Fi/cellular/VPN addresses and any discovered Wi-Fi ADB endpoint.
 - File operations and git workflows:
   - `list-files`, `read-binary-file`, `delete-files`, `rename-file`, `copy-files`, `move-files`
   - `git-status`, `git-diff`, `git-log`, `git-branches`, `git-commit`, `git-push`, etc.

@@ -1773,6 +1773,7 @@ mod tests {
         let tag_store = Arc::new(crate::tag_store::TagStore::new(dir.to_path_buf()).unwrap());
         Arc::new(crate::AppState {
             enable_audio_logs: false,
+            device_adb_registry: Arc::new(crate::device_adb::DeviceAdbRegistry::default()),
             broadcast_tx,
             client_manager,
             chat_file_storage,

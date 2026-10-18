@@ -300,6 +300,7 @@ mod tests {
         let client_manager = Arc::new(crate::websocket::client_manager::ClientManager::new());
         Arc::new(AppState {
             enable_audio_logs: false,
+            device_adb_registry: Arc::new(crate::device_adb::DeviceAdbRegistry::default()),
             broadcast_tx,
             client_manager,
             chat_file_storage: Arc::new(crate::chat_file_storage::ChatFileStorage::new(

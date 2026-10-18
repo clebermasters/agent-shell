@@ -41,11 +41,22 @@ data class TranscriptionSuccessEvent(
 )
 
 @Singleton
-class TranscriptionQueueService @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val whisperService: WhisperService,
+class TranscriptionQueueService private constructor(
+    context: Context,
+    private val transcribe: suspend (String, String) -> TranscriptionResult,
+    private val scope: CoroutineScope,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    @Inject constructor(
+        @ApplicationContext context: Context,
+        whisperService: WhisperService,
+    ) : this(context, whisperService::transcribe, CoroutineScope(SupervisorJob() + Dispatchers.Default))
+
+    internal constructor(
+        context: Context,
+        scope: CoroutineScope,
+        transcribe: suspend (String, String) -> TranscriptionResult,
+    ) : this(context, transcribe, scope)
+
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
     private val mutex = Mutex()
 
@@ -60,6 +71,10 @@ class TranscriptionQueueService @Inject constructor(
     private val _successEvents = MutableSharedFlow<TranscriptionSuccessEvent>()
     val successEvents: SharedFlow<TranscriptionSuccessEvent> = _successEvents.asSharedFlow()
 
+    /** Every completion, including errors and successes after a delayed retry. */
+    private val _resultEvents = MutableSharedFlow<PendingResult>()
+    val resultEvents: SharedFlow<PendingResult> = _resultEvents.asSharedFlow()
+
     // One-shot result for the immediate enqueue call
     private val _pendingResult = MutableStateFlow<PendingResult?>(null)
     val pendingResult: StateFlow<PendingResult?> = _pendingResult.asStateFlow()
@@ -72,9 +87,11 @@ class TranscriptionQueueService @Inject constructor(
     }
 
     sealed class PendingResult {
+        abstract val jobId: String
         abstract val source: TranscriptionJob.Source
-        data class Success(val text: String, val jobId: String, override val source: TranscriptionJob.Source, val sourceSessionId: String? = null) : PendingResult()
-        data class Failed(val jobId: String, val error: String, override val source: TranscriptionJob.Source) : PendingResult()
+        abstract val sourceSessionId: String?
+        data class Success(val text: String, override val jobId: String, override val source: TranscriptionJob.Source, override val sourceSessionId: String? = null) : PendingResult()
+        data class Failed(override val jobId: String, val error: String, override val source: TranscriptionJob.Source, override val sourceSessionId: String? = null) : PendingResult()
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -93,25 +110,34 @@ class TranscriptionQueueService @Inject constructor(
         sourceSessionId: String? = null,
     ) {
         scope.launch {
-            // Move audio to persistent storage
-            val src = File(audioPath)
-            if (!src.exists()) return@launch
-
-            val persistentName = "${UUID.randomUUID()}.m4a"
-            val dest = File(queueDir, persistentName)
-            src.copyTo(dest, overwrite = true)
-            src.delete()
-
             val job = TranscriptionJob(
                 id = UUID.randomUUID().toString(),
-                audioPath = dest.absolutePath,
+                audioPath = File(queueDir, "${UUID.randomUUID()}.m4a").absolutePath,
                 timestamp = System.currentTimeMillis(),
                 source = source,
                 sourceSessionId = sourceSessionId,
             )
-
-            // Try immediate transcription with retries
-            attemptWithRetries(job, apiKey)
+            var attemptStarted = false
+            try {
+                // Move audio to persistent storage before uploading it.
+                val src = File(audioPath)
+                if (!src.isFile) {
+                    publishResult(PendingResult.Failed(job.id, "Audio file not found", source, sourceSessionId), true)
+                    return@launch
+                }
+                src.copyTo(File(job.audioPath), overwrite = false)
+                src.delete()
+                attemptStarted = true
+                attemptWithRetries(job, apiKey)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A copy can create its destination before failing. The original
+                // remains available; never remove audio owned by a queued attempt.
+                if (!attemptStarted) runCatching { File(job.audioPath).delete() }
+                // A failed copy or persistence operation must also end the caller's busy state.
+                publishResult(PendingResult.Failed(job.id, "Unable to prepare audio for transcription", source, sourceSessionId), true)
+            }
         }
     }
 
@@ -149,6 +175,11 @@ class TranscriptionQueueService @Inject constructor(
         _pendingResult.value = null
     }
 
+    /** Consume only the result that this observer actually handled. */
+    fun clearPendingResult(expected: PendingResult) {
+        _pendingResult.compareAndSet(expected, null)
+    }
+
     // ── Internal ──────────────────────────────────────────────────────────────
 
     private suspend fun attemptWithRetries(job: TranscriptionJob, apiKey: String) {
@@ -162,7 +193,7 @@ class TranscriptionQueueService @Inject constructor(
             )
             updateJob(currentJob)
 
-            val result = whisperService.transcribe(currentJob.audioPath, apiKey)
+            val result = transcribe(currentJob.audioPath, apiKey)
 
             when (result) {
                 is TranscriptionResult.Success -> {
@@ -171,12 +202,9 @@ class TranscriptionQueueService @Inject constructor(
                     removeJob(currentJob.id)
                     val text = result.text
 
-                    // Notify caller
-                    if (attempt == 0) {
-                        _pendingResult.value = PendingResult.Success(text, currentJob.id, currentJob.source, currentJob.sourceSessionId)
-                    }
+                    publishResult(PendingResult.Success(text, currentJob.id, currentJob.source, currentJob.sourceSessionId), attempt == 0)
 
-                    // Notify any observers (e.g. for retries that succeed later)
+                    // Preserve the existing success stream for terminal and chat observers.
                     _successEvents.emit(
                         TranscriptionSuccessEvent(currentJob.id, text, currentJob.source, currentJob.sourceSessionId)
                     )
@@ -189,9 +217,7 @@ class TranscriptionQueueService @Inject constructor(
                         error = result.message,
                     )
                     updateJob(currentJob)
-                    if (attempt == 0) {
-                        _pendingResult.value = PendingResult.Failed(currentJob.id, result.message, currentJob.source)
-                    }
+                    publishResult(PendingResult.Failed(currentJob.id, result.message, currentJob.source, currentJob.sourceSessionId), attempt == 0)
                     return
                 }
                 is TranscriptionResult.RetryableError -> {
@@ -211,9 +237,12 @@ class TranscriptionQueueService @Inject constructor(
             error = currentJob.error ?: "Max retries (${currentJob.maxRetries}) exhausted",
         )
         updateJob(currentJob)
-        if (job.retryCount == 0) {
-            _pendingResult.value = PendingResult.Failed(currentJob.id, currentJob.error ?: "Transcription failed", currentJob.source)
-        }
+        publishResult(PendingResult.Failed(currentJob.id, currentJob.error ?: "Transcription failed", currentJob.source, currentJob.sourceSessionId), job.retryCount == 0)
+    }
+
+    private suspend fun publishResult(result: PendingResult, immediate: Boolean) {
+        if (immediate) _pendingResult.value = result
+        _resultEvents.emit(result)
     }
 
     // ── Persistence ───────────────────────────────────────────────────────────

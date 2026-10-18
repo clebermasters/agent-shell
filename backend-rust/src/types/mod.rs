@@ -262,6 +262,10 @@ pub enum WebSocketMessage {
         window_index: u32,
     },
     Ping,
+    ReportDeviceAdb {
+        #[serde(flatten)]
+        report: crate::device_adb::DeviceAdbReport,
+    },
     AudioControl {
         action: AudioAction,
     },

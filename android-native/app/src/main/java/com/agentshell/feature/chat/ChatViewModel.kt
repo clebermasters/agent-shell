@@ -473,7 +473,7 @@ class ChatViewModel @Inject constructor(
                         it.copy(isTranscribing = false, transcriptionError = result.error, failedTranscriptionJobId = result.jobId)
                     }
                 }
-                transcriptionQueue.clearPendingResult()
+                transcriptionQueue.clearPendingResult(result)
             }
         }
 

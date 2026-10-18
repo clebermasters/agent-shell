@@ -37,6 +37,7 @@ mod chat_log;
 mod codex_app;
 mod cron;
 mod cron_handler;
+mod device_adb;
 mod dotfiles;
 mod favorite_store;
 mod monitor;
@@ -72,6 +73,7 @@ pub struct AppState {
     pub enable_audio_logs: bool,
     pub broadcast_tx: mpsc::Sender<ServerMessage>,
     pub client_manager: Arc<websocket::ClientManager>,
+    pub device_adb_registry: Arc<device_adb::DeviceAdbRegistry>,
     pub chat_file_storage: Arc<chat_file_storage::ChatFileStorage>,
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
     pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
@@ -122,6 +124,7 @@ async fn main() -> Result<()> {
         enable_audio_logs: args.audio,
         broadcast_tx: broadcast_tx.clone(),
         client_manager,
+        device_adb_registry: Arc::new(device_adb::DeviceAdbRegistry::default()),
         chat_file_storage: Arc::new(chat_file_storage::ChatFileStorage::new(base_dir.clone())),
         chat_event_store: Arc::new(chat_event_store::ChatEventStore::new(base_dir.clone())?),
         chat_clear_store: Arc::new(chat_clear_store::ChatClearStore::new(&base_dir)),
@@ -163,6 +166,7 @@ async fn main() -> Result<()> {
     // Build the router — protected routes require auth token
     let protected = Router::new()
         .merge(browser::api_router())
+        .merge(device_adb::api_router(app_state.device_adb_registry.clone()))
         .route("/api/chat/bind", post(chat_binding::register_hook))
         .route("/api/chat/ui", post(interactive_ui::publish))
         // API: Get connected clients count

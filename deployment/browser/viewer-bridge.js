@@ -29,6 +29,44 @@
   `;
   document.head.append(layout);
   const report = state => window.BrowserHost?.postMessage(JSON.stringify({type: 'connection', state}));
+  const modifiers = [[65507, 'ControlLeft'], [65508, 'ControlRight'], [65513, 'AltLeft'],
+    [65514, 'AltRight'], [65505, 'ShiftLeft'], [65506, 'ShiftRight'], [65515, 'MetaLeft']];
+  const releaseModifiers = rfb => {
+    for (const [keysym, code] of modifiers) rfb.sendKey(keysym, code, false);
+  };
+  const pasteReceipts = new WeakMap();
+  const pasteText = (ui, id, value) => {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(id) ||
+        typeof value !== 'string' || !value.trim() || value.length > 8192 || value.includes('\0')) return 'invalid';
+    const rfb = ui.rfb;
+    if (!ui.connected || !rfb || rfb._rfbConnectionState !== 'connected' || rfb._viewOnly) return 'unavailable';
+    if (typeof rfb.clipboardPasteFrom !== 'function' || typeof rfb.sendKey !== 'function') return 'unsupported';
+    let receipts = pasteReceipts.get(rfb);
+    if (!receipts) { receipts = new Set(); pasteReceipts.set(rfb, receipts); }
+    if (receipts.has(id)) return 'duplicate';
+    try {
+      mouse?.release();
+      releaseModifiers(rfb);
+      // Explicit dictation must replace the remote clipboard even if another
+      // app changed it since an identical previous transcript. Keep automatic
+      // local clipboard synchronization disabled; send only the supplied text.
+      rfb._clipHash = null;
+      rfb.clipboardPasteFrom(value);
+      rfb.sendKey(65507, 'ControlLeft', true);
+      rfb.sendKey(118, 'KeyV', true);
+      rfb.sendKey(118, 'KeyV', false);
+      rfb.sendKey(65507, 'ControlLeft', false);
+      receipts.add(id);
+      while (receipts.size > 64) receipts.delete(receipts.values().next().value);
+      return 'inserted';
+    } catch (_) {
+      // A partial send has an uncertain outcome. Native UI retains the text
+      // for an explicit retry; it must not automatically replay the input.
+      return 'unavailable';
+    } finally {
+      try { rfb.sendKey(118, 'KeyV', false); rfb.sendKey(65507, 'ControlLeft', false); } catch (_) { /* disconnected */ }
+    }
+  };
   let lastState, lastSize, zoom = 1, pinchStart, panStart, mouse;
   let fitScale, keyboardFit, keyboardRequestedUntil = 0, keyboardWasVisible = false;
   const keyboardActive = () => {
@@ -151,13 +189,14 @@
       },
       pause() {
         mouse?.release();
-        if (ui.connected) for (const [keysym,code] of [[65507,'ControlLeft'],[65508,'ControlRight'],[65513,'AltLeft'],[65514,'AltRight'],[65505,'ShiftLeft'],[65506,'ShiftRight'],[65515,'MetaLeft']]) ui.rfb.sendKey(keysym,code,false);
+        if (ui.connected) releaseModifiers(ui.rfb);
         ui.disconnect(); report('disconnected');
       },
       fit() { setZoom(ui.rfb, 1); },
       zoom(delta) { if (ui.connected) setZoom(ui.rfb, zoom * delta); },
       mouse() { mouse?.set(!mouse.enabled); },
       mousePosition() { return mouse?.position(); },
+      pasteText(id, value) { return pasteText(ui, id, value); },
       text(value) {
         if (!ui.connected || typeof value !== 'string' || value.length > 8192) return;
         for (const character of value) {

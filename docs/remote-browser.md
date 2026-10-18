@@ -297,9 +297,34 @@ served by the same configured HTTPS host and port.
 
 Files selected by remote Chrome are server files. Existing AgentShell file
 manager uploads/downloads can transfer those files separately; browser-native
-Android picker integration, larger transfers, audio, microphone and camera
+Android picker integration, larger transfers, audio, live website microphone and camera
 forwarding are follow-up work. Chrome's profile/theme is remote; Android's
 light/dark controls style the native app around the viewer.
+
+### Dictation at the browser cursor
+
+Tap a text field in remote Chrome to position the caret, then tap **Dictate**
+in the Browser controls. Fullscreen has a microphone button beside its floating
+controls. Allow microphone access if prompted, speak, and tap **Stop**. **Cancel**
+discards the current recording.
+
+The existing AgentShell transcription queue and saved Voice Input API key are
+reused. When transcription finishes on the same uninterrupted browser
+connection, the text is pasted into the focused field, replacing any selected
+text. Unicode and multiline text use clipboard paste. No Enter key is sent, and
+the browser does not use the chat/terminal auto-enter preference.
+
+If the viewer disconnects, is paused, changes server, or moves to the computer,
+automatic insertion is cancelled. Completed text is retained with **Paste at
+cursor**, **Copy**, and **Dismiss** actions. Explicit paste is available only in
+the original browser runtime; focus the intended field before using it. If a
+paste acknowledgement is lost, check the field before retrying. Duplicate
+completion notifications cannot automatically insert the same recording twice.
+Transcription errors offer **Retry transcription** when the audio is retained;
+manually retried results require an explicit paste.
+
+This requires the updated APK and backend viewer adapter. Recording occurs on
+the phone; it does not give the remote website access to the phone's microphone.
 
 ### Touch mouse pointer mode
 

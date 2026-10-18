@@ -10,6 +10,7 @@ import com.agentshell.core.util.NotificationHelper
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.repository.ChatActivityRepository
 import com.agentshell.data.services.AudioPlayerManager
+import com.agentshell.data.services.DeviceAdbReporter
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.HiltAndroidApp
@@ -30,6 +31,7 @@ class AgentShellApp : Application() {
         fun webSocketService(): WebSocketService
         fun audioPlayerManager(): AudioPlayerManager
         fun chatActivityRepository(): ChatActivityRepository
+        fun deviceAdbReporter(): DeviceAdbReporter
     }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -43,6 +45,7 @@ class AgentShellApp : Application() {
         wsService = entryPoint.webSocketService()
         entryPoint.audioPlayerManager().connect()
         entryPoint.chatActivityRepository().start()
+        entryPoint.deviceAdbReporter().start()
 
         observeNotificationEvents()
         manageForegroundService()

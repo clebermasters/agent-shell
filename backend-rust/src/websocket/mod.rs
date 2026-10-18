@@ -140,6 +140,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             }
                             Err(e) => {
                                 error!("Failed to parse WebSocket message: {} - Error: {}", text, e);
+                                let _ = types::send_message(
+                                    &ws_state.message_tx,
+                                    ServerMessage::Error {
+                                        message: format!("Invalid WebSocket message: {e}"),
+                                    },
+                                ).await;
                             }
                         }
                     }
@@ -172,6 +178,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     }
 
     // Cleanup - use graceful mode to preserve tmux sessions on server shutdown
+    state.device_adb_registry.disconnect(&client_id).await;
     let is_shutdown = state.shutdown_token.is_cancelled();
     terminal_cmds::cleanup_session(&ws_state, is_shutdown).await;
     let had_chat_watcher = ws_state.chat_log_handle.lock().await.is_some();
@@ -234,6 +241,22 @@ async fn handle_message(
 
         WebSocketMessage::Ping => {
             system_cmds::handle_ping(&state.message_tx).await?;
+        }
+
+        WebSocketMessage::ReportDeviceAdb { report } => {
+            if let Err(message) = app_state
+                .device_adb_registry
+                .report(&state.client_id, report)
+                .await
+            {
+                types::send_message(
+                    &state.message_tx,
+                    ServerMessage::Error {
+                        message: format!("Invalid device ADB report: {message}"),
+                    },
+                )
+                .await?;
+            }
         }
 
         WebSocketMessage::AudioControl { action } => {

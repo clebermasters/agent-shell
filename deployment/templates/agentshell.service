@@ -12,6 +12,8 @@ EnvironmentFile=$environment_file
 Environment="PATH=$service_path"
 Restart=always
 RestartSec=5
+# Restart the daemon without terminating tmux servers and their sessions.
+KillMode=process
 StandardOutput=journal
 StandardError=journal
 

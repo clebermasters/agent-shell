@@ -83,6 +83,9 @@ pub(crate) async fn handle_kill_session(
                 error: None,
             };
             send_message(tx, response).await?;
+            // Remove deleted targets from client navigation immediately, without
+            // waiting for the monitor's next polling cycle.
+            handle_list_sessions(tx).await?;
         }
         Err(e) => {
             error!("Failed to kill session: {}", e);

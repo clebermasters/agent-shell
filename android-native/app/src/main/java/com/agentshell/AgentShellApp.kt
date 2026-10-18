@@ -9,6 +9,7 @@ import com.agentshell.core.service.ConnectionService
 import com.agentshell.core.util.NotificationHelper
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.repository.ChatActivityRepository
+import com.agentshell.data.repository.RecentSessionsRepository
 import com.agentshell.data.services.AudioPlayerManager
 import com.agentshell.data.services.DeviceAdbReporter
 import dagger.hilt.EntryPoint
@@ -31,6 +32,7 @@ class AgentShellApp : Application() {
         fun webSocketService(): WebSocketService
         fun audioPlayerManager(): AudioPlayerManager
         fun chatActivityRepository(): ChatActivityRepository
+        fun recentSessionsRepository(): RecentSessionsRepository
         fun deviceAdbReporter(): DeviceAdbReporter
     }
 
@@ -45,6 +47,7 @@ class AgentShellApp : Application() {
         wsService = entryPoint.webSocketService()
         entryPoint.audioPlayerManager().connect()
         entryPoint.chatActivityRepository().start()
+        entryPoint.recentSessionsRepository()
         entryPoint.deviceAdbReporter().start()
 
         observeNotificationEvents()

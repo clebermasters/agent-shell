@@ -132,7 +132,7 @@ fun ChatScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // Swipe navigation state
-    var recentChatSessions by remember { mutableStateOf<List<String>>(emptyList()) }
+    val recentChatSessions by viewModel.recentChatSessions.collectAsStateWithLifecycle()
     var hasSkippedInitialResume by remember(chatKey) { mutableStateOf(false) }
     var screenActive by remember(chatKey) { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     val chatScroll = rememberChatScrollState(
@@ -146,7 +146,6 @@ fun ChatScreen(
         if (!isSwipeNavigation) {
             viewModel.pushRecentChatSession(chatKey)
         }
-        recentChatSessions = viewModel.getRecentChatSessions()
     }
 
     // Load voice button preference
@@ -340,6 +339,7 @@ fun ChatScreen(
                 else key.removePrefix("tmux:").substringBefore("\u0000")
             },
             onSwipeToSession = { key ->
+                if (!viewModel.canSwipeToSession(key)) return@SwipeableSessionContainer
                 if (key.startsWith("acp:")) {
                     onSwipeToChatSession?.invoke(key.removePrefix("acp:"), 0, true)
                 } else {

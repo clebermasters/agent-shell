@@ -140,6 +140,7 @@ data class ChatUiState(
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
+    private val recentSessions: com.agentshell.data.repository.RecentSessionsRepository,
     private val savedStateHandle: SavedStateHandle,
     private val chatRepository: ChatRepository,
     private val chatActivityRepository: ChatActivityRepository,
@@ -906,9 +907,9 @@ class ChatViewModel @Inject constructor(
 
     suspend fun isVoiceButtonVisible(): Boolean = dataStore.showVoiceButton.first()
 
-    suspend fun getRecentChatSessions(): List<String> = dataStore.getRecentChatSessions()
-
-    suspend fun pushRecentChatSession(key: String) = dataStore.pushRecentChatSession(key)
+    val recentChatSessions = recentSessions.chat
+    fun canSwipeToSession(key: String) = key in recentSessions.chat.value
+    suspend fun pushRecentChatSession(key: String) = recentSessions.visitChat(key)
 
     // -------------------------------------------------------------------------
     // File attachment

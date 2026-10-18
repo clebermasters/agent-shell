@@ -110,11 +110,13 @@ pub(crate) async fn handle_attach(
 ) -> anyhow::Result<()> {
     info!("Attaching to session: {}", session_name);
 
-    // Set current session and window for input handling
-    *state.current_session.lock().await = Some(session_name.clone());
+    let previous_window = *state.current_window.lock().await;
     *state.current_window.lock().await = window_index;
-
-    attach_to_session(state, &session_name, cols, rows).await
+    if let Err(error) = attach_to_session(state, &session_name, cols, rows).await {
+        *state.current_window.lock().await = previous_window;
+        return Err(error);
+    }
+    Ok(())
 }
 
 // ── PTY session lifecycle ─────────────────────────────────────────────────
@@ -125,6 +127,20 @@ pub(crate) async fn attach_to_session(
     cols: u16,
     rows: u16,
 ) -> anyhow::Result<()> {
+    // Attaching is navigation, never an instruction to create a session. Check
+    // before replacing the active PTY, and require an exact name (no prefix match).
+    let target = format!("={session_name}");
+    let exists = tokio::process::Command::new("tmux")
+        .args(["has-session", "-t", &target])
+        .output()
+        .await?;
+    if !exists.status.success() {
+        send_message(&state.message_tx, ServerMessage::Error {
+            message: format!("Session '{session_name}' no longer exists. Refresh the session list."),
+        }).await?;
+        super::session_cmds::handle_list_sessions(&state.message_tx).await?;
+        anyhow::bail!("Session '{session_name}' no longer exists. Refresh the session list.");
+    }
     let tx = &state.message_tx;
     // Update current session
     {
@@ -188,7 +204,7 @@ pub(crate) async fn attach_to_session(
     })?;
 
     let mut cmd = CommandBuilder::new("tmux");
-    cmd.args(&["attach-session", "-t", session_name]);
+    cmd.args(&["attach-session", "-t", &target]);
     cmd.env("TERM", "xterm");
     cmd.env("COLORTERM", "truecolor");
 
@@ -207,18 +223,6 @@ pub(crate) async fn attach_to_session(
     // Get writer and spawn command
     let writer = pair.master.take_writer()?;
     let writer = Arc::new(Mutex::new(writer));
-
-    // First check if session exists, if not create it
-    let check_output = tokio::process::Command::new("tmux")
-        .args(&["has-session", "-t", session_name])
-        .output()
-        .await?;
-
-    if !check_output.status.success() {
-        // Create the session first
-        info!("Session {} doesn't exist, creating it", session_name);
-        tmux::create_session(session_name).await?;
-    }
 
     let child = pair.slave.spawn_command(cmd)?;
     let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> = Arc::new(Mutex::new(child));
@@ -643,21 +647,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_attach_sets_state() {
+    async fn test_handle_attach_missing_session_does_not_recreate_or_replace_active_target() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut ws_state, mut rx) = make_ws_state(dir.path());
+        let test_session = format!("deleted-{}", uuid::Uuid::new_v4());
+        *ws_state.current_session.lock().await = Some("previous-session".into());
+        *ws_state.current_window.lock().await = Some(3);
+        let result = handle_attach(&mut ws_state, test_session.clone(), 80, 24, Some(0)).await;
+        assert!(result.unwrap_err().to_string().contains("no longer exists"));
+        assert_eq!(*ws_state.current_session.lock().await, Some("previous-session".into()));
+        assert_eq!(*ws_state.current_window.lock().await, Some(3));
+        assert!(ws_state.current_pty.lock().await.is_none());
+        let check = tokio::process::Command::new("tmux")
+            .args(["has-session", "-t", &format!("={test_session}")]).output().await.unwrap();
+        assert!(!check.status.success(), "Navigation must never resurrect a deleted session");
+        let BroadcastMessage::Text(message) = rx.recv().await.unwrap() else { panic!("Expected error") };
+        assert!(message.contains("no longer exists"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_attach_rejects_missing_name_that_prefix_matches_a_live_session() {
         let dir = tempfile::TempDir::new().unwrap();
         let (mut ws_state, _rx) = make_ws_state(dir.path());
-        let test_session = format!("test-attach-{}", chrono::Utc::now().timestamp_millis());
-        *ws_state.current_session.lock().await = None;
-        *ws_state.current_window.lock().await = None;
-
-        // handle_attach sets current_session and current_window before attempting attach
-        let _ = handle_attach(&mut ws_state, test_session.clone(), 80, 24, Some(0)).await;
-        let session = ws_state.current_session.lock().await.clone();
-        assert_eq!(session, Some(test_session.clone()));
-        let window = *ws_state.current_window.lock().await;
-        assert_eq!(window, Some(0));
-        // Cleanup: kill the tmux session created by attach_to_session
-        let _ = crate::tmux::kill_session(&test_session).await;
+        let missing = format!("deleted-{}", uuid::Uuid::new_v4());
+        let live = format!("{missing}-kept");
+        crate::tmux::create_session(&live).await.unwrap();
+        let result = handle_attach(&mut ws_state, missing, 80, 24, Some(0)).await;
+        let _ = crate::tmux::kill_session(&live).await;
+        assert!(result.unwrap_err().to_string().contains("no longer exists"));
+        assert!(ws_state.current_session.lock().await.is_none());
+        assert!(ws_state.current_pty.lock().await.is_none());
     }
 
     #[tokio::test]

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.agentshell.core.config.AppConfig
 import com.agentshell.data.local.CommandMacroDao
 import com.agentshell.data.local.PreferencesDataStore
+import com.agentshell.data.repository.RecentSessionsRepository
 import com.agentshell.data.model.CommandMacro
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.remote.WebSocketService
@@ -57,6 +58,7 @@ class TerminalViewModel @Inject constructor(
     private val transcriptionQueue: TranscriptionQueueService,
     private val prefs: PreferencesDataStore,
     private val macroDao: CommandMacroDao,
+    private val recentSessions: RecentSessionsRepository,
 ) : ViewModel() {
 
     private val density: Float = app.resources.displayMetrics.scaledDensity
@@ -278,9 +280,9 @@ class TerminalViewModel @Inject constructor(
 
     // ── Recent sessions (swipe navigation) ─────────────────────────────────
 
-    suspend fun getRecentTerminalSessions(): List<String> = prefs.getRecentTerminalSessions()
-
-    suspend fun pushRecentTerminalSession(name: String) = prefs.pushRecentTerminalSession(name)
+    val recentTerminalSessions = recentSessions.terminal
+    fun canSwipeToSession(name: String) = name in recentSessions.terminal.value
+    suspend fun pushRecentTerminalSession(name: String) = recentSessions.visitTerminal(name)
 
     // ── Command macros ────────────────────────────────────────────────────
 

@@ -125,14 +125,13 @@ fun TerminalScreen(
     var hasSelection by remember { mutableStateOf(false) }
 
     // Swipe navigation state
-    var recentSessions by remember { mutableStateOf<List<String>>(emptyList()) }
+    val recentSessions by viewModel.recentTerminalSessions.collectAsStateWithLifecycle()
     var swipeHintDx by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(sessionName) {
         if (!isSwipeNavigation) {
             viewModel.pushRecentTerminalSession(sessionName)
         }
-        recentSessions = viewModel.getRecentTerminalSessions()
     }
 
     LaunchedEffect(Unit) {
@@ -426,7 +425,8 @@ fun TerminalScreen(
                                     else -> -1
                                 }
                                 if (nextIdx in recentSessions.indices) {
-                                    onSwipeToSession?.invoke(recentSessions[nextIdx])
+                                    val target = recentSessions[nextIdx]
+                                    if (viewModel.canSwipeToSession(target)) onSwipeToSession?.invoke(target)
                                 }
                             }
                         },

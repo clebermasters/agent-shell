@@ -198,36 +198,45 @@ class PreferencesDataStore @Inject constructor(
     }
 
     // ─── recent sessions (swipe navigation) ───────────────────────────────────
-    // Stored as pipe-delimited strings, max 3 entries each.
+    // Each server owns its history. Legacy unscoped entries cannot be safely
+    // attributed to a server, so new visits populate these scoped keys.
+    private fun recentTerminalKey(hostId: String) = stringPreferencesKey("recent_terminal_sessions_$hostId")
+    private fun recentChatKey(hostId: String) = stringPreferencesKey("recent_chat_sessions_$hostId")
+    private fun recentEntries(raw: String?) = raw.orEmpty().split("|").filter(String::isNotEmpty).distinct().take(3)
 
-    private val recentTerminalKey = stringPreferencesKey("recent_terminal_sessions")
-    private val recentChatKey = stringPreferencesKey("recent_chat_sessions")
+    fun recentTerminalSessions(hostId: String): Flow<List<String>> =
+        dataStore.data.map { recentEntries(it[recentTerminalKey(hostId)]) }
 
-    suspend fun getRecentTerminalSessions(): List<String> {
-        val raw = dataStore.data.first()[recentTerminalKey] ?: return emptyList()
-        return raw.split("|").filter { it.isNotEmpty() }
-    }
+    fun recentChatSessions(hostId: String): Flow<List<String>> =
+        dataStore.data.map { recentEntries(it[recentChatKey(hostId)]) }
 
-    suspend fun pushRecentTerminalSession(sessionName: String) {
+    suspend fun pushRecentTerminalSession(hostId: String, sessionName: String) {
         dataStore.edit { prefs ->
-            val current = (prefs[recentTerminalKey] ?: "").split("|").filter { it.isNotEmpty() }.toMutableList()
-            current.remove(sessionName)
-            current.add(0, sessionName)
-            prefs[recentTerminalKey] = current.take(3).joinToString("|")
+            val key = recentTerminalKey(hostId)
+            prefs[key] = (listOf(sessionName) + recentEntries(prefs[key]).filterNot { it == sessionName })
+                .take(3).joinToString("|")
         }
     }
 
-    suspend fun getRecentChatSessions(): List<String> {
-        val raw = dataStore.data.first()[recentChatKey] ?: return emptyList()
-        return raw.split("|").filter { it.isNotEmpty() }
+    suspend fun pushRecentChatSession(hostId: String, sessionKey: String) {
+        dataStore.edit { prefs ->
+            val key = recentChatKey(hostId)
+            prefs[key] = (listOf(sessionKey) + recentEntries(prefs[key]).filterNot { it == sessionKey })
+                .take(3).joinToString("|")
+        }
     }
 
-    suspend fun pushRecentChatSession(key: String) {
+    /** Null catalogs are unknown; an authoritative empty catalog removes all of its targets. */
+    suspend fun pruneRecentSessions(hostId: String, tmux: Set<String>? = null, acp: Set<String>? = null) {
         dataStore.edit { prefs ->
-            val current = (prefs[recentChatKey] ?: "").split("|").filter { it.isNotEmpty() }.toMutableList()
-            current.remove(key)
-            current.add(0, key)
-            prefs[recentChatKey] = current.take(3).joinToString("|")
+            val terminalKey = recentTerminalKey(hostId)
+            if (tmux != null) prefs[terminalKey] = recentEntries(prefs[terminalKey])
+                .filter { it in tmux }.joinToString("|")
+            val chatKey = recentChatKey(hostId)
+            prefs[chatKey] = recentEntries(prefs[chatKey]).filter { key ->
+                if (key.startsWith("acp:")) acp == null || key.removePrefix("acp:") in acp
+                else tmux == null || key.removePrefix("tmux:").substringBefore('\u0000') in tmux
+            }.joinToString("|")
         }
     }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Supervise one Chrome-only KasmVNC display; never seize an existing profile."""
+"""Supervise Chrome-only KasmVNC with explicit, verified profile handoffs."""
 import argparse
 import contextlib
 import fcntl
@@ -23,7 +23,9 @@ class RuntimeErrorCode(Exception):
 
 
 def read_json(path):
-    try: return json.loads(Path(path).read_text())
+    try:
+        value = json.loads(Path(path).read_text())
+        return value if isinstance(value, dict) else {}
     except (OSError, ValueError): return {}
 
 
@@ -74,8 +76,234 @@ def config(path):
         raise RuntimeErrorCode('INVALID_PROFILE')
     value['userDataDir'] = str(Path(value['userDataDir']).resolve())
     value['runtimeDir'] = str(Path(value['runtimeDir']).resolve())
+    value['_configuredUserDataDir'] = value['userDataDir']
+    selection = read_json(Path(value['runtimeDir'])/'selected-profile.json')
+    if (selection.get('sessionId') == value['sessionId'] and
+            selection.get('configuredUserDataDir') == value['_configuredUserDataDir']):
+        root = selection.get('userDataDir')
+        profile = selection.get('profileDirectory')
+        if isinstance(root, str) and root in {item['path'] for item in profile_roots(value)} and safe_profile(root, profile):
+            value['userDataDir'] = root
+            value['profileDirectory'] = profile
     return value
 
+
+
+def profile_roots(value):
+    """Paths are trusted local configuration, never an API-supplied directory."""
+    configured = value.get('_configuredUserDataDir', value['userDataDir'])
+    default = str((Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home()/'.config')))/'google-chrome').resolve())
+    roots = [{'path': configured, 'name': 'Computer Chrome' if configured == default else 'AgentShell'}]
+    if value.get('includeDefaultProfiles', True): roots.append({'path': default, 'name': 'Computer Chrome'})
+    extra = value.get('profileRoots', [])
+    if not isinstance(extra, list): raise RuntimeErrorCode('INVALID_RUNTIME_CONFIG')
+    for item in extra:
+        if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not Path(item['path']).is_absolute():
+            raise RuntimeErrorCode('INVALID_RUNTIME_CONFIG')
+        roots.append({'path': str(Path(item['path']).resolve()), 'name': display_name(item.get('name'), 'Chrome')})
+    return list({item['path']: item for item in reversed(roots)}.values())[::-1]
+
+
+def display_name(value, fallback):
+    if not isinstance(value, str): return fallback
+    clean = ''.join(character for character in value if ord(character) >= 32 and ord(character) != 127).strip()
+    return clean[:128] or fallback
+
+
+def safe_profile(root, directory):
+    if not isinstance(directory, str) or not re.fullmatch(r'[A-Za-z0-9 _-]{1,64}', directory): return False
+    try:
+        path = Path(root)/directory
+        return (not path.is_symlink() and path.is_dir() and path.resolve().parent == Path(root).resolve()
+                and path.stat().st_uid == os.getuid())
+    except OSError: return False
+
+
+def profile_id(root, directory):
+    return hashlib.sha256((str(root)+'\0'+directory).encode()).hexdigest()[:32]
+
+
+def verified_chrome_owner(value):
+    """Prove root, executable, UID and process lifetime before offering a close."""
+    pid = profile_owner(value['userDataDir'])
+    if not isinstance(pid, int): return None
+    lifetime = generation(pid)
+    if not lifetime: return None
+    try:
+        process = Path('/proc')/str(pid)
+        executable = (process/'exe').resolve(strict=True)
+        # Do not derive trusted executables from PATH: a user launcher may be
+        # an arbitrary shim, unrelated to the Chrome process holding this root.
+        installations = {Path('/opt/google/chrome/chrome'), Path('/usr/lib/chromium/chromium'),
+                         Path('/usr/lib/chromium-browser/chromium-browser'),
+                         Path('/usr/lib64/chromium-browser/chromium-browser')}
+        trusted = {item.resolve() for item in installations if item.is_file()
+                   and item.stat().st_uid == 0 and not item.stat().st_mode & 0o022}
+        if executable not in trusted: return None
+        argv = (process/'cmdline').read_bytes().decode().split('\0')
+        if any(arg == '--type' or arg.startswith('--type=') for arg in argv): return None
+        # Chrome may rewrite its command line after launch. A private, live
+        # supervisor record can prove the exact managed root independently of
+        # argv; this exception never authorizes an unrecorded desktop owner.
+        for filename in ('runtime.json', 'native.json'):
+            record = read_json(Path(value['runtimeDir'])/filename)
+            if (record.get('state') == 'ready' and record.get('chromePid') == pid
+                    and record.get('chromeGeneration') == lifetime
+                    and record.get('configFingerprint') == fingerprint(value)
+                    and record.get('pid') and generation(record['pid']) == record.get('processGeneration')
+                    and generation(pid) == lifetime and profile_owner(value['userDataDir']) == pid):
+                return {'chromePid': pid, 'chromeGeneration': lifetime}
+        root = None
+        for index, arg in enumerate(argv):
+            if arg.startswith('--user-data-dir='): root = arg.split('=', 1)[1]
+            elif arg == '--user-data-dir' and index+1 < len(argv): root = argv[index+1]
+        if root is None:
+            env = dict(item.split('=', 1) for item in (process/'environ').read_bytes().decode().split('\0') if '=' in item)
+            home = env.get('HOME', str(Path.home()))
+            root = str(Path(env.get('XDG_CONFIG_HOME', str(Path(home)/'.config')))/'google-chrome')
+        if not Path(root).is_absolute() or str(Path(root).resolve()) != value['userDataDir'] or generation(pid) != lifetime: return None
+        return {'chromePid': pid, 'chromeGeneration': lifetime}
+    except (OSError, ValueError, UnicodeError): return None
+
+
+def profile_metadata(root):
+    value = read_json(Path(root)/'Local State').get('profile', {})
+    return value if isinstance(value, dict) else {}
+
+
+def catalog(value):
+    current = status(value)
+    profiles = []
+    selected = value.get('profileDirectory')
+    if selected is None:
+        selected = profile_metadata(value['userDataDir']).get('last_used')
+    selected_id = profile_id(value['userDataDir'], selected) if safe_profile(value['userDataDir'], selected) else None
+    for root in profile_roots(value):
+        metadata = profile_metadata(root['path'])
+        cache = metadata.get('info_cache', {}) if isinstance(metadata, dict) else {}
+        if not isinstance(cache, dict): continue
+        owner = profile_owner(root['path'])
+        owned = verified_chrome_owner(dict(value, userDataDir=root['path'])) if owner is not None else None
+        phone = root['path'] == value['userDataDir'] and current.get('state') in ('ready', 'starting')
+        location = ('phone' if phone else 'computer') if owned else ('closed' if owner is None else 'unavailable')
+        for directory, info in cache.items():
+            if isinstance(info, dict) and (info.get('is_omitted_from_profile_list') is True or info.get('is_ephemeral') is True): continue
+            if not safe_profile(root['path'], directory): continue
+            identifier = profile_id(root['path'], directory)
+            profiles.append({'id': identifier, 'name': display_name(info.get('name') if isinstance(info, dict) else None, directory),
+                'source': root['name'], 'selected': identifier == selected_id, 'location': location,
+                'status': 'open' if owned else 'available' if owner is None else 'unavailable',
+                '_root': root['path'], '_directory': directory})
+    profiles.sort(key=lambda item: (item['source'].casefold(), item['name'].casefold(), item['id']))
+    return {'code': 'PROFILES', 'selectedProfileId': selected_id,
+            'profiles': [{key: val for key, val in item.items() if not key.startswith('_')} for item in profiles],
+            'session': current, 'canSelect': bool(profiles)}, profiles
+
+
+def selection_snapshot(value, target):
+    owners = {}
+    for root in sorted({value['userDataDir'], target['_root']}):
+        pid = profile_owner(root)
+        owners[root] = {'pid': pid, 'generation': generation(pid) if isinstance(pid, int) else None}
+    return {'config': fingerprint(value), 'roots': owners, 'session': status(value, ignore_switch=True)}
+
+
+def _runtime_module():
+    # Tests may load this module with importlib without registering sys.modules.
+    import types
+    return types.SimpleNamespace(**globals())
+
+
+def select_profile(value, path, identifier, confirmation_token=None):
+    directory = Path(value['runtimeDir']); directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (directory/'native-switch.lock').open('a') as lock:
+        try: fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: raise RuntimeErrorCode('HANDOFF_IN_PROGRESS')
+        # A waiting request must not operate on a selection changed by another caller.
+        value = config(path)
+        public, rows = catalog(value)
+        target = next((item for item in rows if item['id'] == identifier), None)
+        if target is None: raise RuntimeErrorCode('PROFILE_NOT_FOUND')
+        current = status(value)
+        if current.get('state') in ('starting', 'native-starting', 'switching-native', 'configuration-changed'):
+            raise RuntimeErrorCode('BROWSER_BUSY')
+        if (target['_root'] == value['userDataDir'] and identifier == public['selectedProfileId']
+                and current.get('state') == 'ready'):
+            return {'code': 'CONNECTED', 'connected': True, 'selectedProfileId': identifier, 'session': current}
+        snapshot = selection_snapshot(value, target)
+        owners = {}
+        for root, owner in snapshot['roots'].items():
+            if owner['pid'] is None: continue
+            verified = verified_chrome_owner(dict(value, userDataDir=root))
+            if verified is None: raise RuntimeErrorCode('PROFILE_OWNER_UNVERIFIED')
+            owners[root] = verified
+        challenge_path = directory/'profile-selection-confirmation.json'
+        if owners and confirmation_token is None:
+            confirmation = {'token': secrets.token_hex(32), 'profileId': identifier,
+                'location': 'computer' if target['location'] == 'computer' or current.get('state') in ('native', 'native-closed') else 'phone',
+                'closesAllWindows': True, 'expiresAt': int(time.time())+120}
+            write_json(challenge_path, {'confirmation': confirmation, 'snapshot': snapshot})
+            return {'code': 'PROFILE_CONFIRMATION_REQUIRED', 'connected': False,
+                    'confirmation': confirmation, 'session': current}
+        if confirmation_token is not None:
+            challenge = read_json(challenge_path)
+            confirmation = challenge.get('confirmation', {})
+            if not isinstance(confirmation, dict): confirmation = {}
+            token = confirmation.get('token'); expires = confirmation.get('expiresAt')
+            if (not isinstance(confirmation_token, str) or not isinstance(token, str)
+                    or not secrets.compare_digest(token, confirmation_token)
+                    or confirmation.get('profileId') != identifier or not isinstance(expires, (int, float)) or expires < time.time()
+                    or challenge.get('snapshot') != snapshot):
+                raise RuntimeErrorCode('PROFILE_CONFIRMATION_EXPIRED')
+            challenge_path.unlink(missing_ok=True)  # A retry requires a fresh, state-bound warning.
+        # Import only here to avoid a cycle; native's close primitive also pins a pidfd.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('native_profile_switch', Path(__file__).with_name('browser-native.py'))
+        native = importlib.util.module_from_spec(spec); spec.loader.exec_module(native)
+        native.secret_preflight(value, _runtime_module())
+        switch = {'pid': os.getpid(), 'processGeneration': generation(os.getpid()), 'destination': 'phone'}
+        write_json(directory/'native-switch.json', switch)
+        previous_selection = read_json(directory/'selected-profile.json')
+        closed_roots = []
+        source_record = read_json(directory/('native.json' if current.get('state') == 'native' else 'runtime.json'))
+        try:
+            # The destination computer root closes first; a refused dialog preserves the phone.
+            for root in sorted(owners, key=lambda item: item == value['userDataDir']):
+                owner_value = dict(value, userDataDir=root)
+                metadata = profile_metadata(root)
+                active = metadata.get('last_active_profiles', [])
+                if not isinstance(active, list): active = []
+                if not active and metadata.get('last_used'): active = [metadata['last_used']]
+                native.quit_chrome(owner_value, owners[root], _runtime_module())
+                closed_roots.append(root)
+                if root == value['userDataDir']: native.wait_supervisor(source_record, _runtime_module())
+                if not native.clean_exit(owner_value, _runtime_module(), active):
+                    raise RuntimeErrorCode('UNCLEAN_CHROME_EXIT')
+            if value.get('supervision', 'systemd-user') == 'systemd-user':
+                for unit in ('agentshell-browser.service', 'agentshell-browser-native.service'):
+                    if user_systemctl('stop', unit).returncode: raise RuntimeErrorCode('USER_SERVICE_UNAVAILABLE')
+            if not safe_profile(target['_root'], target['_directory']): raise RuntimeErrorCode('PROFILE_NOT_FOUND')
+            selected = {'sessionId': value['sessionId'], 'configuredUserDataDir': value['_configuredUserDataDir'],
+                        'userDataDir': target['_root'], 'profileDirectory': target['_directory']}
+            write_json(directory/'selected-profile.json', selected)
+            chosen = config(path)
+            state = native.start_virtual(chosen, path, _runtime_module())
+            return {'code': 'CONNECTED', 'connected': True, 'selectedProfileId': identifier,
+                    'normalExit': bool(owners), 'session': state}
+        except Exception as error:
+            if previous_selection: write_json(directory/'selected-profile.json', previous_selection)
+            else: (directory/'selected-profile.json').unlink(missing_ok=True)
+            restored = status(value, ignore_switch=True)
+            if value['userDataDir'] in closed_roots and profile_owner(value['userDataDir']) is None:
+                try:
+                    restored = (native.start_native(value, path, _runtime_module()) if current.get('state') == 'native'
+                                else native.start_virtual(value, path, _runtime_module()))
+                except Exception: restored = status(value, ignore_switch=True)
+            return {'code': getattr(error, 'code', 'PROFILE_OPEN_FAILED'), 'connected': False,
+                    'computerClosed': any(root != value['userDataDir'] or current.get('state') == 'native' for root in closed_roots),
+                    'phonePreserved': current.get('state') == 'ready' and restored.get('state') == 'ready',
+                    'session': restored}
+        finally: (directory/'native-switch.json').unlink(missing_ok=True)
 
 def native_status(value):
     record = read_json(Path(value['runtimeDir'])/'native.json')
@@ -298,12 +526,16 @@ def run(value):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config',type=Path,required=True);parser.add_argument('command',choices=['status','start','stop','run'])
+    parser.add_argument('--config',type=Path,required=True)
+    parser.add_argument('--profile-id'); parser.add_argument('--confirmation-token')
+    parser.add_argument('command',choices=['status','start','stop','run','profiles','select-profile'])
     args=parser.parse_args()
     try:
         value=config(args.config)
         if args.command=='run': run(value);return
-        result=status(value) if args.command=='status' else start(value,args.config) if args.command=='start' else stop(value)
+        if args.command == 'profiles': result = catalog(value)[0]
+        elif args.command == 'select-profile': result = select_profile(value, args.config, args.profile_id, args.confirmation_token)
+        else: result=status(value) if args.command=='status' else start(value,args.config) if args.command=='start' else stop(value)
     except (RuntimeErrorCode,ValueError) as error:
         result={'state':'failed','code':error.code if isinstance(error,RuntimeErrorCode) else 'INVALID_RUNTIME_CONFIG'}
     print(json.dumps(result))

@@ -76,6 +76,7 @@ The **maintained and feature-complete client is the native Android app** (`andro
 - System alerts and notifications with persistent storage
 - Audio transcription and playback pipeline
 - Remote browser dictation: tap a field, record with **Dictate**, and paste the transcript at its cursor automatically
+- Chrome profile picker with remembered selection and a confirmation before moving an open computer profile to the phone
 - Chat and terminal swipe history keeps three recent sessions per server and removes deleted sessions automatically
 - File browser with copy/cut/paste/delete/move/rename and search/sort
 - Cron job manager with schedule + test execution

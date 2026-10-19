@@ -30,6 +30,9 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     private val viewerId = saved.get<String>("browserViewerId") ?: browser.viewerId.also { saved["browserViewerId"] = it }
     private val _ui = MutableStateFlow(BrowserUiState())
     val uiState = _ui.asStateFlow()
+    private val _profiles = MutableStateFlow(BrowserProfilesUiState())
+    val profileUiState = _profiles.asStateFlow()
+    private var profilesJob: Job? = null
     private var host: Host? = null
     private var browserHost:Host?=null
     private var active = false
@@ -49,7 +52,8 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
         hosts.getSelectedHost().collect { selected ->
             if (host != selected) {
                 invalidateVoice(); cancelVoiceRecording()
-                host = selected; browserHost=null;primaryOrigin=null;job?.cancel(); attempt++
+                host = selected; browserHost=null;primaryOrigin=null;job?.cancel();profilesJob?.cancel(); attempt++
+                _profiles.value=BrowserProfilesUiState()
                 _ui.value = BrowserUiState(server=selected?.name ?: "Choose a server")
                 if (active) connect()
             }
@@ -86,6 +90,23 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
                 val origin=viewerOrigin(capabilities,secure)
                 primaryOrigin=capabilities.getString("viewerOrigin")
                 var session=capabilities.getJSONObject("session")
+                val supportsProfiles=capabilities.optBoolean("profileSelection")
+                _profiles.update { it.copy(available=supportsProfiles) }
+                if(supportsProfiles) {
+                    // The server's active selection is authoritative. A remembered
+                    // choice must never close a different active desktop browser.
+                    try {
+                        val catalog=browser.request(secure,"/api/browser/profiles")
+                        if(current!=attempt || host?.id!=selected.id || !active) return@launch
+                        applyProfiles(catalog,preferences.browserProfileId(selected.id).first())
+                        catalog.optJSONObject("session")?.let { session=it }
+                    } catch(error:Exception) {
+                        if(error is CancellationException) throw error
+                        // A profile-list failure must not disable an otherwise
+                        // healthy browser or any of its existing controls.
+                        _profiles.update { it.copy(error="Unable to load Chrome profiles. Refresh the list to retry.") }
+                    }
+                }
                 if(start) session=browser.request(secure,"/api/browser/sessions",JSONObject())
                 if(current!=attempt || host?.id!=selected.id || !active) return@launch
                 val title=capabilities.optString("displayName","Chrome")
@@ -121,6 +142,87 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
             }
         }
     }
+    private fun applyProfiles(data:JSONObject, remembered:String? = _profiles.value.rememberedProfileId) {
+        val entries=browserProfiles(data)
+        val selected=data.optString("selectedProfileId").takeIf { it.isNotBlank() }
+            ?: entries.firstOrNull { it.selected }?.id
+        _profiles.update { it.copy(available=data.optBoolean("canSelect",true),profiles=entries,
+            selectedProfileId=selected,rememberedProfileId=remembered,loading=false) }
+    }
+
+    fun showProfiles() {
+        if(!_profiles.value.available || transferJob?.isActive==true) return
+        val selected=currentBrowserHost() ?: return
+        _profiles.update { it.copy(visible=true,loading=true,error=null,confirmation=null) }
+        profilesJob?.cancel()
+        profilesJob=viewModelScope.launch {
+            try {
+                val result=browser.request(selected,"/api/browser/profiles")
+                if(host?.id==selected.id) applyProfiles(result,preferences.browserProfileId(selected.id).first())
+            } catch(error:Exception) {
+                if(error is CancellationException) throw error
+                if(host?.id==selected.id) _profiles.update { it.copy(loading=false,error=browserError((error as? BrowserFailure)?.code ?: "CONNECTION_FAILED")) }
+            }
+        }
+    }
+
+    fun dismissProfiles() {
+        if(!_profiles.value.switching) _profiles.update { it.copy(visible=false,confirmation=null) }
+    }
+
+    fun dismissProfileConfirmation() { _profiles.update { it.copy(confirmation=null) } }
+
+    fun chooseProfile(profileId:String) { openProfile(profileId,null) }
+
+    fun confirmProfile() {
+        val confirmation=_profiles.value.confirmation ?: return
+        openProfile(confirmation.profileId,confirmation)
+    }
+
+    private fun openProfile(profileId:String,confirmation:BrowserProfileConfirmation?) {
+        val selected=currentBrowserHost() ?: return
+        val profile=_profiles.value.profiles.firstOrNull { it.id==profileId } ?: return
+        if(!active || transferJob?.isActive==true || !_profiles.value.available) return
+        val previous=_ui.value
+        invalidateVoice();cancelVoiceRecording();job?.cancel();profilesJob?.cancel();attempt++
+        _profiles.update { it.copy(switching=true,error=null,confirmation=null) }
+        // Keep the original viewer mounted until the backend has actually moved
+        // the profile; cancelling the confirmation leaves its focus and page intact.
+        _ui.update { it.copy(status="switching-profile",error=null) }
+        transferJob=viewModelScope.launch {
+            try {
+                val result=browser.request(selected,"/api/browser/profiles/open",
+                    browserProfileRequest(profileId,viewerId,previous.generation,confirmation))
+                if(host?.id!=selected.id) return@launch
+                if(result.optBoolean("connected")) {
+                    preferences.setBrowserProfileId(selected.id,profileId)
+                    _profiles.update { it.copy(switching=false,visible=false,confirmation=null,
+                        selectedProfileId=profileId,rememberedProfileId=profileId) }
+                    transferJob=null
+                    _ui.update { it.copy(launch=null) }
+                    if(active) connect(takeControl=true,notice="${profile.name} is open on this phone.")
+                } else {
+                    val pending=browserProfileConfirmation(result,profile) ?: throw BrowserFailure("INVALID_SERVER_RESPONSE")
+                    _profiles.update { it.copy(switching=false,confirmation=pending) }
+                    _ui.value=if(active) previous else previous.copy(launch=null)
+                }
+            } catch(error:Exception) {
+                if(error is CancellationException) throw error
+                if(host?.id!=selected.id) return@launch
+                val failure=error as? BrowserFailure
+                val message=browserProfileFailureMessage(failure)
+                _profiles.update { it.copy(switching=false,error=message,confirmation=null,visible=true) }
+                transferJob=null
+                val unchanged=failure?.phonePreserved==true || failure?.code in setOf("PROFILE_CONFIRMATION_EXPIRED","PROFILE_CONFIRMATION_INVALID","INVALID_PROFILE_REQUEST","HANDOFF_IN_PROGRESS")
+                if(unchanged && previous.launch!=null && viewerConnected) _ui.value=if(active) previous else previous.copy(launch=null)
+                else if(active) connect(notice=message)
+                else _ui.update { it.copy(status="offline",launch=null,error=message) }
+            } finally {
+                if(host?.id==selected.id) _profiles.update { it.copy(switching=false) }
+            }
+        }
+    }
+
     fun connection(launch:BrowserLaunch,status:String) {
         if(_ui.value.launch!=launch || !active) return
         if(status!="connected") invalidateVoice()
@@ -382,7 +484,15 @@ internal fun viewerOrigin(capabilities:JSONObject,host:Host):String {
 }
 
 internal fun browserError(code:String):String=when(code) {
-    "PROFILE_IN_USE" -> "Chrome is open on this computer. Close it normally, then start the browser here."
+    "PROFILE_IN_USE" -> "Chrome is open on this computer. Choose its profile to move it to this phone."
+    "PROFILE_NOT_FOUND" -> "This Chrome profile is no longer available. Refresh the profile list and choose another."
+    "PROFILE_CONFIRMATION_EXPIRED", "PROFILE_CONFIRMATION_INVALID" -> "The browser changed or the confirmation expired. Choose the profile again to review the current warning."
+    "PROFILE_SELECTION_UNAVAILABLE" -> "Profile selection is not available on this server."
+    "PROFILE_OWNER_UNVERIFIED", "PROFILE_OWNER_MISMATCH" -> "The running Chrome instance could not be verified and was left open. Close it normally on the computer, then retry."
+    "PROFILE_OPEN_FAILED" -> "Chrome could not open the selected profile. Check its current location and retry."
+    "PROFILE_LIST_FAILED" -> "Unable to load Chrome profiles. Refresh the list to retry."
+    "BROWSER_BUSY" -> "Chrome is already starting or moving between displays. Wait for it to finish, then retry."
+    "RUNTIME_CHANGED" -> "The browser changed while this action was pending. Reconnect and choose the profile again."
     "HTTPS_REQUIRED" -> "Choose a server with HTTPS enabled to open your browser securely."
     "LAN_DNS_ROUTING_UNAVAILABLE" -> "This network filters LAN DNS. Update Android System WebView or use the public server."
     "VIEWER_HOST_MISMATCH" -> "Connect to the browser's configured HTTPS server address."

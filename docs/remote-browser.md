@@ -34,10 +34,11 @@ to its existing working agents; use the default command above on a new computer.
 Repeated installation retains browser identity, profile selection and private
 credentials. `--no-start` prepares files without touching service state.
 
-Chrome chooses its default/last-used profile automatically. No profile directory
-name or account email is hardcoded, and the installer does not rewrite Chrome's
-profile-selection state. For an existing custom user data location, specify its
-enclosing directory:
+Chrome initially chooses its default/last-used profile automatically. Android's
+**Chrome profiles** picker can then select an existing profile and remembers that
+choice for this server. No profile directory name or account email is hardcoded,
+and the installer does not rewrite Chrome's profile-selection state. For an
+existing custom user data location, specify its enclosing directory:
 
 ```bash
 ./install.sh --with-browser kasmvnc \
@@ -48,8 +49,9 @@ enclosing directory:
 Do not point `--browser-user-data-dir` at an individual profile subdirectory.
 `--browser-profile` is an optional explicit override. Existing configured
 overrides are retained on update to avoid switching a running session's profile.
-Profile selection is configured on the server; Android clients cannot submit
-arbitrary filesystem paths or launch commands.
+The server discovers profiles from its configured AgentShell data directory and
+the same user's ordinary Chrome data directory. Android receives profile names
+and opaque IDs; it cannot submit arbitrary filesystem paths or launch commands.
 
 Installation does not stop desktop Chrome, copy its profile, or automatically
 enable browser launch on boot. User-service lingering keeps an explicitly
@@ -65,13 +67,18 @@ directory when the flag is omitted; existing configurations are retained on
 updates. A second profile inside one user data directory still shares Chrome's
 instance lock and does not provide this separation.
 
-To reuse existing desktop data, make an offline copy of the complete user data
-directory into a new, private VNC directory. Stop its Chrome owner before copying,
-retain a backup, omit singleton/socket and debugging-port artifacts, verify the
-copy, and explicitly reconfigure the stopped runtime. Do not copy a live profile
-or overwrite an existing destination. Chrome selects its copied default/last-used
-profile automatically. The two browsers then maintain independent live tabs,
-cookies and sessions; authentication may need renewal on some sites.
+To use the original desktop profile directly, choose its **Computer Chrome** row
+in the phone's **Chrome profiles** picker. This moves ownership of that directory
+to the phone after a warning; it does not provide two independent Chrome instances.
+
+An offline copy is an optional alternative when you need independent desktop and
+VNC instances with initially similar data. Copy the complete user data directory
+into a new, private VNC directory. Stop its Chrome owner before copying, retain a
+backup, omit singleton/socket and debugging-port artifacts, verify the copy, and
+explicitly reconfigure the stopped runtime. Do not copy a live profile or overwrite
+an existing destination. Chrome selects its copied default/last-used profile
+automatically. The two browsers then maintain independent live tabs, cookies and
+sessions; authentication may need renewal on some sites.
 
 On this host, the offline migration on 2026-10-13 UTC copied and verified 13,212
 files into `~/.local/share/agentshell/chrome`. A private snapshot and prior
@@ -177,7 +184,8 @@ the configured directory, the screen reports **Chrome is already open**.
 Chrome locks the whole user data directory, including its other profiles; a
 second independent instance cannot safely share it.
 
-For the initial handoff:
+The **Chrome profiles** picker can now perform this handoff after an explicit
+restart warning, as described below. For a manual initial handoff:
 
 1. Close the owning desktop Chrome normally and wait for it to exit.
 2. Make an offline, private backup of the complete user data directory.
@@ -213,8 +221,9 @@ memory cannot survive the restart. Cancel leaves the current browser untouched.
 If you close native Chrome normally yourself, the return action still restores
 its tabs on the phone; it does not require leaving the native window open.
 
-This uses the configured AgentShell data directory, not a copy or a profile
-chosen by account email. Chrome retains automatic default/last-used selection.
+This uses the active selected Chrome data directory and profile, without making
+a copy or selecting by account email. Chrome retains automatic default/last-used
+selection until you choose a profile explicitly.
 An unrelated ordinary desktop Chrome with a different data directory is left
 alone. The native browser runs under the same user and original credential
 store; the service and its launcher are installed by the same backend installer.
@@ -253,6 +262,41 @@ python3 scripts/test_browser_native_unit.py
 python3 scripts/test_browser_native.py --encrypted-profile
 python3 scripts/test_browser_native.py --android-serial emulator-5560
 systemctl --user status agentshell-browser-native.service
+```
+
+## Choose a Chrome profile on the phone
+
+Open **Chrome profiles** in the Browser toolbar or fullscreen controls. The
+picker lists existing profiles with their source, **AgentShell** or
+**Computer Chrome**, and current location. Select the profile you want to
+use. The choice is retained for this server, including after the app or daemon
+restarts. The picker does not copy profiles or create a second signed-in browser.
+
+If Chrome already has that data directory open on the computer, AgentShell first
+shows a confirmation before moving it to the phone. **Cancel** leaves the browser
+running where it is. Confirming asks Chrome to close normally, then restores the
+selected profile's tabs on the managed display. Chrome shares one process lock
+across all profiles in a data directory, so this closes **all Chrome windows in
+that directory**, including windows for its other profiles. Unsaved page input
+and JavaScript memory can be lost during the restart. A different Chrome data
+directory remains independent.
+
+Switching away from a profile already running on the phone shows the same restart
+notice. Selecting the current phone profile simply reconnects to it. An unload or
+download dialog that blocks normal Chrome shutdown leaves the existing browser
+open; dismiss the dialog or close Chrome normally, then retry. Expired or stale
+confirmations cannot close a newly opened Chrome process.
+
+The existing **Send to computer**, **Open native Chrome on computer**, fullscreen,
+keyboard and dictation controls continue to use the selected profile. Switching
+only the viewer between computer and phone preserves the live browser; choosing a
+different profile or moving native Chrome requires the confirmed restart above.
+
+The isolated profile regression uses two disposable Chrome data directories and
+a separate desktop display; it never operates on a personal browser:
+
+```bash
+python3 scripts/test_browser_profiles.py --binary backend-rust/target/release/agentshell-backend
 ```
 
 ## Fullscreen and screen fitting

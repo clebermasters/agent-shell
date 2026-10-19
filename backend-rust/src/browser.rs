@@ -78,6 +78,12 @@ struct Handoff {
     target: Option<Uuid>,
     expires: Instant,
 }
+struct ProfileConfirmation {
+    viewer: Uuid,
+    profile: String,
+    generation: Option<String>,
+    expires: Instant,
+}
 #[derive(Default)]
 struct Access {
     grants: HashMap<String, Ticket>,
@@ -86,11 +92,13 @@ struct Access {
     reservation: Option<Reservation>,
     handoff: Option<Handoff>,
     cancelled: HashMap<Uuid, Instant>,
+    profile_confirmations: HashMap<String, ProfileConfirmation>,
 }
 impl Access {
     fn expire_controller(&mut self) {
         self.cancelled
             .retain(|_, expires| *expires > Instant::now());
+        self.profile_confirmations.retain(|_, challenge| challenge.expires > Instant::now());
         if self
             .handoff
             .as_ref()
@@ -123,6 +131,7 @@ impl Access {
                 .is_some_and(|r| r.viewer != viewer)
     }
     fn take_control(&mut self, viewer: Uuid) {
+        self.profile_confirmations.clear();
         if let Some(handoff) = self.handoff.take() {
             self.cancelled
                 .insert(handoff.id, Instant::now() + Duration::from_secs(120));
@@ -138,6 +147,27 @@ impl Access {
             viewer,
             expires: Instant::now() + Duration::from_secs(60),
         });
+    }
+    fn remember_profile_confirmation(&mut self, token: String, request: &ProfileOpenRequest, generation: Option<String>) {
+        self.expire_controller();
+        // Each viewer gets one pending choice; no unbounded authentication-token
+        // holder can accumulate restart authorizations in the daemon.
+        self.profile_confirmations.retain(|_, challenge| challenge.viewer != request.viewer_id);
+        if self.profile_confirmations.len() >= 128 { self.profile_confirmations.clear(); }
+        self.profile_confirmations.insert(token, ProfileConfirmation {
+            viewer: request.viewer_id, profile: request.profile_id.clone(), generation,
+            expires: Instant::now() + Duration::from_secs(120),
+        });
+    }
+    fn consume_profile_confirmation(&mut self, request: &ProfileOpenRequest, generation: Option<&str>) -> Result<(), BrowserError> {
+        let token = request.confirmation_token.as_ref().ok_or_else(|| error("PROFILE_CONFIRMATION_EXPIRED"))?;
+        let challenge = self.profile_confirmations.get(token).ok_or_else(|| error("PROFILE_CONFIRMATION_EXPIRED"))?;
+        if challenge.expires <= Instant::now() || challenge.viewer != request.viewer_id ||
+            challenge.profile != request.profile_id || challenge.generation.as_deref() != generation {
+            return Err(error("PROFILE_CONFIRMATION_EXPIRED"));
+        }
+        self.profile_confirmations.remove(token);
+        Ok(())
     }
     fn cancel_handoff(
         &mut self,
@@ -303,21 +333,25 @@ fn no_store(mut response: Response) -> Response {
     response
 }
 async fn runtime(command: &str) -> Result<Value, BrowserError> {
+    runtime_command(command, &[], Duration::from_secs(20), 4096).await
+}
+async fn runtime_command(command: &str, args: &[&str], timeout: Duration, output_limit: usize) -> Result<Value, BrowserError> {
     let (path, config) = configured()?;
     let output = tokio::time::timeout(
-        Duration::from_secs(20),
+        timeout,
         tokio::process::Command::new("/usr/bin/python3")
             .arg(&config.runner)
             .arg("--config")
             .arg(path)
             .arg(command)
+            .args(args)
             .kill_on_drop(true)
             .output(),
     )
     .await
     .map_err(|_| error("RUNTIME_TIMEOUT"))?
     .map_err(|_| error("RUNTIME_HELPER_UNAVAILABLE"))?;
-    if !output.status.success() || output.stdout.len() > 4096 {
+    if !output.status.success() || output.stdout.len() > output_limit {
         return Err(error("RUNTIME_HELPER_FAILED"));
     }
     serde_json::from_slice(&output.stdout).map_err(|_| error("RUNTIME_HELPER_FAILED"))
@@ -336,6 +370,8 @@ async fn ready_generation() -> Result<String, BrowserError> {
 pub fn api_router() -> Router<Arc<crate::AppState>> {
     Router::new()
         .route("/api/browser/capabilities", get(capabilities))
+        .route("/api/browser/profiles", get(profiles))
+        .route("/api/browser/profiles/open", post(open_profile))
         .route("/api/browser/sessions", post(start))
         .route("/api/browser/sessions/:id", get(inspect))
         .route("/api/browser/sessions/:id/viewer-grants", post(grant))
@@ -374,7 +410,7 @@ async fn capabilities() -> ApiResult {
         "sessionId":config.session_id,"viewerOrigin":config.public_origin,"viewerOrigins":viewer_origins(config),"session":state,
         "httpPort":super::read_port_from_env("AGENTSHELL_HTTP_PORT",4010),
         "httpsPort":super::read_port_from_env("AGENTSHELL_HTTPS_PORT",4443),
-        "desktopHandoff":true,"mobileHandoff":true,"nativeHandoff":true}),
+        "desktopHandoff":true,"mobileHandoff":true,"nativeHandoff":true,"profileSelection":true}),
         )
         .into_response(),
     ))
@@ -383,6 +419,78 @@ async fn start() -> ApiResult {
     let _guard = SERVICE.runtime.lock().await;
     let state = runtime("start").await?;
     Ok(no_store(Json(state).into_response()))
+}
+async fn profiles() -> ApiResult {
+    let _guard = SERVICE.runtime.lock().await;
+    let catalog = runtime_command("profiles", &[], Duration::from_secs(20), 131072).await?;
+    if !catalog["profiles"].is_array() { return Err(error("PROFILE_LIST_FAILED")); }
+    Ok(no_store(Json(catalog).into_response()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProfileOpenRequest {
+    profile_id: String,
+    viewer_id: Uuid,
+    runtime_generation: Option<String>,
+    confirmation_token: Option<String>,
+}
+impl ProfileOpenRequest {
+    fn valid(&self) -> bool {
+        !self.profile_id.is_empty() && self.profile_id.len() <= 256 &&
+            !self.profile_id.chars().any(char::is_control) &&
+            self.runtime_generation.as_ref().is_none_or(|value| !value.is_empty() && value.len() <= 256) &&
+            self.confirmation_token.as_ref().is_none_or(|value| !value.is_empty() && value.len() <= 256 &&
+                value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte)))
+    }
+}
+async fn open_profile(Json(request): Json<ProfileOpenRequest>) -> ApiResult {
+    if !request.valid() { return Err(error("INVALID_PROFILE_REQUEST")); }
+    let _handoff = SERVICE.handoff.try_lock().map_err(|_| error("HANDOFF_IN_PROGRESS"))?;
+    let _runtime = SERVICE.runtime.try_lock().map_err(|_| error("HANDOFF_IN_PROGRESS"))?;
+    let before = runtime("status").await?;
+    let generation = before["runtimeGeneration"].as_str();
+    if request.runtime_generation.as_deref().is_some_and(|expected| Some(expected) != generation) {
+        return Err(error("RUNTIME_CHANGED"));
+    }
+    if request.confirmation_token.is_some() {
+        SERVICE.access.lock().await.consume_profile_confirmation(&request, generation)?;
+    }
+    let mut args = vec!["--profile-id", request.profile_id.as_str()];
+    if let Some(token) = request.confirmation_token.as_deref() { args.extend(["--confirmation-token", token]); }
+    let result = match runtime_command("select-profile", &args, Duration::from_secs(95), 131072).await {
+        Ok(value) => value,
+        Err(error) => json!({"code":error.1,"connected":false}),
+    };
+    let state = runtime("status").await.unwrap_or_else(|_| json!({"state":"unknown"}));
+    let preserved = before["state"] == "ready" && state["state"] == "ready" &&
+        before["runtimeGeneration"] == state["runtimeGeneration"];
+    if !preserved {
+        let mut access = SERVICE.access.lock().await;
+        if let Some(controller) = access.controller.take() { controller.cancel.cancel(); }
+        access.cookies.clear(); access.grants.clear(); access.reservation = None; access.handoff = None;
+    }
+    if result["code"] == "PROFILE_CONFIRMATION_REQUIRED" {
+        let confirmation = &result["confirmation"];
+        let token = confirmation["token"].as_str().filter(|token| !token.is_empty() && token.len() <= 256)
+            .ok_or_else(|| error("PROFILE_OPEN_FAILED"))?;
+        if confirmation["profileId"].as_str() != Some(&request.profile_id) {
+            return Err(error("PROFILE_OPEN_FAILED"));
+        }
+        SERVICE.access.lock().await.remember_profile_confirmation(token.to_owned(), &request, generation.map(str::to_owned));
+        return Ok(no_store(Json(json!({"code":"PROFILE_CONFIRMATION_REQUIRED","connected":false,
+            "confirmation":confirmation,"session":state,"phonePreserved":preserved})).into_response()));
+    }
+    if result["connected"] == true && result["selectedProfileId"].as_str() == Some(&request.profile_id) && state["state"] == "ready" {
+        SERVICE.access.lock().await.profile_confirmations.clear();
+        return Ok(no_store(Json(json!({"code":"CONNECTED","connected":true,
+            "selectedProfileId":request.profile_id,"session":state})).into_response()));
+    }
+    let code = result["code"].as_str().filter(|code| !code.is_empty() && code.len() <= 64 &&
+        code.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'))
+        .unwrap_or("PROFILE_OPEN_FAILED");
+    Ok(no_store((StatusCode::CONFLICT, Json(json!({"code":code,"connected":false,"session":state,
+        "phonePreserved":preserved,"computerClosed":result["computerClosed"] == true}))).into_response()))
 }
 async fn inspect(Path(id): Path<String>) -> ApiResult {
     id_matches(&id, &configured()?.1)?;
@@ -399,6 +507,7 @@ async fn stop(Path(id): Path<String>) -> ApiResult {
     access.grants.clear();
     access.reservation = None;
     access.handoff = None;
+    access.profile_confirmations.clear();
     drop(access);
     Ok(no_store(Json(runtime("stop").await?).into_response()))
 }
@@ -1030,6 +1139,52 @@ async fn relay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn profile_request(viewer: Uuid, token: Option<&str>) -> ProfileOpenRequest {
+        ProfileOpenRequest { profile_id: "profile-one".into(), viewer_id: viewer,
+            runtime_generation: Some("current".into()), confirmation_token: token.map(str::to_owned) }
+    }
+    #[test]
+    fn profile_confirmation_is_bound_to_viewer_profile_and_runtime_and_used_once() {
+        let viewer = Uuid::new_v4();
+        let mut access = Access::default();
+        let request = profile_request(viewer, Some("opaque-confirmation"));
+        access.remember_profile_confirmation("opaque-confirmation".into(), &request, Some("current".into()));
+        assert!(access.consume_profile_confirmation(&request, Some("current")).is_ok());
+        assert!(access.consume_profile_confirmation(&request, Some("current")).is_err());
+        for (other_viewer, other_profile, other_generation) in [
+            (Uuid::new_v4(), "profile-one", "current"),
+            (viewer, "profile-two", "current"),
+            (viewer, "profile-one", "restarted"),
+        ] {
+            access.remember_profile_confirmation("opaque-confirmation".into(), &request, Some("current".into()));
+            let mut wrong = profile_request(other_viewer, Some("opaque-confirmation"));
+            wrong.profile_id = other_profile.into();
+            assert!(access.consume_profile_confirmation(&wrong, Some(other_generation)).is_err());
+        }
+    }
+    #[test]
+    fn expired_profile_confirmation_and_viewer_takeover_require_new_consent() {
+        let viewer = Uuid::new_v4();
+        let request = profile_request(viewer, Some("opaque-confirmation"));
+        let mut access = Access::default();
+        access.remember_profile_confirmation("opaque-confirmation".into(), &request, Some("current".into()));
+        access.profile_confirmations.get_mut("opaque-confirmation").unwrap().expires = Instant::now() - Duration::from_secs(1);
+        assert!(access.consume_profile_confirmation(&request, Some("current")).is_err());
+        access.remember_profile_confirmation("opaque-confirmation".into(), &request, Some("current".into()));
+        access.take_control(Uuid::new_v4());
+        assert!(access.consume_profile_confirmation(&request, Some("current")).is_err());
+    }
+    #[test]
+    fn profile_selection_request_requires_explicit_token_and_rejects_unknown_fields() {
+        let request = profile_request(Uuid::new_v4(), None);
+        assert!(request.valid());
+        let mut body = json!({"profileId":"profile-one","viewerId":request.viewer_id,
+            "confirmCloseNative":true});
+        assert!(serde_json::from_value::<ProfileOpenRequest>(body.clone()).is_err());
+        body.as_object_mut().unwrap().remove("confirmCloseNative");
+        body["confirmationToken"] = json!("\ninvalid");
+        assert!(!serde_json::from_value::<ProfileOpenRequest>(body).unwrap().valid());
+    }
     fn transfer_request(viewer: Uuid, handoff: Option<Uuid>, cancel: Option<Uuid>) -> GrantRequest {
         GrantRequest {
             viewer_id: viewer,

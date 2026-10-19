@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebView
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
@@ -89,13 +90,14 @@ private fun browserKeyboard(view: WebView?) {
 fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val voice by viewModel.voiceUiState.collectAsStateWithLifecycle()
+    val profiles by viewModel.profileUiState.collectAsStateWithLifecycle()
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     var view by remember { mutableStateOf<WebView?>(null) }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var fullscreenTools by remember { mutableStateOf(false) }
     var confirmStop by remember { mutableStateOf(false) }
     var transferMenu by remember { mutableStateOf(false) }
-    val transferring=ui.status in listOf("sending-to-computer","switching-native")
+    val transferring=ui.status in listOf("sending-to-computer","switching-native","switching-profile") || profiles.switching
     var confirmNative by remember { mutableStateOf<Boolean?>(null) }
     val context=LocalContext.current
     val window=remember(context){context.browserActivity()?.window}
@@ -182,9 +184,12 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
     }
     Scaffold(contentWindowInsets=WindowInsets(0,0,0,0),topBar={if(!expanded) TopAppBar(title={Column{
         Text(ui.title,style=MaterialTheme.typography.titleMedium)
-        Text(ui.server,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(listOfNotNull(profiles.current?.name,ui.server).joinToString(" · "),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
     }},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Filled.ArrowBack,"Back")}},actions={
         ThemeToggleButton()
+        if(profiles.available) IconButton(onClick={viewModel.showProfiles()},enabled=!transferring) {
+            Icon(Icons.Default.AccountCircle,"Chrome profiles")
+        }
         if(ui.canTakeControl || ui.canSendToComputer) Box {
             IconButton(onClick={transferMenu=true},enabled=!transferring){Icon(Icons.Default.Devices,"Move browser")}
             DropdownMenu(expanded=transferMenu,onDismissRequest={transferMenu=false}) {
@@ -202,7 +207,7 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
         Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
             .windowInsetsPadding(if(expanded) WindowInsets.displayCutout else WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal+WindowInsetsSides.Bottom))
             .imePadding()) {
-            if(ui.status in listOf("connecting","loading","stopping","sending-to-computer","switching-native")) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if(ui.status in listOf("connecting","loading","stopping","sending-to-computer","switching-native","switching-profile")) LinearProgressIndicator(Modifier.fillMaxWidth())
             ui.notice?.takeIf{ui.launch!=null && !expanded}?.let { Text(it,Modifier.padding(horizontal=16.dp,vertical=8.dp),style=MaterialTheme.typography.bodySmall) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val launch=ui.launch
@@ -271,6 +276,8 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
                         }
                     }
                     DropdownMenu(expanded=fullscreenTools,onDismissRequest={fullscreenTools=false}) {
+                        if(profiles.available) DropdownMenuItem(text={Text("Chrome profiles")},enabled=!transferring,
+                            onClick={fullscreenTools=false;viewModel.showProfiles()})
                         if(ui.canTakeControl) DropdownMenuItem(text={Text("Use on this phone")},enabled=!transferring,
                             onClick={useOnPhone()})
                         if(ui.canSendToComputer) DropdownMenuItem(text={Text("Send to computer")},enabled=ui.status=="connected",onClick={sendToComputer()})
@@ -289,7 +296,11 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
                     .pointerInput(Unit){awaitPointerEventScope{while(true){awaitPointerEvent().changes.forEach{it.consume()}}}},contentAlignment=Alignment.Center) {
                     Surface(shape=RoundedCornerShape(20.dp),tonalElevation=6.dp) {
                         Column(Modifier.padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(16.dp)) {
-                            CircularProgressIndicator();Text(if(ui.status=="switching-native") "Reopening Chrome…" else "Switching to your computer…")
+                            CircularProgressIndicator();Text(when(ui.status) {
+                                "switching-profile" -> "Opening Chrome profile…"
+                                "switching-native" -> "Reopening Chrome…"
+                                else -> "Switching to your computer…"
+                            })
                         }
                     }
                 }
@@ -311,12 +322,49 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
             }
         }
     }
+    if(profiles.visible && profiles.confirmation==null) AlertDialog(
+        onDismissRequest={viewModel.dismissProfiles()},
+        title={Text("Chrome profiles")},
+        text={Column(Modifier.heightIn(max=440.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("Choose a profile to open on this phone. Your selection is remembered for this server.")
+            if(profiles.loading || profiles.switching) LinearProgressIndicator(Modifier.fillMaxWidth())
+            profiles.error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
+            if(!profiles.loading && profiles.profiles.isEmpty()) Text("No Chrome profiles are available on this server.")
+            profiles.profiles.forEach { profile ->
+                val selected=profile.id==profiles.highlightedId
+                Surface(shape=RoundedCornerShape(12.dp),color=if(selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer) {
+                    Row(Modifier.fillMaxWidth().clickable(enabled=!profiles.loading && !profiles.switching) { viewModel.chooseProfile(profile.id) }
+                        .padding(12.dp),verticalAlignment=Alignment.CenterVertically) {
+                        Icon(if(selected) Icons.Default.CheckCircle else Icons.Default.AccountCircle,null)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(profile.name,style=MaterialTheme.typography.titleSmall)
+                            Text(listOf(profile.sourceLabel,profile.locationLabel,profile.statusLabel).filter { it.isNotBlank() }.joinToString(" · "),style=MaterialTheme.typography.bodySmall)
+                            if(profile.id==profiles.selectedProfileId) Text("Current profile",style=MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+        }},
+        confirmButton={TextButton(onClick={viewModel.dismissProfiles()},enabled=!profiles.switching){Text("Done")}},
+        dismissButton={TextButton(onClick={viewModel.showProfiles()},enabled=!profiles.loading && !profiles.switching){Text("Refresh")}})
+    profiles.confirmation?.let { confirmation -> AlertDialog(
+        onDismissRequest={viewModel.dismissProfileConfirmation()},
+        title={Text("Move ${confirmation.profileName} to this phone?")},
+        text={Text(buildString {
+            append(if(confirmation.location=="computer") "Chrome on your computer will close so this profile can open here. The current phone browser may also close. "
+                else "The running Chrome browser will close and reopen here using this profile. ")
+            if(confirmation.closesAllWindows) append("All Chrome windows and other profiles in the affected browser data folders will close too. ")
+            append("Tabs are restored, but unsaved page inputs and live page state may be lost. Save your work first.")
+        })},
+        confirmButton={TextButton(onClick={viewModel.confirmProfile()}){Text("Close Chrome and open here")}},
+        dismissButton={TextButton(onClick={viewModel.dismissProfileConfirmation()}){Text("Cancel")}}) }
     if(confirmStop) AlertDialog(onDismissRequest={confirmStop=false},title={Text("Stop Chrome?")},
         text={Text("This closes the remote browser. Your profile is kept. To leave Chrome running, go back instead.")},
         confirmButton={TextButton(onClick={confirmStop=false;viewModel.stop()}){Text("Stop Chrome")}},dismissButton={TextButton(onClick={confirmStop=false}){Text("Keep running")}})
     confirmNative?.let { toComputer -> AlertDialog(onDismissRequest={confirmNative=null},
         title={Text(if(toComputer) "Open Chrome on the desktop?" else "Return Chrome to this phone?")},
-        text={Text("Chrome will close and reopen on the other display using the same profile. Tabs are restored, but unsaved page inputs and live page state may be lost. Save your work first.")},
+        text={Text("Chrome will close and reopen on the other display using the same profile. All Chrome windows and other profiles in the same browser data folder may close too. Tabs are restored, but unsaved page inputs and live page state may be lost. Save your work first.")},
         confirmButton={TextButton(onClick={confirmNative=null;viewModel.moveNative(toComputer)}){Text(if(toComputer) "Open native Chrome" else "Return to phone")}},
         dismissButton={TextButton(onClick={confirmNative=null}){Text("Cancel")}}) }
 }

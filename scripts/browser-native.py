@@ -67,15 +67,16 @@ def wait_supervisor(record, runtime):
         time.sleep(.1)
 
 
-def clean_exit(value,runtime):
-    metadata=runtime.read_json(Path(value['userDataDir'])/'Local State').get('profile',{})
+def clean_exit(value,runtime,profiles=None):
+    metadata=runtime.profile_metadata(value['userDataDir'])
     selected=value.get('profileDirectory') or metadata.get('last_used')
-    profiles=[selected] if selected else metadata.get('last_active_profiles',[])
+    if profiles is None: profiles=[selected] if selected else metadata.get('last_active_profiles',[])
     if not profiles and len(metadata.get('info_cache',{}))==1:profiles=list(metadata['info_cache'])
     if not profiles:return False
     for profile in profiles:
         if not isinstance(profile,str) or '/' in profile or '\\' in profile or profile in ('','.','..'):return False
-        if runtime.read_json(Path(value['userDataDir'])/profile/'Preferences').get('profile',{}).get('exit_type')!='Normal':return False
+        preferences=runtime.read_json(Path(value['userDataDir'])/profile/'Preferences').get('profile',{})
+        if not isinstance(preferences,dict) or preferences.get('exit_type')!='Normal':return False
     return True
 
 

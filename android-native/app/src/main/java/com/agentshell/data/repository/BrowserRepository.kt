@@ -17,7 +17,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import javax.inject.Inject
 import javax.inject.Singleton
 
-class BrowserFailure(val code: String, val phonePreserved: Boolean = false) : IOException(code)
+class BrowserFailure(val code: String, val phonePreserved: Boolean = false, val computerClosed: Boolean = false) : IOException(code)
 internal data class BrowserEndpoint(val host:Host,val capabilities:JSONObject)
 
 @Singleton
@@ -56,13 +56,13 @@ open class BrowserRepository @Inject constructor(private val client: OkHttpClien
         if (!host.isSecure) throw BrowserFailure("HTTPS_REQUIRED")
         val request = Request.Builder().url(host.httpUrl + path).header("X-Auth-Token", BuildConfig.AUTH_TOKEN)
         if (body != null) request.post(body.toString().toRequestBody("application/json".toMediaType()))
-        val transport = if(path.endsWith("/native-handoff")) client.newBuilder()
+        val transport = if(path.endsWith("/native-handoff") || path.endsWith("/profiles/open")) client.newBuilder()
             .readTimeout(115,TimeUnit.SECONDS).callTimeout(120,TimeUnit.SECONDS).build()
         else if (path.endsWith("/desktop-handoff")) client.newBuilder()
             .readTimeout(60, TimeUnit.SECONDS).callTimeout(65, TimeUnit.SECONDS).build() else client
         transport.newCall(request.build()).execute().use { response ->
             val data = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrNull()
-            if (!response.isSuccessful) throw BrowserFailure(data?.optString("code")?.takeIf { it.isNotBlank() } ?: "CONNECTION_FAILED", data?.optBoolean("phonePreserved") == true)
+            if (!response.isSuccessful) throw BrowserFailure(data?.optString("code")?.takeIf { it.isNotBlank() } ?: "CONNECTION_FAILED", data?.optBoolean("phonePreserved") == true, data?.optBoolean("computerClosed") == true)
             data ?: throw BrowserFailure("INVALID_SERVER_RESPONSE")
         }
     }

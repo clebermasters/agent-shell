@@ -197,6 +197,17 @@ class PreferencesDataStore @Inject constructor(
         }
     }
 
+    // The backend owns the active browser profile. This remembered choice is only
+    // a per-server picker fallback and never silently overrides a running browser.
+    private fun browserProfileKey(hostId: String) = stringPreferencesKey("browser_profile_$hostId")
+
+    fun browserProfileId(hostId: String): Flow<String?> = dataStore.data.map { it[browserProfileKey(hostId)] }
+
+    suspend fun setBrowserProfileId(hostId: String, profileId: String) {
+        require(hostId.isNotBlank() && profileId.isNotBlank())
+        dataStore.edit { it[browserProfileKey(hostId)] = profileId }
+    }
+
     // ─── recent sessions (swipe navigation) ───────────────────────────────────
     // Each server owns its history. Legacy unscoped entries cannot be safely
     // attributed to a server, so new visits populate these scoped keys.

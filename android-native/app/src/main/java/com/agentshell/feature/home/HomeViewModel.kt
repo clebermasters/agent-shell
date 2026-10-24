@@ -49,12 +49,11 @@ class HomeViewModel @Inject constructor(
     private val hostRepository: HostRepository,
     private val systemRepository: SystemRepository,
     private val dataStore: PreferencesDataStore,
+    private val offlineCache: com.agentshell.data.repository.OfflineCacheRepository,
 ) : ViewModel() {
 
     private val _tabIndex = MutableStateFlow(0)
     private val _unreadAlerts = MutableStateFlow(0)
-    private val _tmuxSessions = MutableStateFlow<List<TmuxSession>>(emptyList())
-    private val _acpSessions = MutableStateFlow<List<AcpSession>>(emptyList())
     private val _cronJobs = MutableStateFlow<List<CronJob>>(emptyList())
     private val _dotFiles = MutableStateFlow<List<DotFile>>(emptyList())
 
@@ -79,12 +78,12 @@ class HomeViewModel @Inject constructor(
             connectionStatus = connStatus,
             systemStats = stats,
             unreadAlertCount = unreadAlerts,
-            tmuxSessions = _tmuxSessions.value,
-            acpSessions = _acpSessions.value,
             cronJobs = _cronJobs.value,
             dotFiles = _dotFiles.value,
             currentTabIndex = tabIndex,
         )
+    }.combine(offlineCache.sessions) { state, cached ->
+        state.copy(tmuxSessions = cached.tmux, acpSessions = cached.acp)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -151,36 +150,6 @@ class HomeViewModel @Inject constructor(
                     }
                     "codex-usage" -> {
                         systemRepository.parseCodexUsage(message)
-                    }
-                    "sessions-list", "session_list" -> {
-                        @Suppress("UNCHECKED_CAST")
-                        val rawList = message["sessions"] as? List<Map<String, Any?>> ?: emptyList()
-                        _tmuxSessions.update {
-                            rawList.map { s ->
-                                TmuxSession(
-                                    name = s["name"] as? String ?: "",
-                                    attached = (s["attached"] as? Boolean) ?: false,
-                                    windows = (s["windows"] as? Number)?.toInt() ?: 1,
-                                    created = s["created"] as? String,
-                                    tool = s["tool"] as? String,
-                                )
-                            }
-                        }
-                    }
-                    "acp-sessions-listed" -> {
-                        @Suppress("UNCHECKED_CAST")
-                        val rawList = message["sessions"] as? List<Map<String, Any?>> ?: emptyList()
-                        _acpSessions.update {
-                            rawList.map { s ->
-                                AcpSession(
-                                    sessionId = s["sessionId"] as? String ?: "",
-                                    cwd = s["cwd"] as? String ?: "",
-                                    title = s["title"] as? String ?: "",
-                                    updatedAt = s["updatedAt"] as? String ?: "",
-                                    provider = s["provider"] as? String,
-                                )
-                            }
-                        }
                     }
                     "cron-jobs-listed" -> {
                         @Suppress("UNCHECKED_CAST")

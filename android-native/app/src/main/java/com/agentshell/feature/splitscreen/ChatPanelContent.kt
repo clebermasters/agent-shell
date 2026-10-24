@@ -29,6 +29,9 @@ import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.feature.chat.AgentActivityBar
+import com.agentshell.feature.chat.preferRemoteChatHistory
+import com.agentshell.feature.chat.remoteChatHistoryOffset
+import com.agentshell.feature.chat.advanceRemoteChatHistoryOffset
 import com.agentshell.data.model.ChatCursor
 import com.agentshell.data.remote.SessionSocket
 import com.agentshell.feature.chat.MarkdownText
@@ -38,6 +41,8 @@ import com.agentshell.data.model.ChatBindingState
 import com.agentshell.data.model.acceptsConversationPacket
 import com.agentshell.feature.chat.UnreadDivider
 import com.agentshell.feature.chat.UiWidgetBlock
+import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -49,6 +54,7 @@ import java.util.UUID
  * Displays messages with text content and a compact input bar.
  * Uses a dedicated WebSocket so multiple panels can stay live concurrently.
  */
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun ChatPanelContent(
     panelId: String,
@@ -59,6 +65,7 @@ fun ChatPanelContent(
 ) {
     val services = rememberSplitScreenServices()
     val activityRepository = services.chatActivityRepository()
+    val offlineCache = services.offlineCacheRepository()
     val selectedHost by remember(services) { services.hostRepository().getSelectedHost() }.collectAsStateWithLifecycle(initialValue = null)
     val target = remember(selectedHost?.id, sessionName, windowIndex, isAcp) {
         selectedHost?.let { ChatTarget.create(it.id, sessionName, windowIndex, isAcp) }
@@ -81,7 +88,8 @@ fun ChatPanelContent(
     val panelSocket = remember(panelId, target?.hostId) { SessionSocket(services.okHttpClient()) }
     val isSocketConnected by panelSocket.isConnected.collectAsStateWithLifecycle()
 
-    val messages = remember { mutableStateListOf<ChatMessage>() }
+    val messages = remember(target?.key) { mutableStateListOf<ChatMessage>() }
+    val history = remember(target?.key) { PanelChatHistoryState() }
     var inputText by remember { mutableStateOf("") }
     var bindingState by remember(target?.key) { mutableStateOf<ChatBindingState?>(if (isAcp) null else ChatBindingState("checking", "", "", null, emptyList(), "Linking this terminal…")) }
     var pendingSend by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -92,11 +100,66 @@ fun ChatPanelContent(
     val isDragging by listState.interactionSource.collectIsDraggedAsState()
     val coroutineScope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+    val showOlderHistory = history.hasOlderCachedMessages || (isSocketConnected && history.remoteHasMore)
+
+    fun loadOlderHistory() {
+        val chat = target ?: return
+        if (history.loadingOlder) return
+        history.loadingOlder = true
+        val expectedVersion = history.pagingVersion
+        coroutineScope.launch {
+            try {
+                if (!preferRemoteChatHistory(isSocketConnected, history.cacheComplete, history.remoteHasMore, history.remoteGapIds.isNotEmpty())) {
+                    val page = offlineCache.historyPage(chat, history.oldestCachedPosition, beforeMessageId = messages.firstOrNull()?.id)
+                    if (expectedVersion != history.pagingVersion) return@launch
+                    if (page != null && (history.cachedConversationKey == null || history.cachedConversationKey == page.conversation.conversationKey)) {
+                        history.oldestCachedPosition = page.oldestPosition ?: history.oldestCachedPosition
+                        history.hasOlderCachedMessages = page.hasMore
+                        history.cacheComplete = page.conversation.complete
+                        val ids = messages.mapTo(hashSetOf()) { it.id }
+                        val older = page.messages.filter { it.id !in ids }
+                        if (older.isNotEmpty()) {
+                            messages.addAll(0, older)
+                            if (history.cacheComplete && history.remoteGapIds.isEmpty()) history.remoteOffset = maxOf(history.remoteOffset, messages.size)
+                            if (history.cacheComplete) history.remoteHasMore = false
+                            history.loadingOlder = false
+                            activityRepository.olderHistory(chat, older)
+                            return@launch
+                        }
+                        if (history.cacheComplete) { history.remoteHasMore = false; history.remoteGapIds = emptySet() }
+                    }
+                }
+                if (!isSocketConnected || !history.remoteHasMore) { history.loadingOlder = false; return@launch }
+                panelSocket.send(mapOf(
+                    "type" to if (bindingState?.binding?.id == null) "load-more-chat-history" else "load-more-bound-chat-history",
+                    "sessionName" to if (isAcp) "acp_${sessionName.removePrefix("acp_")}" else sessionName,
+                    "windowIndex" to windowIndex, "bindingId" to bindingState?.binding?.id,
+                    "offset" to history.remoteOffset, "limit" to 100,
+                ))
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                history.loadingOlder = false
+                submissionError = "Could not load older saved history"
+            }
+        }
+    }
 
     LaunchedEffect(target?.key) {
         val chat = target ?: return@LaunchedEffect
         visitUnreadCursor = activityRepository.register(chat).unread.firstOrNull()
-        readReady = true
+        try {
+            offlineCache.historyPage(chat)?.let { cached ->
+                history.cachedConversationKey = cached.conversation.conversationKey.takeIf { it.isNotBlank() }
+                history.oldestCachedPosition = cached.oldestPosition
+                history.hasOlderCachedMessages = cached.hasMore
+                history.cacheComplete = cached.conversation.complete
+                messages.addAll(cached.messages)
+            }
+        } finally {
+            historyReady = true
+            history.cacheReady = true
+            readReady = true
+        }
     }
 
     DisposableEffect(lifecycleOwner, target?.key) {
@@ -107,13 +170,16 @@ fun ChatPanelContent(
                 initialScrollComplete = false
                 firstUnreadId = null
                 visitUnreadCursor = null
+                activityRepository.setChatOpen(readOwner, null, false)
                 activityRepository.setViewing(readOwner, null, false)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            activityRepository.setChatOpen(readOwner, null, false)
             activityRepository.setViewing(readOwner, null, false)
+            if (history.cacheDirty) target?.let { offlineCache.saveHistoryAsync(it, messages.toList(), false, history.cachedConversationKey) }
         }
     }
 
@@ -129,13 +195,13 @@ fun ChatPanelContent(
         }
     }
 
-    LaunchedEffect(isSocketConnected, sessionName, windowIndex, isAcp) {
+    LaunchedEffect(isSocketConnected, history.cacheReady, sessionName, windowIndex, isAcp) {
+        if (!history.cacheReady) return@LaunchedEffect
         if (!isSocketConnected) {
             if (pendingSend != null) { pendingSend = null; submissionError = "Submission was not confirmed. Check the conversation before retrying" }
             return@LaunchedEffect
         }
         if (sessionName.isEmpty()) return@LaunchedEffect
-        messages.clear()
         if (isAcp) {
             panelSocket.send(
                 mapOf(
@@ -157,7 +223,6 @@ fun ChatPanelContent(
 
     // Collect messages — runs once on composition, filters by session
     LaunchedEffect(panelId, target?.key, panelSocket, sessionName, windowIndex, isAcp) {
-        messages.clear()
         if (sessionName.isEmpty()) return@LaunchedEffect
 
         panelSocket.messages.collect { message ->
@@ -179,13 +244,23 @@ fun ChatPanelContent(
             if (message["type"] == "chat-binding") {
                 if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp)) return@collect
                 val next = ChatBindingState.parse(message) ?: return@collect
-                val oldKey = bindingState?.binding?.conversationKey
+                val oldKey = bindingState?.binding?.conversationKey ?: history.cachedConversationKey
                 val newKey = next.binding?.conversationKey
-                if (oldKey != newKey) {
+                if (newKey != null && oldKey != newKey) {
+                    if (history.cacheDirty) target?.let { offlineCache.saveHistoryAsync(it, messages.toList(), false, oldKey) }
+                    history.cacheDirty = false
+                    history.pagingVersion += 1
+                    history.oldestCachedPosition = null
+                    history.hasOlderCachedMessages = false
+                    history.remoteHasMore = false
+                    history.remoteOffset = 0
+                    history.remoteGapIds = emptySet()
+                    history.loadingOlder = false
                     if (oldKey != null) conversationDrafts[oldKey] = inputText
-                    if (newKey != null && oldKey != null) inputText = conversationDrafts[newKey].orEmpty()
+                    if (oldKey != null) inputText = conversationDrafts[newKey].orEmpty()
                     messages.clear(); historyReady = false; initialScrollComplete = false; firstUnreadId = null; visitUnreadCursor = null
                 }
+                if (newKey != null) history.cachedConversationKey = newKey
                 bindingState = next
                 target?.let { activityRepository.linkConversation(it, next) }
                 return@collect
@@ -193,28 +268,66 @@ fun ChatPanelContent(
             if (!bindingState.acceptsConversationPacket(message)) return@collect
             target?.let { activityRepository.handleAgentActivity(it.hostId, message, it) }
             val type = message["type"] as? String ?: return@collect
+            val beforeMessages = messages.toList()
             when (type) {
                 "chat-log-error" -> {
                     submissionError = message["error"] as? String
                     historyReady = true
+                    history.loadingOlder = false
                 }
                 "chat-history" -> {
                     if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp)) return@collect
                     if (message["bindingId"] == null && bindingState?.status == "checking") bindingState = null
-                    val parsed = parseMessageList(message["messages"])
+                    val parsed = withContext(Dispatchers.Default) { parseMessageList(message["messages"]) }
+                    history.pagingVersion += 1
+                    history.loadingOlder = false
+                    history.oldestCachedPosition = null
+                    val previousMessages = messages.toList()
+                    val incomingIds = parsed.mapTo(hashSetOf()) { it.id }
+                    val overlaps = previousMessages.any { it.id in incomingIds }
+                    history.remoteHasMore = message["hasMore"] == true
+                    history.remoteGapIds = if (history.remoteHasMore && previousMessages.isNotEmpty() && !overlaps) previousMessages.mapTo(hashSetOf()) { it.id } else emptySet()
+                    if (!history.remoteHasMore) { history.hasOlderCachedMessages = false; history.oldestCachedPosition = null; history.cacheComplete = true }
+                    history.remoteOffset = remoteChatHistoryOffset(parsed.size, com.agentshell.data.repository.mergeCachedMessages(previousMessages, parsed).size, history.cacheComplete, overlaps)
+                    history.cacheDirty = false
                     withContext(Dispatchers.Main) {
                         messages.clear()
-                        messages.addAll(parsed)
+                        messages.addAll(if (message["hasMore"] == true) com.agentshell.data.repository.mergeCachedMessages(previousMessages, parsed) else parsed)
                     }
-                    target?.let { activityRepository.history(it, parsed) }
+                    target?.let {
+                        activityRepository.history(it, parsed)
+                        offlineCache.saveHistoryAsync(it, parsed, message["hasMore"] != true, history.cachedConversationKey, message["tool"] as? String)
+                    }
                     historyReady = true
                 }
                 "chat-history-chunk" -> {
+                    if (!history.loadingOlder) return@collect
+                    val expectedVersion = history.pagingVersion
                     if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp)) return@collect
-                    val parsed = parseMessageList(message["messages"])
-                    withContext(Dispatchers.Main) {
-                        messages.addAll(0, parsed) // Prepend older messages
-                    }
+                    val parsed = withContext(Dispatchers.Default) { parseMessageList(message["messages"]) }
+                    if (expectedVersion != history.pagingVersion) return@collect
+                    val previousRemoteOffset = history.remoteOffset
+                    history.remoteHasMore = message["hasMore"] == true
+                    if (parsed.any { it.id in history.remoteGapIds }) history.remoteGapIds = emptySet()
+                    val merged = com.agentshell.data.repository.mergeCachedMessages(messages.toList(), parsed)
+                    messages.clear()
+                    messages.addAll(merged)
+                    history.remoteOffset = advanceRemoteChatHistoryOffset(previousRemoteOffset, parsed.size, merged.size, history.cacheComplete && history.remoteGapIds.isEmpty())
+                    target?.let { offlineCache.saveHistoryAsync(it, parsed, false, history.cachedConversationKey) }
+                    history.loadingOlder = false
+                }
+                "chat-log-cleared" -> {
+                    if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp) || message["success"] != true) return@collect
+                    history.cacheDirty = false
+                    history.pagingVersion += 1
+                    messages.clear()
+                    history.hasOlderCachedMessages = false
+                    history.remoteHasMore = false
+                    history.remoteGapIds = emptySet()
+                    history.oldestCachedPosition = null
+                    history.loadingOlder = false
+                    history.cacheComplete = true
+                    target?.let { offlineCache.saveHistoryAsync(it, emptyList(), true, history.cachedConversationKey) }
                 }
                 "chat-event" -> {
                     if (isAcp) return@collect
@@ -282,12 +395,26 @@ fun ChatPanelContent(
                     val sid = message["sessionId"] as? String ?: return@collect
                     // Backend sends sessionId with "acp_" prefix sometimes
                     if (sid != sessionName && sid != "acp_$sessionName") return@collect
-                    val parsed = parseMessageList(message["messages"])
+                    val parsed = withContext(Dispatchers.Default) { parseMessageList(message["messages"]) }
+                    history.pagingVersion += 1
+                    history.loadingOlder = false
+                    history.oldestCachedPosition = null
+                    val previousMessages = messages.toList()
+                    val incomingIds = parsed.mapTo(hashSetOf()) { it.id }
+                    val overlaps = previousMessages.any { it.id in incomingIds }
+                    history.remoteHasMore = message["hasMore"] == true
+                    history.remoteGapIds = if (history.remoteHasMore && previousMessages.isNotEmpty() && !overlaps) previousMessages.mapTo(hashSetOf()) { it.id } else emptySet()
+                    if (!history.remoteHasMore) { history.hasOlderCachedMessages = false; history.oldestCachedPosition = null; history.cacheComplete = true }
+                    history.remoteOffset = remoteChatHistoryOffset(parsed.size, com.agentshell.data.repository.mergeCachedMessages(previousMessages, parsed).size, history.cacheComplete, overlaps)
+                    history.cacheDirty = false
                     withContext(Dispatchers.Main) {
                         messages.clear()
-                        messages.addAll(parsed)
+                        messages.addAll(if (message["hasMore"] == true) com.agentshell.data.repository.mergeCachedMessages(previousMessages, parsed) else parsed)
                     }
-                    target?.let { activityRepository.history(it, parsed) }
+                    target?.let {
+                        activityRepository.history(it, parsed)
+                        offlineCache.saveHistoryAsync(it, parsed, message["hasMore"] != true, history.cachedConversationKey, message["tool"] as? String)
+                    }
                     historyReady = true
                 }
                 "acp-tool-call" -> {
@@ -331,6 +458,10 @@ fun ChatPanelContent(
                     }
                 }
             }
+            if (beforeMessages !== messages.toList() && type !in setOf("chat-history", "chat-history-chunk", "acp-history-loaded", "chat-log-cleared")) {
+                history.cacheDirty = true
+                history.cacheRevision += 1
+            }
         }
     }
 
@@ -348,13 +479,28 @@ fun ChatPanelContent(
             }
         }
         if (!initialScrollComplete) {
-            val unreadIndex = messages.indexOfFirst { it.id == firstUnreadId }
-            listState.scrollToItem(if (unreadIndex >= 0) unreadIndex else messages.lastIndex)
+            val unreadIndex = firstUnreadId?.let { id -> messages.indexOfFirst { it.id == id } } ?: -1
+            listState.scrollToItem((if (unreadIndex >= 0) unreadIndex else messages.lastIndex) + if (showOlderHistory) 1 else 0)
             followLive = unreadIndex < 0
             initialScrollComplete = true
         } else if (followLive && !listState.isScrollInProgress) {
-            listState.animateScrollToItem(messages.lastIndex)
+            listState.animateScrollToItem(messages.lastIndex + if (showOlderHistory) 1 else 0)
         }
+    }
+
+    LaunchedEffect(target?.key, history.cacheReady) {
+        val chat = target ?: return@LaunchedEffect
+        if (!history.cacheReady) return@LaunchedEffect
+        snapshotFlow { history.cacheRevision }.drop(1).sample(1000).collect {
+            if (history.cacheDirty) {
+                offlineCache.saveHistoryAsync(chat, messages.toList(), false, history.cachedConversationKey)
+                history.cacheDirty = false
+            }
+        }
+    }
+
+    LaunchedEffect(target?.key, screenActive) {
+        activityRepository.setChatOpen(readOwner, target, screenActive)
     }
 
     LaunchedEffect(target?.key, initialScrollComplete, screenActive) {
@@ -362,8 +508,7 @@ fun ChatPanelContent(
         if (!initialScrollComplete || !screenActive) return@LaunchedEffect
         snapshotFlow {
             val layout = listState.layoutInfo
-            val visibleKeys = layout.visibleItemsInfo.map { it.key }.toSet()
-            val lastVisible = messages.lastOrNull { it.id in visibleKeys }?.id
+            val lastVisible = layout.visibleItemsInfo.lastOrNull { it.key is String }?.key as? String
             val lastItem = layout.visibleItemsInfo.lastOrNull()
             val atBottom = lastItem != null && lastItem.index == layout.totalItemsCount - 1 && lastItem.offset + lastItem.size <= layout.viewportEndOffset
             Triple(lastVisible, atBottom, lastVisible != null && lastVisible == messages.lastOrNull()?.id)
@@ -393,6 +538,13 @@ fun ChatPanelContent(
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            if (showOlderHistory) {
+                item(key = OlderHistoryRow) {
+                    TextButton(onClick = ::loadOlderHistory, enabled = !history.loadingOlder, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (history.loadingOlder) "Loading older messages…" else "Load older messages")
+                    }
+                }
+            }
             items(messages.toList(), key = { it.id }) { msg ->
                 Column {
                     if (msg.id == firstUnreadId) UnreadDivider()
@@ -475,9 +627,11 @@ fun ChatPanelContent(
                         content = text,
                         timestamp = System.currentTimeMillis(),
                     ))
+                    history.cacheDirty = true
+                    history.cacheRevision += 1
                     inputText = ""
                     coroutineScope.launch {
-                        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+                        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1 + if (showOlderHistory) 1 else 0)
                     }
                 },
                 enabled = inputText.isNotBlank() && pendingSend == null && isSocketConnected && (isAcp || bindingState?.canSend != false),
@@ -488,6 +642,8 @@ fun ChatPanelContent(
         }
     }
 }
+
+private data object OlderHistoryRow
 
 // ── Message Rendering ───────────────────────────────────────────────────────
 
@@ -611,10 +767,10 @@ private fun matchesTmuxSession(
     windowIndex: Int,
     isAcp: Boolean,
 ): Boolean {
-    if (isAcp) return false // ACP messages use different handlers
     val msgSession = (message["sessionName"] ?: message["session-name"]) as? String ?: return false
     val msgWindow = (message["windowIndex"] ?: message["window-index"])?.let { (it as? Number)?.toInt() } ?: return false
-    return msgSession == sessionName && msgWindow == windowIndex
+    return if (isAcp) msgSession.removePrefix("acp_") == sessionName.removePrefix("acp_") && msgWindow == windowIndex
+        else msgSession == sessionName && msgWindow == windowIndex
 }
 
 @Suppress("UNCHECKED_CAST")

@@ -46,6 +46,7 @@ class PreferencesDataStore @Inject constructor(
         val CHAT_READ_STATES = stringPreferencesKey("chat_read_states")
         val AGENT_FINISHED_ENABLED = booleanPreferencesKey("agent_finished_enabled")
         val AGENT_QUIET_ENABLED = booleanPreferencesKey("agent_quiet_enabled")
+        val AGENT_COMPLETION_RECEIPTS = stringPreferencesKey("agent_completion_receipts")
         val AGENT_SIGNAL_LEDGERS = stringPreferencesKey("agent_signal_ledgers")
     }
 
@@ -302,6 +303,9 @@ class PreferencesDataStore @Inject constructor(
 
     val agentFinishedEnabled: Flow<Boolean> get() = dataStore.data.map { it[Keys.AGENT_FINISHED_ENABLED] ?: true }
     val agentQuietEnabled: Flow<Boolean> get() = dataStore.data.map { it[Keys.AGENT_QUIET_ENABLED] ?: true }
+    val agentCompletionReceipts: Flow<String> get() = dataStore.data.map { it[Keys.AGENT_COMPLETION_RECEIPTS] ?: "{}" }
+    suspend fun setAgentCompletionReceipts(value: String) { dataStore.edit { it[Keys.AGENT_COMPLETION_RECEIPTS] = value } }
+
     val agentSignalLedgers: Flow<String> get() = dataStore.data.map { it[Keys.AGENT_SIGNAL_LEDGERS] ?: "{}" }
     suspend fun setAgentFinishedEnabled(value: Boolean) { dataStore.edit { it[Keys.AGENT_FINISHED_ENABLED] = value } }
     suspend fun setAgentQuietEnabled(value: Boolean) { dataStore.edit { it[Keys.AGENT_QUIET_ENABLED] = value } }

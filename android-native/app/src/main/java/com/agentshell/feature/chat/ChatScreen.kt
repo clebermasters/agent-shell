@@ -246,8 +246,7 @@ fun ChatScreen(
         if (!screenActive || !chatScroll.initialized || !uiState.readTrackingReady) return@LaunchedEffect
         snapshotFlow {
             val layout = listState.layoutInfo
-            val visibleKeys = layout.visibleItemsInfo.map { it.key }.toSet()
-            val lastVisibleMessage = uiState.messages.lastOrNull { it.id in visibleKeys }?.id
+            val lastVisibleMessage = lastVisibleChatMessageKey(layout.visibleItemsInfo.map { it.key })
             val viewingLatest = chatScroll.followingLatest && chatScroll.atEnd &&
                 lastVisibleMessage != null && lastVisibleMessage == uiState.messages.lastOrNull()?.id
             lastVisibleMessage to viewingLatest
@@ -393,8 +392,7 @@ fun ChatScreen(
                         CircularProgressIndicator()
                     }
                 } else {
-                    val unreadIndex = uiState.messages.indexOfFirst { it.id == uiState.firstUnreadMessageId }
-                    val hasUnreadDivider = unreadIndex >= 0
+                    val messageRows = ChatMessageRows(uiState.messages, uiState.firstUnreadMessageId)
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.weight(1f),
@@ -402,18 +400,15 @@ fun ChatScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         items(
-                            count = uiState.messages.size + if (hasUnreadDivider) 1 else 0,
-                            key = { index ->
-                                if (hasUnreadDivider && index == unreadIndex) ChatListAnchor.Unread
-                                else uiState.messages[index - if (hasUnreadDivider && index > unreadIndex) 1 else 0].id
-                            },
+                            count = messageRows.count,
+                            key = messageRows::key,
                         ) { index ->
                             // Keep the divider outside the message's scroll anchor:
                             // removing it on resume must not shift a tall reply's text.
-                            if (hasUnreadDivider && index == unreadIndex) {
+                            if (messageRows.isUnread(index)) {
                                 UnreadDivider()
                             } else {
-                                val message = uiState.messages[index - if (hasUnreadDivider && index > unreadIndex) 1 else 0]
+                                val message = messageRows.message(index)
                                 MessageBubble(
                                     message = message,
                                     showThinking = uiState.showThinking,
@@ -428,7 +423,7 @@ fun ChatScreen(
                         }
 
                         if (uiState.isStreaming) {
-                            item(key = "streaming_indicator") {
+                            item(key = ChatListAnchor.Streaming) {
                                 StreamingIndicator()
                             }
                         }

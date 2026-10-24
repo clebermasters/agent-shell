@@ -2,6 +2,7 @@ package com.agentshell.data.model
 
 import java.security.MessageDigest
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 @Serializable
 data class ChatTarget(
@@ -12,8 +13,8 @@ data class ChatTarget(
     val cwd: String = "",
     val title: String = "",
 ) {
-    val key: String
-        get() = chatFingerprint(listOf(hostId, isAcp.toString(), sessionName, windowIndex.toString()).joinToString("\u0000"))
+    @Transient
+    val key: String = chatFingerprint("$hostId\u0000$isAcp\u0000$sessionName\u0000$windowIndex")
 
     val displayName: String
         get() = title.ifBlank { sessionName } + if (!isAcp && windowIndex != 0) " · window $windowIndex" else ""
@@ -24,8 +25,17 @@ data class ChatTarget(
     }
 }
 
-internal fun chatFingerprint(value: String): String = MessageDigest.getInstance("SHA-256")
-    .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+internal fun chatFingerprint(value: String): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+    val hex = "0123456789abcdef"
+    return buildString(digest.size * 2) {
+        for (byte in digest) {
+            val value = byte.toInt() and 0xff
+            append(hex[value ushr 4])
+            append(hex[value and 0xf])
+        }
+    }
+}
 
 @Serializable
 data class ChatCursor(val id: String, val timestamp: Long, val preview: String? = null)

@@ -23,6 +23,7 @@ interface SplitScreenEntryPoint {
     fun webSocketService(): WebSocketService
     fun chatRepository(): ChatRepository
     fun chatActivityRepository(): ChatActivityRepository
+    fun offlineCacheRepository(): com.agentshell.data.repository.OfflineCacheRepository
     fun hostRepository(): HostRepository
 }
 

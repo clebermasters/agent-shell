@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.sp
 import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.AgentActivityStatus
 
-internal fun activityPriority(activity: AgentActivity): Int = when (activity.status) {
+internal fun activityPriority(activity: AgentActivity): Int = if (activity.unreadCompletion) 6 else when (activity.status) {
     AgentActivityStatus.WORKING -> 5
     AgentActivityStatus.WAITING -> 4
     AgentActivityStatus.RECENT_ACTIVITY -> 3
@@ -83,7 +83,7 @@ internal fun SessionActivityBadge(activity: AgentActivity?, now: Long) {
         AgentActivityStatus.RECENT_ACTIVITY -> "Recent activity"
         AgentActivityStatus.WAITING -> "Waiting for you"
         AgentActivityStatus.FAILED -> "Failed"
-        AgentActivityStatus.IDLE -> if (activity.completionReason == "completed" && activity.finishedAt != null && activity.observedAt - activity.finishedAt < 60_000) "Finished" else "Idle"
+        AgentActivityStatus.IDLE -> if (activity.unreadCompletion) "Finished" else "Idle"
         AgentActivityStatus.UNKNOWN -> if (activity.quietAt != null && activity.source.startsWith("tmux")) "Quiet" else "Status unavailable"
     }
     val elapsed = if (activity.status == AgentActivityStatus.WORKING) activity.elapsedSeconds(now) else null

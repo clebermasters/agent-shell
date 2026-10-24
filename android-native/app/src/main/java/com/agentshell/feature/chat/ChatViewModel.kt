@@ -64,6 +64,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -143,6 +145,7 @@ class ChatViewModel @Inject constructor(
     private val recentSessions: com.agentshell.data.repository.RecentSessionsRepository,
     private val savedStateHandle: SavedStateHandle,
     private val chatRepository: ChatRepository,
+    private val offlineCache: com.agentshell.data.repository.OfflineCacheRepository,
     private val chatActivityRepository: ChatActivityRepository,
     private val hostRepository: HostRepository,
     private val sharedContentRepository: SharedContentRepository,
@@ -201,6 +204,100 @@ class ChatViewModel @Inject constructor(
     private val transcriptionReceipt = TranscriptionReceipt()
     private data class PendingSend(val id: String, val text: String, val file: AttachedFile?, val draftKey: String, val bindingId: String, val widgetId: String? = null)
     private var pendingSend: PendingSend? = null
+    private var cacheLoadJob: Job? = null
+    private var cacheSaveJob: Job? = null
+    private var restoringCache = false
+    private var cacheLoadGeneration = 0
+    private var cachedConversationKey: String? = null
+    private var remoteLoadedCount = 0
+    private var oldestCachedPosition: Int? = null
+    private var hasOlderCachedMessages = false
+    private var remoteHasMoreMessages = false
+    private var cachedHistoryComplete = false
+    private var remoteGapBoundaryIds: Set<String> = emptySet()
+    private var cacheDirty = false
+    private var lastMarkedReadId: String? = null
+    private var historyPageJob: Job? = null
+    private var pagingGeneration = 0
+    private var requestedRemotePage = false
+
+    private fun canLoadOlderMessages() = hasOlderCachedMessages || (webSocketService.isConnected && remoteHasMoreMessages)
+
+    private fun resetHistoryPaging() {
+        historyPageJob?.cancel()
+        historyPageJob = null
+        pagingGeneration += 1
+        requestedRemotePage = false
+        oldestCachedPosition = null
+        hasOlderCachedMessages = false
+        remoteHasMoreMessages = false
+        cachedHistoryComplete = false
+        remoteGapBoundaryIds = emptySet()
+        remoteLoadedCount = 0
+        lastMarkedReadId = null
+    }
+
+    private fun saveRemoteHistory(messages: List<ChatMessage>, complete: Boolean, tool: String? = null) {
+        cacheSaveJob?.cancel()
+        cacheSaveJob = null
+        cacheDirty = false
+        readTarget?.let { offlineCache.saveHistoryAsync(it, messages, complete, cachedConversationKey, tool) }
+    }
+
+    private suspend fun restoreCachedChat(generation: Int) {
+        val target = readTarget
+        try {
+            val cached = target?.let { offlineCache.historyPage(it) }
+            if (generation != cacheLoadGeneration) return
+            if (cached != null) {
+                cachedConversationKey = cached.conversation.conversationKey.takeIf { it.isNotBlank() }
+                replaceMessages(cached.messages)
+                oldestCachedPosition = cached.oldestPosition
+                hasOlderCachedMessages = cached.hasMore
+                cachedHistoryComplete = cached.conversation.complete
+                _uiState.update { it.copy(
+                    detectedTool = cached.conversation.tool,
+                    sessionCwd = it.sessionCwd.ifBlank { cached.conversation.cwd },
+                    totalMessageCount = cached.totalMessageCount,
+                    hasMoreMessages = cached.hasMore,
+                ) }
+                updateUnreadBoundary()
+            }
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            Log.w("ChatViewModel", "Could not restore cached history", error)
+        } finally {
+            if (generation == cacheLoadGeneration) {
+                restoringCache = false
+                _uiState.update { it.copy(isLoading = false) }
+            }
+        }
+    }
+
+    /** Coalesce streaming changes without retaining a full snapshot per protocol packet. */
+    private fun persistChat(immediate: Boolean = false) {
+        if (!immediate) cacheDirty = true
+        if (!cacheDirty) return
+        val target = readTarget ?: return
+        val state = _uiState.value
+        if (target.sessionName != state.sessionName.removePrefix(if (state.isAcp) "acp_" else "") || target.isAcp != state.isAcp || target.windowIndex != state.windowIndex || restoringCache) return
+        fun saveCurrentSnapshot() {
+            val current = _uiState.value
+            offlineCache.saveHistoryAsync(target, current.messages.toList(), false, cachedConversationKey, current.detectedTool)
+            cacheDirty = false
+        }
+        if (immediate) {
+            cacheSaveJob?.cancel()
+            cacheSaveJob = null
+            saveCurrentSnapshot()
+        } else if (cacheSaveJob?.isActive != true) {
+            cacheSaveJob = viewModelScope.launch {
+                delay(1000)
+                if (cacheDirty && readTarget == target && !restoringCache) saveCurrentSnapshot()
+                cacheSaveJob = null
+            }
+        }
+    }
 
     private fun newMessageList(messages: List<ChatMessage> = emptyList()): SnapshotStateList<ChatMessage> =
         mutableStateListOf<ChatMessage>().apply { addAll(messages) }
@@ -225,6 +322,7 @@ class ChatViewModel @Inject constructor(
         }
         readStateJob?.cancel()
         agentActivityJob?.cancel()
+        chatActivityRepository.setChatOpen(readOwner, null, false)
         chatActivityRepository.setViewing(readOwner, null, false)
         val target = ChatTarget.create(host.id, sessionName, windowIndex, isAcp, cwd)
         readHostServerUrl = "${host.wsUrl}/ws"
@@ -233,16 +331,17 @@ class ChatViewModel @Inject constructor(
         readState = chatActivityRepository.register(target)
         _uiState.update { it.copy(firstUnreadMessageId = null, readTrackingReady = true, isLocatingUnread = false) }
         readStateJob = viewModelScope.launch {
-            chatActivityRepository.states.collect { states ->
-                readState = states[target.key]
+            chatActivityRepository.states.map { it[target.key] }.distinctUntilChanged().collect { state ->
+                readState = state
                 updateUnreadBoundary()
             }
         }
         agentActivityJob = viewModelScope.launch {
-            chatActivityRepository.agentActivities.collect { activities ->
-                _uiState.update { it.copy(agentActivity = activities[target.key] ?: AgentActivity()) }
+            chatActivityRepository.agentActivities.map { it[target.key] ?: AgentActivity() }.distinctUntilChanged().collect { activity ->
+                _uiState.update { it.copy(agentActivity = activity) }
             }
         }
+        chatActivityRepository.setChatOpen(readOwner, target, screenActive)
         chatActivityRepository.setViewing(readOwner, target, screenActive && followingLive)
     }
 
@@ -286,6 +385,7 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(firstUnreadMessageId = null) }
         }
         screenActive = active
+        chatActivityRepository.setChatOpen(readOwner, readTarget, active)
         chatActivityRepository.setViewing(readOwner, readTarget, active && followingLive)
         if (active) {
             updateUnreadBoundary()
@@ -303,9 +403,11 @@ class ChatViewModel @Inject constructor(
     fun markReadThrough(messageId: String) {
         if (!screenActive || !_uiState.value.readTrackingReady || _uiState.value.isLocatingUnread) return
         val target = readTarget ?: return
+        if (lastMarkedReadId == messageId) return
         val messages = _uiState.value.messages.toList()
         val index = messages.indexOfFirst { it.id == messageId }
         if (index < 0) return
+        lastMarkedReadId = messageId
         viewModelScope.launch { chatActivityRepository.readThrough(target, messages.take(index + 1)) }
     }
 
@@ -356,6 +458,7 @@ class ChatViewModel @Inject constructor(
             content = pending.content.toString(),
             isThinking = pending.isThinking,
         )
+        persistChat()
     }
 
     private fun enqueueAcpChunk(sessionId: String, content: String, isThinking: Boolean) {
@@ -403,9 +506,19 @@ class ChatViewModel @Inject constructor(
     private fun resubscribeActiveChat(reason: String) {
         val state = _uiState.value
         if (state.sessionName.isBlank()) return
+        if (restoringCache || (readHostServerUrl != null && webSocketService.currentWebSocketUrl?.substringBefore('?') != readHostServerUrl)) {
+            connectionRecovery.pending = true
+            return
+        }
 
-        clearPendingAcpChunk()
-        _uiState.update { it.copy(error = null) }
+        flushPendingAcpChunk()
+        persistChat(immediate = true)
+        historyPageJob?.cancel()
+        historyPageJob = null
+        pagingGeneration += 1
+        requestedRemotePage = false
+        oldestCachedPosition = null // Resolve the next page from its stable message ID after a refresh.
+        _uiState.update { it.copy(error = null, isLoadingMore = false) }
 
         if (state.isAcp) {
             val rawSessionId = rawAcpSessionId(state.sessionName)
@@ -501,6 +614,13 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching a TMUX chat log. */
     fun watchChatLog(sessionName: String, windowIndex: Int) {
+        flushPendingAcpChunk()
+        persistChat(immediate = true)
+        cacheLoadJob?.cancel()
+        restoringCache = true
+        val generation = ++cacheLoadGeneration
+        cachedConversationKey = null
+        resetHistoryPaging()
         agentActivityJob?.cancel()
         clearPendingAcpChunk()
         connectionRecovery.watchStarted(webSocketService.isConnected)
@@ -511,6 +631,9 @@ class ChatViewModel @Inject constructor(
                 isAcp = false,
                 agentActivity = AgentActivity(),
                 isLoading = true,
+                isLoadingMore = false,
+                hasMoreMessages = false,
+                readTrackingReady = false,
                 messages = newMessageList(),
                 error = null,
                 sessionCwd = "",
@@ -519,15 +642,22 @@ class ChatViewModel @Inject constructor(
         }
         logDebug("Initial TMUX chat watch session=$sessionName window=$windowIndex")
         restoreDraft(draftKey(sessionName, windowIndex))
-        viewModelScope.launch {
+        cacheLoadJob = viewModelScope.launch {
             prepareReadTracking(sessionName, windowIndex, false)
-            webSocketService.watchChatLog(sessionName, windowIndex)
-            webSocketService.getSessionCwd(sessionName)
+            restoreCachedChat(generation)
+            if (webSocketService.isConnected) resubscribeActiveChat("cache loaded")
         }
     }
 
     /** Begin watching an ACP chat session. */
     fun startAcpChat(sessionName: String, cwd: String) {
+        flushPendingAcpChunk()
+        persistChat(immediate = true)
+        cacheLoadJob?.cancel()
+        restoringCache = true
+        val generation = ++cacheLoadGeneration
+        cachedConversationKey = null
+        resetHistoryPaging()
         agentActivityJob?.cancel()
         clearPendingAcpChunk()
         connectionRecovery.watchStarted(webSocketService.isConnected)
@@ -539,6 +669,9 @@ class ChatViewModel @Inject constructor(
                 isAcp = true,
                 agentActivity = AgentActivity(),
                 isLoading = true,
+                isLoadingMore = false,
+                hasMoreMessages = false,
+                readTrackingReady = false,
                 messages = newMessageList(),
                 error = null,
                 pendingPermission = null,
@@ -548,13 +681,10 @@ class ChatViewModel @Inject constructor(
         }
         logDebug("Initial ACP chat watch session=$sessionName backend=${directBackendForSession(sessionName)} cwd=${cwd.isNotBlank()}")
         restoreDraft(draftKey(sessionKey, 0))
-        viewModelScope.launch {
+        cacheLoadJob = viewModelScope.launch {
             prepareReadTracking(sessionName, 0, true, cwd)
-            webSocketService.selectBackend(directBackendForSession(sessionName))
-            if (cwd.isNotBlank()) {
-                webSocketService.acpResumeSession(sessionName, cwd)
-            }
-            webSocketService.watchAcpChatLog(sessionName, limit = 30)
+            restoreCachedChat(generation)
+            if (webSocketService.isConnected) resubscribeActiveChat("cache loaded")
         }
     }
 
@@ -610,6 +740,10 @@ class ChatViewModel @Inject constructor(
     fun sendMessage(text: String) {
         val state = _uiState.value
         if (state.isUploading || state.isSending) return
+        if (!webSocketService.isConnected) {
+            _uiState.update { it.copy(error = "You’re offline. Reconnect to send your draft") }
+            return
+        }
         val trimmed = text.trim()
 
         // Guard: don't send to tmux with an empty session name
@@ -771,24 +905,27 @@ class ChatViewModel @Inject constructor(
         val current = _uiState.value
         if (message["sessionName"] != current.sessionName || (message["windowIndex"] as? Number)?.toInt() != current.windowIndex || current.isAcp) return
         val next = ChatBindingState.parse(message) ?: return
-        val oldKey = current.bindingState?.binding?.conversationKey
+        val oldKey = current.bindingState?.binding?.conversationKey ?: cachedConversationKey
         val newKey = next.binding?.conversationKey
-        val changed = oldKey != newKey
+        val changed = newKey != null && oldKey != newKey
+        if (changed) {
+            persistChat(immediate = true)
+            resetHistoryPaging()
+        }
+        if (newKey != null) cachedConversationKey = newKey
         if (changed && oldKey != null) saveDraft(draftKey(current.sessionName, current.windowIndex), current.draftMessage)
         _uiState.update { it.copy(bindingState = next, detectedTool = next.tool.ifBlank { it.detectedTool },
-            isLoading = changed && next.canSend, isLoadingMore = false, error = null,
+            isLoading = false, isLoadingMore = false, error = null,
             pendingPermission = if (changed) null else it.pendingPermission,
             firstUnreadMessageId = if (changed) null else it.firstUnreadMessageId) }
         if (changed) {
             _uiState.value.messages.clear()
             visitUnreadCursor = null
-            if (newKey != null) {
-                val key = draftKey(current.sessionName, current.windowIndex)
-                val saved = dataStore.getDraftMessage(key)
-                val draft = saved ?: if (oldKey == null) _uiState.value.draftMessage else ""
-                _uiState.update { it.copy(draftMessage = draft, attachedFile = if (oldKey == null) it.attachedFile else null) }
-                if (saved == null && draft.isNotBlank()) dataStore.setDraftMessage(key, draft)
-            }
+            val key = draftKey(current.sessionName, current.windowIndex)
+            val saved = dataStore.getDraftMessage(key)
+            val draft = saved ?: if (oldKey == null) _uiState.value.draftMessage else ""
+            _uiState.update { it.copy(draftMessage = draft, attachedFile = if (oldKey == null) it.attachedFile else null) }
+            if (saved == null && draft.isNotBlank()) dataStore.setDraftMessage(key, draft)
         }
         readTarget?.let { chatActivityRepository.linkConversation(it, next) }
     }
@@ -800,14 +937,58 @@ class ChatViewModel @Inject constructor(
     fun loadMore() {
         val state = _uiState.value
         if (state.isLoadingMore || !state.hasMoreMessages || state.isLoading) return
+        val target = readTarget ?: return
+        val generation = cacheLoadGeneration
+        val expectedPagingGeneration = pagingGeneration
         _uiState.update { it.copy(isLoadingMore = true) }
-            webSocketService.loadMoreChatHistory(
-                sessionName = state.sessionName,
-                windowIndex = state.windowIndex,
-                offset = state.messages.size,
-            limit = 50,
-            bindingId = state.bindingState?.binding?.id,
-        )
+        historyPageJob = viewModelScope.launch {
+            try {
+                // During a reconnect gap, fetch the missing remote middle before older local pages.
+                if (!preferRemoteChatHistory(webSocketService.isConnected, cachedHistoryComplete, remoteHasMoreMessages, remoteGapBoundaryIds.isNotEmpty())) {
+                    val page = offlineCache.historyPage(target, oldestCachedPosition, beforeMessageId = state.messages.firstOrNull()?.id)
+                    if (generation != cacheLoadGeneration || expectedPagingGeneration != pagingGeneration) return@launch
+                    val sameConversation = cachedConversationKey == null || page?.conversation?.conversationKey == cachedConversationKey
+                    if (page != null && sameConversation) {
+                        oldestCachedPosition = page.oldestPosition ?: oldestCachedPosition
+                        hasOlderCachedMessages = page.hasMore
+                        cachedHistoryComplete = page.conversation.complete
+                        val before = _uiState.value.messages.toList()
+                        val ids = before.mapTo(hashSetOf()) { it.id }
+                        val older = page.messages.filter { it.id !in ids }
+                        if (older.isNotEmpty()) {
+                            prependMessages(older)
+                            if (cachedHistoryComplete && remoteGapBoundaryIds.isEmpty()) remoteLoadedCount = maxOf(remoteLoadedCount, _uiState.value.messages.size)
+                            if (cachedHistoryComplete && page.totalMessageCount >= _uiState.value.totalMessageCount) remoteHasMoreMessages = false
+                            _uiState.update { it.copy(isLoadingMore = false, hasMoreMessages = canLoadOlderMessages()) }
+                            chatActivityRepository.olderHistory(target, older)
+                            updateUnreadBoundary()
+                            return@launch
+                        }
+                        if (cachedHistoryComplete && page.totalMessageCount >= _uiState.value.totalMessageCount) {
+                            remoteHasMoreMessages = false
+                            remoteGapBoundaryIds = emptySet()
+                        }
+                    }
+                }
+                if (!webSocketService.isConnected || !remoteHasMoreMessages) {
+                    _uiState.update { it.copy(isLoadingMore = false, hasMoreMessages = canLoadOlderMessages()) }
+                    return@launch
+                }
+                val current = _uiState.value
+                requestedRemotePage = true
+                webSocketService.loadMoreChatHistory(
+                    sessionName = current.sessionName,
+                    windowIndex = current.windowIndex,
+                    offset = remoteLoadedCount,
+                    limit = 100,
+                    bindingId = current.bindingState?.binding?.id,
+                )
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                Log.w("ChatViewModel", "Could not load older saved history", error)
+                _uiState.update { it.copy(isLoadingMore = false) }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -975,10 +1156,11 @@ class ChatViewModel @Inject constructor(
         messageCollectionJob = viewModelScope.launch {
             chatRepository.chatMessages.collect { message ->
                 if (readHostServerUrl != null && message["_sourceServerUrl"] != null && message["_sourceServerUrl"] != readHostServerUrl) return@collect
-                if (!chatRepository.isChatMessage(message)) return@collect
+                if (!chatRepository.isChatMessage(message) || restoringCache) return@collect
                 if (message["type"] == "chat-binding") { handleBinding(message); return@collect }
                 if (message["type"] == "chat-send-result") { handleSendResult(message); return@collect }
                 if (!_uiState.value.bindingState.acceptsConversationPacket(message)) return@collect
+                val beforeMessages = _uiState.value.messages.toList()
                 when (val type = message["type"] as? String) {
                     "chat-history"       -> handleChatHistory(message)
                     "chat-history-chunk" -> handleChatHistoryChunk(message)
@@ -1008,6 +1190,7 @@ class ChatViewModel @Inject constructor(
                     "acp-history-loaded" -> handleAcpHistoryLoaded(message)
                     else                 -> { /* unhandled type — ignore */ }
                 }
+                if (beforeMessages !== _uiState.value.messages.toList() && message["type"] !in setOf("chat-history", "chat-history-chunk", "acp-history-loaded", "chat-log-cleared")) persistChat()
             }
         }
     }
@@ -1016,21 +1199,26 @@ class ChatViewModel @Inject constructor(
     // Message handlers
     // -------------------------------------------------------------------------
 
-    private fun handleChatHistory(message: Map<String, Any?>) {
+    private suspend fun handleChatHistory(message: Map<String, Any?>) {
         flushPendingAcpChunk()
         val sessionName = (message["sessionName"] ?: message["session-name"]) as? String ?: return
         val windowIndex = (message["windowIndex"] ?: message["window-index"])?.let {
             (it as? Number)?.toInt()
         } ?: return
 
+        val generation = cacheLoadGeneration
+        val expectedConversation = cachedConversationKey
         val state = _uiState.value
         if (sessionName != state.sessionName || windowIndex != state.windowIndex) return
 
         val messagesData = message["messages"] as? List<*> ?: emptyList<Any>()
-        val parsed = messagesData.mapNotNull {
-            @Suppress("UNCHECKED_CAST")
-            (it as? Map<String, Any?>)?.let { m -> parseMessage(m) }
+        val parsed = withContext(Dispatchers.Default) {
+            messagesData.mapNotNull {
+                @Suppress("UNCHECKED_CAST")
+                (it as? Map<String, Any?>)?.let { m -> parseMessage(m) }
+            }
         }
+        if (generation != cacheLoadGeneration || expectedConversation != cachedConversationKey) return
         val totalCount = (message["totalCount"] as? Number)?.toInt() ?: parsed.size
         val hasMore = message["hasMore"] as? Boolean ?: false
 
@@ -1051,7 +1239,8 @@ class ChatViewModel @Inject constructor(
                 modelName = model ?: it.modelName,
             )
         }
-        replaceMessages(parsed)
+        applyRemoteHistory(parsed, hasMore)
+        saveRemoteHistory(parsed, !hasMore, tool)
         reconcileReadHistory(parsed)
 
         when (tool) {
@@ -1060,31 +1249,45 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun handleChatHistoryChunk(message: Map<String, Any?>) {
+    private suspend fun handleChatHistoryChunk(message: Map<String, Any?>) {
+        if (!requestedRemotePage) return
         flushPendingAcpChunk()
         val sessionName = (message["sessionName"] ?: message["session-name"]) as? String ?: return
         val windowIndex = (message["windowIndex"] ?: message["window-index"])?.let {
             (it as? Number)?.toInt()
         } ?: return
 
+        val generation = cacheLoadGeneration
+        val expectedPagingGeneration = pagingGeneration
+        val expectedConversation = cachedConversationKey
         val state = _uiState.value
         if (sessionName != state.sessionName || windowIndex != state.windowIndex) return
 
         val messagesData = message["messages"] as? List<*> ?: emptyList<Any>()
-        val newMessages = messagesData.mapNotNull {
-            @Suppress("UNCHECKED_CAST")
-            (it as? Map<String, Any?>)?.let { m -> parseMessage(m) }
+        val newMessages = withContext(Dispatchers.Default) {
+            messagesData.mapNotNull {
+                @Suppress("UNCHECKED_CAST")
+                (it as? Map<String, Any?>)?.let { m -> parseMessage(m) }
+            }
         }
+        if (generation != cacheLoadGeneration || expectedConversation != cachedConversationKey || expectedPagingGeneration != pagingGeneration) return
         val hasMore = message["hasMore"] as? Boolean ?: false
 
-        prependMessages(newMessages)
+        requestedRemotePage = false
+        val previousRemoteOffset = remoteLoadedCount
+        remoteHasMoreMessages = hasMore
+        if (newMessages.any { it.id in remoteGapBoundaryIds }) remoteGapBoundaryIds = emptySet()
+        val merged = com.agentshell.data.repository.mergeCachedMessages(state.messages.toList(), newMessages)
+        replaceMessages(merged)
+        remoteLoadedCount = advanceRemoteChatHistoryOffset(previousRemoteOffset, newMessages.size, merged.size, cachedHistoryComplete && remoteGapBoundaryIds.isEmpty())
+        readTarget?.let { offlineCache.saveHistoryAsync(it, newMessages, false, cachedConversationKey, state.detectedTool) }
         _uiState.update { it.copy(readTrackingReady = false) }
         viewModelScope.launch {
             readTarget?.let { target ->
                 chatActivityRepository.olderHistory(target, newMessages)
                 readState = chatActivityRepository.states.value[target.key]
             }
-            _uiState.update { it.copy(isLoadingMore = false, hasMoreMessages = hasMore) }
+            _uiState.update { it.copy(isLoadingMore = false, hasMoreMessages = canLoadOlderMessages()) }
             updateUnreadBoundary()
             _uiState.update { it.copy(readTrackingReady = true) }
         }
@@ -1156,6 +1359,10 @@ class ChatViewModel @Inject constructor(
         if (!matches) return
 
         if (success) {
+            cacheSaveJob?.cancel()
+            cacheSaveJob = null
+            cacheDirty = false
+            resetHistoryPaging()
             visitUnreadCursor = null
             readTarget?.let { target -> viewModelScope.launch { chatActivityRepository.clear(target) } }
             _uiState.update {
@@ -1170,6 +1377,8 @@ class ChatViewModel @Inject constructor(
                     readTrackingReady = true,
                 )
             }
+            readTarget?.let { offlineCache.saveHistoryAsync(it, emptyList(), true, cachedConversationKey) }
+            _uiState.update { it.copy(isLoading = false) }
             _chatCleared.tryEmit(true)
         } else {
             val error = message["error"] as? String ?: "Failed to clear chat"
@@ -1356,22 +1565,49 @@ class ChatViewModel @Inject constructor(
         _uiState.update { it.copy(isStreaming = false) }
     }
 
-    private fun handleAcpHistoryLoaded(message: Map<String, Any?>) {
+    private suspend fun handleAcpHistoryLoaded(message: Map<String, Any?>) {
         flushPendingAcpChunk()
         val sessionId = message["sessionId"] as? String ?: return
+        val generation = cacheLoadGeneration
+        val expectedConversation = cachedConversationKey
         val state = _uiState.value
         if (!matchesAcpSession(sessionId, state.sessionName)) return
 
         val messagesData = message["messages"] as? List<*> ?: emptyList<Any>()
-        val parsed = messagesData.mapNotNull {
-            @Suppress("UNCHECKED_CAST")
-            (it as? Map<String, Any?>)?.let { m -> parseMessage(m) }
+        val parsed = withContext(Dispatchers.Default) {
+            messagesData.mapNotNull {
+                @Suppress("UNCHECKED_CAST")
+                (it as? Map<String, Any?>)?.let { m -> parseMessage(m) }
+            }
         }
+        if (generation != cacheLoadGeneration || expectedConversation != cachedConversationKey) return
         val hasMore = message["hasMore"] as? Boolean ?: false
 
-        replaceMessages(parsed)
-        _uiState.update { it.copy(isLoading = false, hasMoreMessages = hasMore) }
+        applyRemoteHistory(parsed, hasMore)
+        _uiState.update { it.copy(isLoading = false, hasMoreMessages = canLoadOlderMessages()) }
+        saveRemoteHistory(parsed, !hasMore)
         reconcileReadHistory(parsed)
+    }
+
+    private fun applyRemoteHistory(parsed: List<ChatMessage>, hasMore: Boolean) {
+        historyPageJob?.cancel()
+        historyPageJob = null
+        pagingGeneration += 1
+        requestedRemotePage = false
+        val previous = _uiState.value.messages.toList()
+        val incomingIds = parsed.mapTo(hashSetOf()) { it.id }
+        val overlaps = previous.any { it.id in incomingIds }
+        remoteGapBoundaryIds = if (hasMore && previous.isNotEmpty() && !overlaps) previous.mapTo(hashSetOf()) { it.id } else emptySet()
+        remoteHasMoreMessages = hasMore
+        if (!hasMore) {
+            hasOlderCachedMessages = false
+            oldestCachedPosition = null
+            cachedHistoryComplete = true
+        }
+        val merged = if (hasMore) com.agentshell.data.repository.mergeCachedMessages(previous, parsed) else parsed
+        remoteLoadedCount = remoteChatHistoryOffset(parsed.size, merged.size, cachedHistoryComplete, overlaps)
+        replaceMessages(merged)
+        _uiState.update { it.copy(isLoadingMore = false, hasMoreMessages = canLoadOlderMessages()) }
     }
 
     // -------------------------------------------------------------------------
@@ -1406,6 +1642,9 @@ class ChatViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        flushPendingAcpChunk()
+        persistChat(immediate = true)
+        chatActivityRepository.setChatOpen(readOwner, null, false)
         chatActivityRepository.setViewing(readOwner, null, false)
         clearPendingAcpChunk()
         super.onCleared()

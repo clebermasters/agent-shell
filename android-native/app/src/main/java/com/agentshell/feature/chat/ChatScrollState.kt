@@ -6,6 +6,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -15,7 +16,7 @@ import androidx.compose.runtime.snapshotFlow
 import com.agentshell.data.model.ChatMessage
 
 /** A separate, small final item also reaches the end of a reply taller than the screen. */
-internal enum class ChatListAnchor { Unread, End }
+internal enum class ChatListAnchor { Unread, Streaming, End }
 
 internal enum class ChatScrollAction { Wait, Pause, OpenUnread, OpenLatest, FollowLatest, ResumeFollowing }
 
@@ -81,7 +82,7 @@ private data class ScrollContent(
     val streaming: Boolean,
     val ready: Boolean,
     val active: Boolean,
-    val unreadId: String?,
+    val unreadIndex: Int,
 )
 
 private data class ScrollObservation(
@@ -109,13 +110,16 @@ internal fun rememberChatScrollState(
     val following = rememberSaveable(chatKey) { mutableStateOf(true) }
     val opened = rememberSaveable(chatKey) { mutableStateOf(false) }
     val state = remember(chatKey, list) { ChatScrollState(list, following, opened) }
-    val content by rememberUpdatedState(ScrollContent(messages, streaming, ready, active, firstUnreadId))
+    val unreadIndex by remember(messages, firstUnreadId) {
+        derivedStateOf { chatUnreadIndex(messages, firstUnreadId) }
+    }
+    val content by rememberUpdatedState(ScrollContent(messages, streaming, ready, active, unreadIndex))
 
     LaunchedEffect(chatKey, list) {
         snapshotFlow {
             val data = content
             val layout = list.layoutInfo
-            val unreadIndex = data.messages.indexOfFirst { it.id == data.unreadId }
+            val unreadIndex = data.unreadIndex
             val endIndex = data.messages.size + (if (unreadIndex >= 0) 1 else 0) +
                 (if (data.streaming) 1 else 0)
             val end = layout.visibleItemsInfo.lastOrNull()

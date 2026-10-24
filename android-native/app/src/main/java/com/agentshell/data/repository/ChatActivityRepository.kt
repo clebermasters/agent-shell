@@ -9,6 +9,7 @@ import com.agentshell.data.model.ChatMessageParser
 import com.agentshell.data.model.ChatReadState
 import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.AgentActivity
+import com.agentshell.data.model.AgentCompletionReceipt
 import com.agentshell.data.model.AgentActivityStatus
 import com.agentshell.data.model.AgentSignalLedger
 import com.agentshell.data.model.AgentSignalKind
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -59,6 +61,9 @@ class ChatActivityRepository @Inject constructor(
     private val _bindings = MutableStateFlow<Map<String, ChatBindingState>>(emptyMap())
     val bindings = _bindings.asStateFlow()
     val agentActivities: StateFlow<Map<String, AgentActivity>> = _agentActivities.asStateFlow()
+    private val _completionReceipts = MutableStateFlow<Map<String, AgentCompletionReceipt>>(emptyMap())
+    val completionReceipts = _completionReceipts.asStateFlow()
+    private val openChats = mutableMapOf<String, String>()
     private val viewers = mutableMapOf<String, String>() // owner -> chat key
     private val monitors = mutableMapOf<String, Pair<SessionSocket, CoroutineScope>>()
     private val lastAlert = mutableMapOf<String, Long>()
@@ -87,12 +92,12 @@ class ChatActivityRepository @Inject constructor(
         if (started) return
         started = true
         scope.launch {
-            _states.value = runCatching { json.decodeFromString<Map<String, ChatReadState>>(preferences.chatReadStates.first()) }
-                .getOrDefault(emptyMap())
+            _states.value = decodeSaved<Map<String, ChatReadState>>(preferences.chatReadStates.first()).orEmpty()
             notificationsEnabled = preferences.chatNotificationsEnabled.first()
             finishedEnabled = preferences.agentFinishedEnabled.first()
             quietEnabled = preferences.agentQuietEnabled.first()
-            signalLedgers = runCatching { json.decodeFromString<Map<String, AgentSignalLedger>>(preferences.agentSignalLedgers.first()) }.getOrDefault(emptyMap())
+            signalLedgers = decodeSaved<Map<String, AgentSignalLedger>>(preferences.agentSignalLedgers.first()).orEmpty()
+            _completionReceipts.value = decodeSaved<Map<String, AgentCompletionReceipt>>(preferences.agentCompletionReceipts.first()).orEmpty()
             ready.complete(Unit)
             launch {
                 preferences.chatNotificationsEnabled.collect { enabled ->
@@ -150,6 +155,22 @@ class ChatActivityRepository @Inject constructor(
         if (viewing && target != null) NotificationHelper.cancelAgentSignal(context, target)
     }
 
+    /** Opening a chat acknowledges completion even when restoring an older scroll position. */
+    fun setChatOpen(owner: String, target: ChatTarget?, open: Boolean) {
+        if (open && target != null) openChats[owner] = target.key else openChats.remove(owner)
+        if (open && target != null) scope.launch {
+            ready.await()
+            signalMutex.withLock {
+                val receipt = _completionReceipts.value[target.key] ?: return@withLock
+                if (!receipt.acknowledged) {
+                    _completionReceipts.value = _completionReceipts.value + (target.key to receipt.copy(acknowledged = true))
+                    preferences.setAgentCompletionReceipts(encodeSaved(_completionReceipts.value))
+                }
+                NotificationHelper.cancelAgentSignal(context, target)
+            }
+        }
+    }
+
     fun setListViewing(owner: String, viewing: Boolean) {
         if (viewing) listViewers.add(owner) else listViewers.remove(owner)
         syncMonitors()
@@ -202,12 +223,20 @@ class ChatActivityRepository @Inject constructor(
 
     private suspend fun update(target: ChatTarget, transform: (ChatReadState) -> ChatReadState): ChatReadState = mutex.withLock {
         val current = _states.value[target.key] ?: ChatReadState(target)
-        val next = transform(current)
+        val next = withContext(Dispatchers.Default) { transform(current) }
         if (_states.value[target.key] != next) {
             _states.value = _states.value + (target.key to next)
-            preferences.setChatReadStates(json.encodeToString(_states.value))
+            preferences.setChatReadStates(encodeSaved(_states.value))
         }
         next
+    }
+
+    private suspend inline fun <reified T> decodeSaved(value: String): T? = withContext(Dispatchers.Default) {
+        runCatching { json.decodeFromString<T>(value) }.getOrNull()
+    }
+
+    private suspend inline fun <reified T> encodeSaved(value: T): String = withContext(Dispatchers.Default) {
+        json.encodeToString(value)
     }
 
     private fun notifyReply(state: ChatReadState, preview: String, silent: Boolean = false): Boolean {
@@ -261,7 +290,9 @@ class ChatActivityRepository @Inject constructor(
             }
             "chat-history", "acp-history-loaded" -> {
                 val target = eventTarget(hostId, message) ?: watchedTarget ?: return
-                val messages = (message["messages"] as? List<Map<String, Any?>>)?.map(ChatMessageParser::parse) ?: emptyList()
+                val messages = withContext(Dispatchers.Default) {
+                    (message["messages"] as? List<Map<String, Any?>>)?.map(ChatMessageParser::parse) ?: emptyList()
+                }
                 history(target, messages)
             }
             "acp-sessions-listed" -> {
@@ -275,7 +306,7 @@ class ChatActivityRepository @Inject constructor(
             "chat-event" -> {
                 val target = eventTarget(hostId, message) ?: return
                 val raw = message["message"] as? Map<String, Any?> ?: return
-                val parsed = ChatMessageParser.parse(raw)
+                val parsed = withContext(Dispatchers.Default) { ChatMessageParser.parse(raw) }
                 var incoming = false
                 val state = update(target) {
                     val result = it.receive(parsed)
@@ -373,11 +404,20 @@ class ChatActivityRepository @Inject constructor(
                 if (_bindings.value[target.key]?.canSend == false) return@withLock
                 val conversation = _states.value[target.key]?.conversationKey.orEmpty()
                 val receiptKey = if (conversation.isBlank()) target.key else "${target.key}:$conversation"
+                AgentCompletionReceipt.from(target, next)?.let { completion ->
+                    val previous = _completionReceipts.value[target.key]
+                    if (previous?.eventId != completion.eventId && (previous == null || completion.finishedAt >= previous.finishedAt)) {
+                        // A later turn cannot clear an unread completion; only opening chat can.
+                        val pending = previous?.acknowledged == false || target.key !in openChats.values
+                        _completionReceipts.value = _completionReceipts.value + (target.key to completion.copy(acknowledged = !pending))
+                        preferences.setAgentCompletionReceipts(encodeSaved(_completionReceipts.value))
+                    }
+                }
                 val ledger = signalLedgers[receiptKey] ?: AgentSignalLedger()
                 val (updated, signal) = ledger.observe(next)
                 if (updated != ledger) {
                     signalLedgers = (signalLedgers - receiptKey).entries.toList().takeLast(255).associate { it.toPair() } + (receiptKey to updated)
-                    preferences.setAgentSignalLedgers(json.encodeToString(signalLedgers))
+                    preferences.setAgentSignalLedgers(encodeSaved(signalLedgers))
                 }
                 if (signal != null && !isViewing(target) && ((signal.kind == AgentSignalKind.FINISHED && finishedEnabled) || (signal.kind == AgentSignalKind.QUIET && quietEnabled))) {
                     NotificationHelper.showAgentSignal(context, target, signal)

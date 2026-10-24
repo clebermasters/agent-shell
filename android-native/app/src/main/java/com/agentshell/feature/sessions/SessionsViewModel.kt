@@ -10,6 +10,8 @@ import com.agentshell.data.model.SessionTag
 import com.agentshell.data.model.SessionTagAssignment
 import com.agentshell.data.model.TmuxSession
 import com.agentshell.data.model.AgentActivity
+import com.agentshell.data.model.AgentCompletionReceipt
+import com.agentshell.data.model.ChatReadState
 import com.agentshell.data.repository.ChatActivityRepository
 import com.agentshell.data.repository.HostRepository
 import com.agentshell.data.remote.WebSocketService
@@ -37,10 +39,14 @@ import com.agentshell.data.remote.setFavoriteTags
 import com.agentshell.data.remote.updateFavorite
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -87,6 +93,9 @@ data class SessionsUiState(
     val tmuxActivities: Map<String, AgentActivity> = emptyMap(),
     val directActivities: Map<String, AgentActivity> = emptyMap(),
     val activityNow: Long = 0,
+    val isConnected: Boolean = false,
+    val finishedWindowIndices: Map<String, Int> = emptyMap(),
+    val cachedWindowIndices: Map<String, List<Int>> = emptyMap(),
 )
 
 /** Emitted when a new ACP session is created so the UI can navigate to it. */
@@ -102,6 +111,44 @@ private data class PendingTagSnapshot(
     val assignments: List<SessionTagAssignment>? = null,
 )
 
+internal data class SessionActivitySummary(
+    val tmux: Map<String, AgentActivity>,
+    val direct: Map<String, AgentActivity>,
+    val finishedWindows: Map<String, Int>,
+)
+
+/** Reuse the repositories' stable keys instead of re-hashing every target on every heartbeat. */
+internal fun summarizeSessionActivities(
+    hostId: String?,
+    activities: Map<String, AgentActivity>,
+    states: Map<String, ChatReadState>,
+    completions: Map<String, AgentCompletionReceipt>,
+    now: Long,
+): SessionActivitySummary {
+    val targets = linkedMapOf<String, com.agentshell.data.model.ChatTarget>()
+    for ((key, state) in states) if (state.target.hostId == hostId) targets[key] = state.target
+    for ((key, receipt) in completions) if (receipt.target.hostId == hostId) targets.putIfAbsent(key, receipt.target)
+    val tmux = linkedMapOf<String, AgentActivity>()
+    val direct = linkedMapOf<String, AgentActivity>()
+    val newestCompletion = mutableMapOf<String, AgentCompletionReceipt>()
+    for ((key, target) in targets) {
+        val completion = completions[key]?.takeUnless { it.acknowledged }
+        val activity = completion?.asActivity() ?: activities[key]?.let {
+            if (it.expired(now)) it.unknown("Live status is unavailable") else it
+        }
+        if (activity != null) {
+            if (target.isAcp) direct[target.sessionName] = activity
+            else if (tmux[target.sessionName]?.let { activityPriority(it) >= activityPriority(activity) } != true) {
+                tmux[target.sessionName] = activity
+            }
+        }
+        if (!target.isAcp && completion != null &&
+            (newestCompletion[target.sessionName]?.finishedAt ?: Long.MIN_VALUE) < completion.finishedAt
+        ) newestCompletion[target.sessionName] = completion
+    }
+    return SessionActivitySummary(tmux, direct, newestCompletion.mapValues { it.value.target.windowIndex })
+}
+
 enum class FavoriteLaunchTarget {
     TMUX,
     ACP,
@@ -115,6 +162,7 @@ class SessionsViewModel @Inject constructor(
     private val sessionTagDao: SessionTagDao,
     private val activityRepository: ChatActivityRepository,
     private val hostRepository: HostRepository,
+    private val offlineCache: com.agentshell.data.repository.OfflineCacheRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionsUiState())
@@ -129,20 +177,26 @@ class SessionsViewModel @Inject constructor(
     private var activityTicker: Job? = null
 
     init {
+        viewModelScope.launch {
+            offlineCache.sessions.collect { cached ->
+                _uiState.update { it.copy(tmuxSessions = cached.tmux, acpSessions = cached.acp, cachedWindowIndices = cached.windows, isLoading = false) }
+            }
+        }
         observeCachedFavorites()
         observeCachedTags()
         observeMessages()
         observeConnection()
         viewModelScope.launch {
-            combine(activityRepository.agentActivities, activityRepository.states, hostRepository.getSelectedHost()) { activities, states, host ->
-                val now = android.os.SystemClock.elapsedRealtime()
-                val byTarget = states.values.filter { it.target.hostId == host?.id }.mapNotNull { state ->
-                    activities[state.target.key]?.let { state.target to if (it.expired(now)) it.unknown("Live status is unavailable") else it }
-                }
-                val tmux = byTarget.filter { !it.first.isAcp }.groupBy { it.first.sessionName }.mapValues { (_, values) -> values.maxBy { activityPriority(it.second) }.second }
-                val direct = byTarget.filter { it.first.isAcp }.associate { it.first.sessionName to it.second }
-                tmux to direct
-            }.collect { (tmux, direct) -> _uiState.update { it.copy(tmuxActivities = tmux, directActivities = direct) } }
+            combine(
+                activityRepository.agentActivities,
+                activityRepository.states,
+                hostRepository.getSelectedHost().distinctUntilChangedBy { it?.id },
+                activityRepository.completionReceipts,
+            ) { activities, states, host, completions ->
+                summarizeSessionActivities(host?.id, activities, states, completions, android.os.SystemClock.elapsedRealtime())
+            }.distinctUntilChanged().flowOn(Dispatchers.Default).collect { summary ->
+                _uiState.update { it.copy(tmuxActivities = summary.tmux, directActivities = summary.direct, finishedWindowIndices = summary.finishedWindows) }
+            }
         }
     }
 
@@ -185,36 +239,6 @@ class SessionsViewModel @Inject constructor(
         viewModelScope.launch {
             wsService.messages.collect { message ->
                 when (message["type"] as? String) {
-                    "sessions-list", "session_list" -> {
-                        @Suppress("UNCHECKED_CAST")
-                        val rawList = message["sessions"] as? List<Map<String, Any?>> ?: emptyList()
-                        val sessions = rawList.map { s ->
-                            TmuxSession(
-                                name = s["name"] as? String ?: "",
-                                attached = (s["attached"] as? Boolean) ?: false,
-                                windows = (s["windows"] as? Number)?.toInt() ?: 1,
-                                created = s["created"] as? String,
-                                tool = s["tool"] as? String,
-                            )
-                        }
-                        _uiState.update { it.copy(tmuxSessions = sessions, isLoading = false) }
-                    }
-
-                    "acp-sessions-listed" -> {
-                        @Suppress("UNCHECKED_CAST")
-                        val rawList = message["sessions"] as? List<Map<String, Any?>> ?: emptyList()
-                        val sessions = rawList.map { s ->
-                            AcpSession(
-                                sessionId = s["sessionId"] as? String ?: "",
-                                cwd = s["cwd"] as? String ?: "",
-                                title = s["title"] as? String ?: "",
-                                updatedAt = s["updatedAt"] as? String ?: "",
-                                provider = s["provider"] as? String,
-                            )
-                        }
-                        _uiState.update { it.copy(acpSessions = sessions, isLoading = false) }
-                    }
-
                     "acp-session-created" -> {
                         val sessionId = message["sessionId"] as? String
                         val cwd = message["cwd"] as? String
@@ -502,7 +526,9 @@ class SessionsViewModel @Inject constructor(
     private fun observeConnection() {
         viewModelScope.launch {
             wsService.connectionStatus.collect { status ->
-                if (status == com.agentshell.data.model.ConnectionStatus.CONNECTED) {
+                val connected = status == com.agentshell.data.model.ConnectionStatus.CONNECTED
+                _uiState.update { it.copy(isConnected = connected, isLoading = if (connected) it.isLoading else false) }
+                if (connected) {
                     requestSessions(
                         includeMetadata = true,
                         showLoading = _uiState.value.tmuxSessions.isEmpty() && _uiState.value.acpSessions.isEmpty(),
@@ -517,7 +543,11 @@ class SessionsViewModel @Inject constructor(
         showLoading: Boolean = true,
     ) {
         scheduledSessionRefreshJob?.cancel()
-        if (showLoading) {
+        if (!wsService.isConnected) {
+            _uiState.update { it.copy(isLoading = false) }
+            return
+        }
+        if (showLoading && _uiState.value.tmuxSessions.isEmpty() && _uiState.value.acpSessions.isEmpty()) {
             _uiState.update { it.copy(isLoading = true) }
         }
         wsService.requestSessions()

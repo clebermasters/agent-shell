@@ -150,6 +150,50 @@ class ChatActivityRepositoryTest {
             "turnId" to "turn-one", "finishedAt" to if (finished) 61_000L else null, "completionReason" to if (finished) "completed" else null, "quietAt" to if (quiet) 61_000L else null),
     )
 
+    @Test fun finishedBadgeSurvivesRestartAndListViewingUntilChatIsOpened() = runTest {
+        val repo = repository()
+        repo.register(target)
+        repo.handleAgentActivity(target.hostId, signalActivity("idle", 1, finished = true))
+        repo.awaitAgentSignals()
+        assertFalse(repo.completionReceipts.value[target.key]!!.acknowledged)
+        repo.setListViewing("list", true)
+        repo.invalidateActivity(target)
+        repo.handleAgentActivity(target.hostId, signalActivity("working", 2))
+        repo.awaitAgentSignals()
+        assertFalse(repo.completionReceipts.value[target.key]!!.acknowledged)
+        assertTrue(repo.completionReceipts.value[target.key]!!.asActivity().unreadCompletion)
+        repo.close()
+
+        val restored = repository()
+        restored.register(target)
+        assertFalse(restored.completionReceipts.value[target.key]!!.acknowledged)
+        restored.setChatOpen("chat", target, true)
+        restored.awaitAgentSignals()
+        assertTrue(restored.completionReceipts.value[target.key]!!.acknowledged)
+        restored.setChatOpen("chat", null, false)
+        restored.handleAgentActivity(target.hostId, signalActivity("idle", 3, finished = true))
+        restored.awaitAgentSignals()
+        assertTrue(restored.completionReceipts.value[target.key]!!.acknowledged)
+        restored.close()
+        val reopened = repository()
+        reopened.register(target)
+        assertTrue(reopened.completionReceipts.value[target.key]!!.acknowledged)
+    }
+
+    @Test fun completionWhileChatIsOpenIsAcknowledgedAndOtherChatsStayUnread() = runTest {
+        val repo = repository()
+        repo.register(target)
+        repo.setChatOpen("chat", target, true)
+        repo.handleAgentActivity(target.hostId, signalActivity("idle", 1, finished = true))
+        repo.awaitAgentSignals()
+        assertTrue(repo.completionReceipts.value[target.key]!!.acknowledged)
+        val other = target.copy(hostId = "other-server")
+        repo.register(other)
+        repo.handleAgentActivity(other.hostId, signalActivity("idle", 1, finished = true))
+        repo.awaitAgentSignals()
+        assertFalse(repo.completionReceipts.value[other.key]!!.acknowledged)
+    }
+
     @Test fun finishedAlertIsDurableAndDoesNotRepeatAfterReconnectOrRestart() = runTest {
         val repo = repository(); repo.register(target)
         repo.handleAgentActivity(target.hostId, signalActivity("working", 1))

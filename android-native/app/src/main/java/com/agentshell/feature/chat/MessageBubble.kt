@@ -64,6 +64,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -105,11 +106,13 @@ import io.noties.markwon.linkify.LinkifyPlugin
 import coil.request.ImageRequest
 import com.agentshell.feature.alerts.InlineFileViewer
 import com.agentshell.feature.alerts.supportsInlineFilePreview
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.agentshell.core.config.BuildConfig
+import com.agentshell.data.repository.OfflineAttachmentStore
 import com.agentshell.data.services.AudioPlayerManager
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -844,6 +847,16 @@ private fun ToolResultBlock(
 // ---------------------------------------------------------------------------
 
 @Composable
+private fun rememberOfflineAttachmentUrl(url: String?): String? {
+    val context = LocalContext.current.applicationContext
+    val resolved by produceState<String?>(null, context, url) {
+        value = null
+        if (url != null) OfflineAttachmentStore.observeUrl(context, url).collect { value = it }
+    }
+    return resolved
+}
+
+@Composable
 private fun ImageBlock(block: ChatBlock, fileBaseUrl: String = "") {
     val imageUrl = if (fileBaseUrl.isNotBlank() && !block.id.isNullOrBlank()) {
         "$fileBaseUrl/${block.id}"
@@ -853,8 +866,9 @@ private fun ImageBlock(block: ChatBlock, fileBaseUrl: String = "") {
     val context = LocalContext.current
     var showFullScreen by remember { mutableStateOf(false) }
 
-    val imageRequest = remember(imageUrl) {
-        imageUrl?.let {
+    val resolvedUrl = rememberOfflineAttachmentUrl(imageUrl)
+    val imageRequest = remember(resolvedUrl) {
+        resolvedUrl?.let {
             ImageRequest.Builder(context)
                 .data(it)
                 .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
@@ -891,6 +905,7 @@ private fun AudioBlock(
 ) {
     val audioId = block.id ?: return
     val audioUrl = if (fileBaseUrl.isNotBlank()) "$fileBaseUrl/$audioId" else audioId
+    val resolvedUrl = rememberOfflineAttachmentUrl(audioUrl) ?: audioUrl
 
     val state by audioPlayerManager.state.collectAsStateWithLifecycle()
     val isThisActive = state.activeAudioId == audioId
@@ -916,7 +931,7 @@ private fun AudioBlock(
             FilledIconButton(
                 onClick = {
                     if (isPlaying) audioPlayerManager.pause()
-                    else audioPlayerManager.play(audioId, audioUrl)
+                    else audioPlayerManager.play(audioId, resolvedUrl)
                 },
                 modifier = Modifier.size(40.dp),
             ) {
@@ -1020,6 +1035,7 @@ private fun FileBlock(block: ChatBlock, fileBaseUrl: String = "") {
                     isDownloading = true
                     coroutineScope.launch {
                         val bytes = downloadFileBytes(
+                            context = context,
                             url = fileUrl!!,
                             onError = { message ->
                                 Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
@@ -1082,10 +1098,12 @@ private fun FileBlock(block: ChatBlock, fileBaseUrl: String = "") {
 }
 
 private suspend fun downloadFileBytes(
+    context: android.content.Context,
     url: String,
     onError: (String) -> Unit,
 ): ByteArray? = withContext(Dispatchers.IO) {
     runCatching {
+        OfflineAttachmentStore.cachedFile(context, url)?.let { return@runCatching it.readBytes() }
         val client = OkHttpClient()
         val request = Request.Builder()
             .url(url)
@@ -1112,9 +1130,10 @@ private suspend fun downloadFileBytes(
 @Composable
 private fun FullScreenImageDialog(imageUrl: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val imageRequest = remember(imageUrl) {
+    val resolvedUrl = rememberOfflineAttachmentUrl(imageUrl)
+    val imageRequest = remember(resolvedUrl) {
         ImageRequest.Builder(context)
-            .data(imageUrl)
+            .data(resolvedUrl)
             .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
             .build()
     }
@@ -1165,6 +1184,7 @@ private fun downloadAndOpenFile(
     Thread {
         try {
             val bytes = runCatching {
+                OfflineAttachmentStore.cachedFile(context, url)?.let { return@runCatching it.readBytes() }
                 val client = OkHttpClient()
                 val request = Request.Builder()
                     .url(url)

@@ -15,6 +15,9 @@ import com.agentshell.data.model.SessionTagAssignment
 @Database(
     entities = [
         Host::class,
+        CachedSession::class,
+        CachedConversation::class,
+        CachedChatMessage::class,
         PanelLayoutEntity::class,
         PanelEntity::class,
         FavoriteSession::class,
@@ -22,10 +25,11 @@ import com.agentshell.data.model.SessionTagAssignment
         SessionTag::class,
         SessionTagAssignment::class,
     ],
-    version = 8,
+    version = 10,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
+    abstract fun offlineCacheDao(): OfflineCacheDao
     abstract fun hostDao(): HostDao
     abstract fun panelLayoutDao(): PanelLayoutDao
     abstract fun favoriteSessionDao(): FavoriteSessionDao
@@ -33,6 +37,23 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sessionTagDao(): SessionTagDao
 
     companion object {
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_cached_chat_messages_targetKey_position ON cached_chat_messages (targetKey, position)")
+                // Version 9 could mark a partial refresh complete despite a gap.
+                // Retain every saved row and revalidate continuity once in the background.
+                db.execSQL("UPDATE cached_conversations SET complete = 0")
+            }
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS cached_sessions (hostId TEXT NOT NULL, kind TEXT NOT NULL, sessionId TEXT NOT NULL, position INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(hostId, kind, sessionId))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS cached_conversations (targetKey TEXT NOT NULL PRIMARY KEY, conversationKey TEXT NOT NULL, tool TEXT, cwd TEXT NOT NULL, complete INTEGER NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS cached_chat_messages (targetKey TEXT NOT NULL, messageId TEXT NOT NULL, position INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(targetKey, messageId))")
+            }
+        }
+
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE hosts ADD COLUMN tls INTEGER DEFAULT NULL")

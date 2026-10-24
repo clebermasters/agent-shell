@@ -137,6 +137,7 @@ fun SessionsScreen(
     var showTagsSheet by rememberSaveable { mutableStateOf(false) }
     var tagAssignSession by remember { mutableStateOf<String?>(null) }
     var pendingExportJson by remember { mutableStateOf<String?>(null) }
+    var windowPickerSession by remember { mutableStateOf<String?>(null) }
 
     // Export launcher — user picks where to save the file
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -318,8 +319,16 @@ fun SessionsScreen(
                         activities = uiState.tmuxActivities,
                         activityNow = uiState.activityNow,
                         isLoading = uiState.isLoading,
-                        onTap = { session -> onNavigateToTerminal(session.name) },
-                        onChat = { session -> onNavigateToChat(session.name, 0) },
+                        onTap = { session ->
+                            val finishedWindow = uiState.finishedWindowIndices[session.name]
+                            if (!uiState.isConnected || finishedWindow != null) onNavigateToChat(session.name, finishedWindow ?: uiState.cachedWindowIndices[session.name]?.firstOrNull() ?: 0)
+                            else onNavigateToTerminal(session.name)
+                        },
+                        onChat = { session ->
+                            val windows = uiState.cachedWindowIndices[session.name].orEmpty()
+                            if (windows.size > 1) windowPickerSession = session.name
+                            else onNavigateToChat(session.name, windows.firstOrNull() ?: 0)
+                        },
                         onKill = { session -> viewModel.killSession(session.name) },
                         onGit = { session -> onNavigateToGit(session.name, "", false) },
                         sessionTagMap = uiState.sessionTagMap,
@@ -390,6 +399,23 @@ fun SessionsScreen(
                 }
             }
         }
+    }
+
+    windowPickerSession?.let { sessionName ->
+        AlertDialog(
+            onDismissRequest = { windowPickerSession = null },
+            title = { Text("Open chat · $sessionName") },
+            text = {
+                Column {
+                    uiState.cachedWindowIndices[sessionName].orEmpty().forEach { index ->
+                        TextButton(onClick = { windowPickerSession = null; onNavigateToChat(sessionName, index) }) {
+                            Text("Window $index")
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { windowPickerSession = null }) { Text("Cancel") } },
+        )
     }
 
     if (showCreateDialog) {

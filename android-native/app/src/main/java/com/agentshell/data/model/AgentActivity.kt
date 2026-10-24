@@ -20,6 +20,7 @@ data class AgentActivity(
     val finishedAt: Long? = null,
     val completionReason: String? = null,
     val quietAt: Long? = null,
+    val unreadCompletion: Boolean = false,
 ) {
     fun expired(now: Long): Boolean = receivedAt > 0 && now - receivedAt > 15_000
     fun unknown(reason: String) = copy(status = AgentActivityStatus.UNKNOWN, detail = reason, startedAt = null, source = "none", confidence = "unknown", quietAt = null)

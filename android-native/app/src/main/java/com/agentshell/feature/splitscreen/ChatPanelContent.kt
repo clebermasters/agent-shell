@@ -28,6 +28,7 @@ import com.agentshell.data.model.ChatMessageParser
 import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.ConnectionStatus
+import com.agentshell.feature.chat.ChatListAnchor
 import com.agentshell.feature.chat.AgentActivityBar
 import com.agentshell.feature.chat.preferRemoteChatHistory
 import com.agentshell.feature.chat.remoteChatHistoryOffset
@@ -539,7 +540,7 @@ fun ChatPanelContent(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             if (showOlderHistory) {
-                item(key = OlderHistoryRow) {
+                item(key = ChatListAnchor.OlderHistory) {
                     TextButton(onClick = ::loadOlderHistory, enabled = !history.loadingOlder, modifier = Modifier.fillMaxWidth()) {
                         Text(if (history.loadingOlder) "Loading older messages…" else "Load older messages")
                     }
@@ -643,7 +644,6 @@ fun ChatPanelContent(
     }
 }
 
-private data object OlderHistoryRow
 
 // ── Message Rendering ───────────────────────────────────────────────────────
 

@@ -15,8 +15,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import com.agentshell.data.model.ChatMessage
 
-/** A separate, small final item also reaches the end of a reply taller than the screen. */
-internal enum class ChatListAnchor { Unread, Streaming, End }
+/** Non-message rows use keys that remain distinct from message identifiers. */
+// Lazy list keys are saved in Android Bundles. Enum anchors are Serializable
+// and stay distinct from String message IDs used by viewport read tracking.
+internal enum class ChatListAnchor { Unread, Streaming, End, OlderHistory }
 
 internal enum class ChatScrollAction { Wait, Pause, OpenUnread, OpenLatest, FollowLatest, ResumeFollowing }
 

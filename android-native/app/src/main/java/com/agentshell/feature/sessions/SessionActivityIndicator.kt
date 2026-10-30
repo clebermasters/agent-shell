@@ -20,13 +20,12 @@ import androidx.compose.ui.unit.sp
 import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.AgentActivityStatus
 
-internal fun activityPriority(activity: AgentActivity): Int = if (activity.unreadCompletion) 6 else when (activity.status) {
-    AgentActivityStatus.WORKING -> 5
-    AgentActivityStatus.WAITING -> 4
-    AgentActivityStatus.RECENT_ACTIVITY -> 3
-    AgentActivityStatus.FAILED -> 2
-    AgentActivityStatus.IDLE -> 1
-    AgentActivityStatus.UNKNOWN -> 0
+internal fun activityPriority(activity: AgentActivity): Int = when (activity.status) {
+    AgentActivityStatus.WORKING -> 7
+    AgentActivityStatus.WAITING -> 6
+    AgentActivityStatus.RECENT_ACTIVITY -> 5
+    AgentActivityStatus.FAILED -> 4
+    else -> if (activity.unreadCompletion) 3 else if (activity.status == AgentActivityStatus.IDLE) 1 else 0
 }
 
 @Composable
@@ -90,6 +89,10 @@ internal fun SessionActivityBadge(activity: AgentActivity?, now: Long) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 3.dp)) {
         Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         elapsed?.let { Text(if (it >= 3600) "${it / 3600}h ${(it % 3600) / 60}m" else "${it / 60}m ${it % 60}s", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, maxLines = 1) }
+        if (activity.unreadCompletion && activity.status != AgentActivityStatus.IDLE) {
+            Text("Previous run finished", color = Color(0xFF65B98A), fontSize = 10.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
         if (activity.confidence in setOf("inferred", "estimated") && activity.status in setOf(AgentActivityStatus.WORKING, AgentActivityStatus.RECENT_ACTIVITY)) {
             Text("Estimated", fontSize = 10.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1)
         }

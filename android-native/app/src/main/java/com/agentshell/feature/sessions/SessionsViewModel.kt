@@ -10,6 +10,7 @@ import com.agentshell.data.model.SessionTag
 import com.agentshell.data.model.SessionTagAssignment
 import com.agentshell.data.model.TmuxSession
 import com.agentshell.data.model.AgentActivity
+import com.agentshell.data.model.AgentActivityStatus
 import com.agentshell.data.model.AgentCompletionReceipt
 import com.agentshell.data.model.ChatReadState
 import com.agentshell.data.repository.ChatActivityRepository
@@ -133,8 +134,14 @@ internal fun summarizeSessionActivities(
     val newestCompletion = mutableMapOf<String, AgentCompletionReceipt>()
     for ((key, target) in targets) {
         val completion = completions[key]?.takeUnless { it.acknowledged }
-        val activity = completion?.asActivity() ?: activities[key]?.let {
+        val live = activities[key]?.let {
             if (it.expired(now)) it.unknown("Live status is unavailable") else it
+        }
+        // An unread completion belongs to a previous turn, not the live status.
+        val activity = when {
+            completion == null -> live
+            live == null || live.status == AgentActivityStatus.IDLE -> completion.asActivity()
+            else -> live.copy(unreadCompletion = true)
         }
         if (activity != null) {
             if (target.isAcp) direct[target.sessionName] = activity
@@ -145,6 +152,10 @@ internal fun summarizeSessionActivities(
         if (!target.isAcp && completion != null &&
             (newestCompletion[target.sessionName]?.finishedAt ?: Long.MIN_VALUE) < completion.finishedAt
         ) newestCompletion[target.sessionName] = completion
+    }
+    // Keep reminders from other windows without replacing the active window.
+    for (session in newestCompletion.keys) {
+        tmux[session]?.let { tmux[session] = it.copy(unreadCompletion = true) }
     }
     return SessionActivitySummary(tmux, direct, newestCompletion.mapValues { it.value.target.windowIndex })
 }

@@ -14,7 +14,36 @@ use crate::acp::session::{CreateSessionResult, ListSessionsResult, SessionInfo};
 use crate::chat_log::{ChatMessage, ContentBlock};
 use crate::types::PermissionOption;
 
-type RequestCallback = Box<dyn FnOnce(Result<sj::Value, String>) + Send + 'static>;
+enum RpcResponse {
+    Value(sj::Value),
+    Spool(tempfile::NamedTempFile),
+}
+#[derive(Deserialize)]
+struct RpcEnvelopeHeader { id:Option<u64>, method:Option<String>, error:Option<RpcResponseError> }
+#[derive(Deserialize)]
+struct RpcResponseError { message:String }
+type RequestCallback = Box<dyn FnOnce(Result<RpcResponse, String>) + Send + 'static>;
+struct PendingRequest {
+    callback: RequestCallback,
+    history: bool,
+}
+struct PendingGuard {
+    pending: Arc<Mutex<HashMap<u64, PendingRequest>>>,
+    id: u64,
+}
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.pending.try_lock() {
+            pending.remove(&self.id);
+        } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let pending = self.pending.clone();
+            let id = self.id;
+            runtime.spawn(async move {
+                pending.lock().await.remove(&id);
+            });
+        }
+    }
+}
 
 const CODEX_PROVIDER: &str = "codex";
 const CODEX_YOLO_APPROVAL_POLICY: &str = "never";
@@ -24,7 +53,7 @@ pub struct CodexAppClient {
     child: Arc<Mutex<Option<Child>>>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     request_id: Arc<Mutex<u64>>,
-    pending: Arc<Mutex<HashMap<u64, RequestCallback>>>,
+    pending: Arc<Mutex<HashMap<u64, PendingRequest>>>,
     known_sessions: Arc<Mutex<HashMap<String, SessionInfo>>>,
     event_tx: mpsc::Sender<CodexEvent>,
     initialized: Arc<RwLock<bool>>,
@@ -43,6 +72,10 @@ pub enum CodexEvent {
     SessionUpdate {
         session_id: String,
         update: CodexSessionUpdate,
+    },
+    ArchivedMessage {
+        session_id: String,
+        message: ChatMessage,
     },
     PermissionRequest {
         request_id: String,
@@ -288,35 +321,25 @@ impl CodexAppClient {
             .await
     }
 
-    pub async fn read_thread_messages(&self, session_id: &str) -> Result<Vec<ChatMessage>, String> {
+    pub async fn read_thread_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<tempfile::NamedTempFile, String> {
         let raw_id = decode_external_session_id(session_id).1;
-        let response = match self
-            .send_request_typed::<ThreadReadResponse>(
-                "thread/read",
-                json!({
-                    "threadId": raw_id,
-                    "includeTurns": true,
-                }),
-            )
-            .await
-        {
-            Ok(response) => response,
-            Err(error)
-                if error.contains("is not materialized yet; includeTurns is unavailable before first user message") =>
-            {
-                return Ok(Vec::new());
+        match self.send_request_response("thread/read", json!({"threadId":raw_id,"includeTurns":true})).await {
+            Ok(RpcResponse::Spool(file)) => Ok(file),
+            Ok(RpcResponse::Value(value)) => {
+                let mut file=tempfile::NamedTempFile::new().map_err(|e|e.to_string())?;
+                serde_json::to_writer(file.as_file_mut(), &json!({"result":value})).map_err(|e|e.to_string())?;
+                Ok(file)
             }
-            Err(error) => return Err(error),
-        };
-
-        let mut messages = Vec::new();
-        for turn in response.thread.turns {
-            let timestamp = turn_timestamp(&turn);
-            for item in turn.items {
-                messages.extend(item_to_history_messages(item, timestamp));
+            Err(error) if error.contains("is not materialized yet; includeTurns is unavailable before first user message") => {
+                let mut file=tempfile::NamedTempFile::new().map_err(|e|e.to_string())?;
+                serde_json::to_writer(file.as_file_mut(), &json!({"result":{"thread":{"turns":[]}}})).map_err(|e|e.to_string())?;
+                Ok(file)
             }
+            Err(error)=>Err(error),
         }
-        Ok(messages)
     }
 
     pub async fn respond_to_permission(
@@ -461,21 +484,74 @@ impl CodexAppClient {
         let permission_request_seq = self.permission_request_seq.clone();
 
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
+            let mut reader = BufReader::new(stdout);
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-
-                tracing::debug!("Codex app-server stdout: {}", trimmed);
-
-                let Ok(value) = serde_json::from_str::<sj::Value>(trimmed) else {
-                    tracing::warn!("Failed to parse Codex app-server line: {}", trimmed);
-                    continue;
-                };
-
+            while let Ok(Some(response)) = read_rpc_line(&mut reader).await {
+                let value =
+                    match response {
+                        RpcResponse::Value(value) => value,
+                        RpcResponse::Spool(file) => {
+                            let header = serde_json::from_reader::<_, RpcEnvelopeHeader>(
+                                std::io::BufReader::new(match file.reopen() {
+                                    Ok(f) => f,
+                                    Err(_) => continue,
+                                }),
+                            );
+                            if let Ok(RpcEnvelopeHeader {
+                                id: Some(id),
+                                method: None,
+                                error,
+                            }) = header
+                            {
+                                let request = pending.lock().await.remove(&id);
+                                if let Some(request) = request {
+                                    if let Some(error) = error {
+                                        (request.callback)(Err(error.message));
+                                    } else if request.history {
+                                        (request.callback)(Ok(RpcResponse::Spool(file)));
+                                    } else {
+                                        let result = file
+                                            .reopen()
+                                            .map_err(|e| e.to_string())
+                                            .and_then(|f| {
+                                                serde_json::from_reader::<_, sj::Value>(
+                                                    std::io::BufReader::new(f),
+                                                )
+                                                .map_err(|e| e.to_string())
+                                            })
+                                            .map(|mut v| RpcResponse::Value(v["result"].take()));
+                                        (request.callback)(result);
+                                    }
+                                }
+                                continue;
+                            }
+                            if file
+                                .as_file()
+                                .metadata()
+                                .map(|m| m.len() > crate::history::INLINE_RECORD_BYTES as u64)
+                                .unwrap_or(false)
+                            {
+                                if let Ok(Some((session_id, message))) =
+                                    archive_large_notification(file.path())
+                                {
+                                    let _ = event_tx
+                                        .send(CodexEvent::ArchivedMessage {
+                                            session_id,
+                                            message,
+                                        })
+                                        .await;
+                                    continue;
+                                }
+                            }
+                            match file.reopen().ok().and_then(|f| {
+                                serde_json::from_reader(std::io::BufReader::new(f)).ok()
+                            }) {
+                                Some(v) => v,
+                                None => continue,
+                            }
+                        }
+                    };
+                /* Messages are logged by type, never by history body. */
                 if is_response_message(&value) {
                     handle_response_message(value, &pending).await;
                     continue;
@@ -505,7 +581,7 @@ impl CodexAppClient {
             {
                 let mut pending = pending.lock().await;
                 for (_, callback) in pending.drain() {
-                    callback(Err("Codex app-server exited".to_string()));
+                    (callback.callback)(Err("Codex app-server exited".to_string()));
                 }
             }
             *initialized.write().await = false;
@@ -519,6 +595,24 @@ impl CodexAppClient {
         method: &str,
         params: sj::Value,
     ) -> Result<sj::Value, String> {
+        match self.send_request_response(method, params).await? {
+            RpcResponse::Value(value) => Ok(value),
+            RpcResponse::Spool(file) => file
+                .reopen()
+                .map_err(|e| e.to_string())
+                .and_then(|f| {
+                    serde_json::from_reader::<_, sj::Value>(std::io::BufReader::new(f))
+                        .map_err(|e| e.to_string())
+                })
+                .map(|mut v| v["result"].take()),
+        }
+    }
+
+    async fn send_request_response(
+        &self,
+        method: &str,
+        params: sj::Value,
+    ) -> Result<RpcResponse, String> {
         let id = {
             let mut guard = self.request_id.lock().await;
             let id = *guard;
@@ -538,12 +632,19 @@ impl CodexAppClient {
             let mut pending = self.pending.lock().await;
             pending.insert(
                 id,
-                Box::new(move |result| {
-                    let _ = tx.send(result);
-                }),
+                PendingRequest {
+                    history: method == "thread/read",
+                    callback: Box::new(move |result| {
+                        let _ = tx.send(result);
+                    }),
+                },
             );
         }
 
+        let _cleanup = PendingGuard {
+            pending: self.pending.clone(),
+            id,
+        };
         if let Err(err) = self
             .write_value(&json!({
                 "jsonrpc": "2.0",
@@ -602,6 +703,157 @@ impl CodexAppClient {
     async fn write_value(&self, value: &sj::Value) -> Result<(), String> {
         write_value_to_stdin(&self.stdin, value).await
     }
+}
+
+/// Spool large NDJSON envelopes before parsing them. This avoids retaining a
+/// String + Value + cloned Value + complete typed thread on a Tokio worker.
+async fn read_rpc_line<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut BufReader<R>,
+) -> std::io::Result<Option<RpcResponse>> {
+    use std::io::Write;
+    let mut memory = Vec::new();
+    let mut disk: Option<tempfile::NamedTempFile> = None;
+    loop {
+        let buffer = reader.fill_buf().await?;
+        if buffer.is_empty() {
+            if memory.is_empty() && disk.is_none() {
+                return Ok(None);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Incomplete Codex RPC envelope",
+            ));
+        }
+        let end = buffer.iter().position(|&b| b == b'\n');
+        let count = end.map(|n| n + 1).unwrap_or(buffer.len());
+        if disk.is_none() && memory.len() + count > 64 * 1024 {
+            let mut file = tempfile::NamedTempFile::new()?;
+            file.write_all(&memory)?;
+            memory.clear();
+            disk = Some(file);
+        }
+        if let Some(file) = disk.as_mut() {
+            file.write_all(&buffer[..count])?;
+        } else {
+            memory.extend_from_slice(&buffer[..count]);
+        }
+        reader.consume(count);
+        if end.is_some() {
+            break;
+        }
+    }
+    if let Some(file) = disk {
+        Ok(Some(RpcResponse::Spool(file)))
+    } else {
+        match serde_json::from_slice(&memory) {
+            Ok(value) => Ok(Some(RpcResponse::Value(value))),
+            Err(error) => {
+                tracing::warn!(bytes=memory.len(),%error,"Skipping invalid Codex RPC message");
+                Ok(Some(RpcResponse::Value(sj::Value::Null)))
+            }
+        }
+    }
+}
+
+fn archive_large_notification(path: &Path) -> anyhow::Result<Option<(String, ChatMessage)>> {
+    use crate::history::JsonFile;
+    use std::io::{Read, Seek};
+    let mut json = JsonFile::open(path)?;
+    let root = json.root()?;
+    let Some(method) = json.field(root, "method")? else {
+        return Ok(None);
+    };
+    if json.decode::<String>(method)? != "item/completed" {
+        return Ok(None);
+    }
+    let params = json
+        .field(root, "params")?
+        .ok_or_else(|| anyhow::anyhow!("Missing notification params"))?;
+    let thread = json
+        .field(params, "threadId")?
+        .ok_or_else(|| anyhow::anyhow!("Missing notification thread"))?;
+    let session_id = format!("codex:{}", json.decode::<String>(thread)?);
+    let item = json
+        .field(params, "item")?
+        .ok_or_else(|| anyhow::anyhow!("Missing completed item"))?;
+    let mut file = std::fs::File::open(path)?;
+    file.seek(std::io::SeekFrom::Start(item.start))?;
+    let message = crate::history::archive_large(
+        file.take(item.len),
+        &crate::history::attachment_directory()?,
+        "assistant",
+        Some(Utc::now()),
+    )?;
+    Ok(Some((session_id, message)))
+}
+
+/// Walk one item at a time using exactly the existing Codex history mapping.
+pub(crate) fn index_thread_snapshot(
+    path: &Path,
+    sink: &mut dyn FnMut(ChatMessage) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    use crate::history::JsonFile;
+    let mut json = JsonFile::open(path)?;
+    let root = json.root()?;
+    let result = json
+        .field(root, "result")?
+        .ok_or_else(|| anyhow::anyhow!("Missing Codex history result"))?;
+    let thread = json
+        .field(result, "thread")?
+        .ok_or_else(|| anyhow::anyhow!("Missing Codex thread"))?;
+    let turns = json
+        .field(thread, "turns")?
+        .ok_or_else(|| anyhow::anyhow!("Missing Codex turns"))?;
+    json.array(turns, |json, turn| {
+        let fields = json.fields(turn)?;
+        let mut started = None;
+        let mut completed = None;
+        let mut items = None;
+        for (key, span) in fields {
+            match key.as_str() {
+                "startedAt" => started = json.decode::<Option<i64>>(span)?,
+                "completedAt" => completed = json.decode::<Option<i64>>(span)?,
+                "items" => items = Some(span),
+                _ => {}
+            }
+        }
+        let timestamp = completed
+            .or(started)
+            .and_then(|seconds| Utc.timestamp_opt(seconds, 0).single());
+        if let Some(items) = items {
+            json.array(items, |json, span| {
+                if span.len > crate::history::INLINE_RECORD_BYTES as u64 {
+                    let kind = if let Some(kind) = json.field(span, "type")? {
+                        json.decode::<String>(kind)?
+                    } else {
+                        String::new()
+                    };
+                    let mut file = std::fs::File::open(path)?;
+                    use std::io::{Read, Seek};
+                    file.seek(std::io::SeekFrom::Start(span.start))?;
+                    sink(crate::history::archive_large(
+                        file.take(span.len),
+                        &crate::history::attachment_directory()?,
+                        if kind == "userMessage" {
+                            "user"
+                        } else {
+                            "assistant"
+                        },
+                        timestamp,
+                    )?)?;
+                    return Ok(());
+                }
+                let item: ThreadItem = json.decode(span)?;
+                for message in item_to_history_messages(item, timestamp) {
+                    sink(message)?;
+                }
+                Ok(())
+            })?;
+        } else {
+            anyhow::bail!("Missing Codex turn items");
+        }
+        Ok(())
+    })
 }
 
 fn codex_thread_config() -> sj::Value {
@@ -717,8 +969,8 @@ fn is_response_message(value: &sj::Value) -> bool {
 }
 
 async fn handle_response_message(
-    value: sj::Value,
-    pending: &Arc<Mutex<HashMap<u64, RequestCallback>>>,
+    mut value: sj::Value,
+    pending: &Arc<Mutex<HashMap<u64, PendingRequest>>>,
 ) {
     let Some(id) = value.get("id").and_then(sj::Value::as_u64) else {
         return;
@@ -733,9 +985,8 @@ async fn handle_response_message(
         return;
     };
 
-    if let Some(result) = value.get("result") {
-        tracing::debug!("Codex app-server response id={} result={}", id, result);
-        callback(Ok(result.clone()));
+    if value.get("result").is_some() {
+        (callback.callback)(Ok(RpcResponse::Value(value["result"].take())));
         return;
     }
 
@@ -746,7 +997,7 @@ async fn handle_response_message(
         .unwrap_or("unknown Codex app-server error")
         .to_string();
     tracing::debug!("Codex app-server response id={} error={}", id, message);
-    callback(Err(message));
+    (callback.callback)(Err(message));
 }
 
 async fn handle_notification(method: &str, value: sj::Value, event_tx: &mpsc::Sender<CodexEvent>) {
@@ -1800,6 +2051,130 @@ struct PermissionsRequestApprovalParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_requests_with_numeric_ids_are_not_rpc_responses() {
+        let request=json!({"id":7,"method":"item/commandExecution/requestApproval","params":{"command":"x".repeat(80_000)}});
+        let header:RpcEnvelopeHeader=serde_json::from_value(request).unwrap();
+        assert!(!matches!(header,RpcEnvelopeHeader{id:Some(_),method:None,..}));
+        let response:RpcEnvelopeHeader=serde_json::from_value(json!({"id":7,"result":{"thread":{"turns":[]}}})).unwrap();
+        assert!(matches!(response,RpcEnvelopeHeader{id:Some(7),method:None,error:None}));
+    }
+
+    #[test]
+    fn streamed_snapshot_preserves_existing_codex_history_representation() {
+        let response = json!({"result":{"thread":{"turns":[{
+            "items":[
+                {"type":"userMessage","id":"u","content":[{"type":"text","text":"héllo 😀"}]},
+                {"type":"agentMessage","id":"a","text":"response"},
+                {"type":"reasoning","id":"r","summary":["thought"],"content":[]},
+                {"type":"commandExecution","id":"c","command":"ls","cwd":"/tmp","status":"completed","aggregatedOutput":"output","exitCode":0},
+                {"type":"imageView","id":"i","path":"/tmp/image.png"},
+                {"type":"imageGeneration","id":"g","result":"image result","status":"completed","savedPath":"/tmp/generated.png"}
+            ],"completedAt":1700000001,"startedAt":1700000000
+        }]}},"id":99});
+        let legacy: ThreadReadResponse =
+            serde_json::from_value(response["result"].clone()).unwrap();
+        let expected: Vec<_> = legacy
+            .thread
+            .turns
+            .into_iter()
+            .flat_map(|turn| {
+                let ts = turn_timestamp(&turn);
+                turn.items
+                    .into_iter()
+                    .flat_map(move |item| item_to_history_messages(item, ts))
+            })
+            .collect();
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        serde_json::to_writer(file.as_file_mut(), &response).unwrap();
+        let mut actual = Vec::new();
+        index_thread_snapshot(file.path(), &mut |m| {
+            actual.push(m);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_reader_spools_large_envelopes_and_drops_spools_with_the_response() {
+        use std::io::Write;
+        let mut input = tempfile::NamedTempFile::new().unwrap();
+        write!(input, "{{\"id\":1,\"result\":{{\"text\":\"").unwrap();
+        for _ in 0..1024 {
+            input.write_all(&[b'x'; 8192]).unwrap();
+        }
+        writeln!(input, "\"}}}}").unwrap();
+        let mut reader = BufReader::new(tokio::fs::File::open(input.path()).await.unwrap());
+        let Some(RpcResponse::Spool(file)) = read_rpc_line(&mut reader).await.unwrap() else {
+            panic!("expected disk spool");
+        };
+        assert!(file.as_file().metadata().unwrap().len() > 8 * 1024 * 1024);
+        let path = file.path().to_owned();
+        drop(file);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    #[ignore = "large disk/memory benchmark; run separately from parallel unit tests"]
+    fn large_snapshot_memory_benchmark() {
+        use std::io::Write;
+        let count = std::env::var("HISTORY_BENCH_MESSAGES")
+            .ok()
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(8192);
+        let mut input = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            input,
+            "{{\"result\":{{\"thread\":{{\"turns\":[{{\"items\":["
+        )
+        .unwrap();
+        let text = "x".repeat(32768);
+        for n in 0..count {
+            if n > 0 {
+                write!(input, ",").unwrap();
+            }
+            serde_json::to_writer(
+                input.as_file_mut(),
+                &json!({"type":"agentMessage","id":format!("m{n}"),"text":text}),
+            )
+            .unwrap();
+        }
+        write!(input, "]}}]}}}}}}").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = crate::history::Index::open(&dir.path().join("history.db")).unwrap();
+        index
+            .replace("benchmark", "v1", |sink| {
+                index_thread_snapshot(input.path(), sink)
+            })
+            .unwrap();
+        let mut offset = 0;
+        loop {
+            let page = index.page("benchmark", None, offset, 200, false).unwrap();
+            assert!(!page.messages.is_empty());
+            offset += page.messages.len();
+            if !page.has_more {
+                break;
+            }
+        }
+        assert_eq!(offset, count);
+        eprintln!(
+            "Indexed and paged {} MiB; process status: {}",
+            input.as_file().metadata().unwrap().len() / 1024 / 1024,
+            std::fs::read_to_string("/proc/self/status")
+                .unwrap()
+                .lines()
+                .filter(|l| l.starts_with("VmRSS:")
+                    || l.starts_with("VmHWM:")
+                    || l.starts_with("VmSwap:"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
 
     #[tokio::test]
     async fn turn_started_reports_activity_before_text_arrives() {

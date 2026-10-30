@@ -387,23 +387,13 @@ fn parse_reasoning(
 /// Scans for `token_count` events to find total tokens and context window size,
 /// and `turn_context` events for the model name.
 pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
-    let data = std::fs::read_to_string(path).ok()?;
+    let records=crate::history::context_records(path).ok()?;
 
     let mut last_tokens: Option<u64> = None;
     let mut context_window: Option<u64> = None;
     let mut model_name: Option<String> = None;
 
-    for line in data.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let v: serde_json::Value = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
+    for v in records {
         let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
         match line_type {

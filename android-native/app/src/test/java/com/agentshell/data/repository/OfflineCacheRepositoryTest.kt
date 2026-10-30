@@ -11,12 +11,14 @@ import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.Host
+import com.agentshell.data.remote.SessionSocket
 import com.agentshell.data.remote.WebSocketService
 import java.io.File
 import java.util.Collections
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -292,10 +294,11 @@ class OfflineCacheRepositoryTest {
             it.execSQL("DROP TABLE cached_sessions")
             it.execSQL("DROP TABLE cached_conversations")
             it.execSQL("DROP TABLE cached_chat_messages")
+            it.execSQL("DROP TABLE cached_history_sync")
             it.version = 8
         }
         val upgraded = Room.databaseBuilder(context, AppDatabase::class.java, "offline-test-${directory.root.name}.db")
-            .addMigrations(AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10).build().also { databases.add(it) }
+            .addMigrations(AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10, AppDatabase.MIGRATION_10_11).build().also { databases.add(it) }
         assertEquals(host, upgraded.hostDao().getById(host.id))
         assertTrue(upgraded.offlineCacheDao().observeSessions(host.id).first().isEmpty())
     }
@@ -309,13 +312,197 @@ class OfflineCacheRepositoryTest {
         db.close()
         android.database.sqlite.SQLiteDatabase.openDatabase(path, null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE).use {
             it.execSQL("DROP INDEX index_cached_chat_messages_targetKey_position")
+            it.execSQL("ALTER TABLE cached_chat_messages RENAME TO messages_v11")
+            it.execSQL("CREATE TABLE cached_chat_messages (targetKey TEXT NOT NULL, messageId TEXT NOT NULL, position INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(targetKey,messageId))")
+            it.execSQL("INSERT INTO cached_chat_messages SELECT targetKey,messageId,position,payload FROM messages_v11")
+            it.execSQL("DROP TABLE messages_v11")
+            it.execSQL("DROP TABLE cached_history_sync")
             it.version = 9
         }
         val upgraded = Room.databaseBuilder(context, AppDatabase::class.java, "offline-test-${directory.root.name}.db")
-            .addMigrations(AppDatabase.MIGRATION_9_10).build().also { databases.add(it) }
+            .addMigrations(AppDatabase.MIGRATION_9_10, AppDatabase.MIGRATION_10_11).build().also { databases.add(it) }
         val page = repository(upgraded).historyPage(target)!!
         assertEquals(listOf(message("saved", 1)), page.messages)
         assertFalse(page.conversation.complete)
+    }
+
+    @Test fun incrementalArchiveResumesAfterRestartSkipsUnchangedAndRepairsOldEditsAndDeletions() = runBlocking {
+        val revision = AtomicReference("r1")
+        val source = AtomicReference((0 until 1003).map { message("m$it", it.toLong(), "Message $it") })
+        val bodies = AtomicInteger()
+        val offsets = Collections.synchronizedList(mutableListOf<Int>())
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, reason) }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    val command = JSONObject(text)
+                    val response = JSONObject().put("requestId", command.optString("requestId")).put("revision", revision.get())
+                    when (command.optString("type")) {
+                        "get-history-state" -> response.put("type", "history-state").put("available", true)
+                        "get-history-page" -> {
+                            bodies.incrementAndGet()
+                            val all = source.get()
+                            val offset = command.getInt("offset")
+                            offsets.add(offset)
+                            val end = (all.size - offset).coerceAtLeast(0)
+                            val start = (end - command.getInt("limit")).coerceAtLeast(0)
+                            val rows = JSONArray()
+                            all.subList(start, end).forEach { rows.put(JSONObject().put("id", it.id).put("role", "assistant").put("timestamp", it.timestamp).put("content", it.content)) }
+                            response.put("type", "history-page").put("messages", rows).put("hasMore", start > 0)
+                        }
+                        else -> return
+                    }
+                    webSocket.send(response.toString())
+                }
+            })
+        }
+        server.start()
+        val archiveTarget = ChatTarget.create("server-a", "codex:archive", isAcp = true)
+        val socket = SessionSocket(client)
+        socket.connect("ws://localhost:${server.port}/ws")
+        try {
+            withTimeout(10_000) { socket.isConnected.first { it } }
+            val db = database()
+            val first = repository(db)
+            first.syncHistoryIncremental(socket, archiveTarget)
+            assertEquals(630, db.offlineCacheDao().historySync(archiveTarget.key)!!.offset)
+            assertFalse(db.offlineCacheDao().historySync(archiveTarget.key)!!.complete)
+            first.close()
+            db.close()
+            val reopened = database()
+            val repo = repository(reopened)
+            offsets.clear()
+            repo.syncHistoryIncremental(socket, archiveTarget)
+            assertEquals(630, offsets.first())
+            assertEquals(1003, reopened.offlineCacheDao().messageCount(archiveTarget.key))
+            assertTrue(reopened.offlineCacheDao().historySync(archiveTarget.key)!!.complete)
+            val before = bodies.get()
+            repo.syncHistoryIncremental(socket, archiveTarget)
+            assertEquals("unchanged archives must not fetch message bodies", before, bodies.get())
+            source.set(source.get().filterNot { it.id == "m100" || it.id == "m220" }.map { if (it.id == "m50") it.copy(content = "edited old message") else it })
+            revision.set("r2")
+            repo.syncHistoryIncremental(socket, archiveTarget)
+            // Reconciliation cannot remove old rows until every page has arrived.
+            assertEquals(1003, reopened.offlineCacheDao().messageCount(archiveTarget.key))
+            repo.syncHistoryIncremental(socket, archiveTarget)
+            val all = repo.history(archiveTarget)!!.messages
+            assertEquals(source.get().map { it.id }, all.map { it.id })
+            assertEquals("edited old message", all.first { it.id == "m50" }.content)
+            assertEquals(1001, all.size)
+            assertTrue(reopened.offlineCacheDao().historySync(archiveTarget.key)!!.complete)
+            source.set(emptyList())
+            revision.set("r3")
+            repo.syncHistoryIncremental(socket, archiveTarget)
+            assertEquals(0, reopened.offlineCacheDao().messageCount(archiveTarget.key))
+        } finally {
+            socket.dispose()
+            server.shutdown()
+        }
+    }
+
+    @Test fun keyedSyncPinsAnActiveSnapshotAndDownloadsOnlyChangedBodies() = runBlocking {
+        val revision = AtomicReference("r1")
+        val source = AtomicReference((0 until 801).map { message("m$it", it.toLong()) })
+        val snapshots = java.util.concurrent.ConcurrentHashMap<String, List<ChatMessage>>()
+        val bodies = AtomicInteger()
+        fun key(message: ChatMessage) = "${message.id}:${message.timestamp}:${message.content}"
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, reason) }
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    val command = JSONObject(text)
+                    val response = JSONObject().put("requestId", command.optString("requestId"))
+                    when (command.optString("type")) {
+                        "get-history-state" -> {
+                            snapshots.putIfAbsent(revision.get(), source.get())
+                            response.put("type", "history-state").put("available", true).put("revision", revision.get())
+                        }
+                        "get-history-page" -> {
+                            val wanted = command.getString("revision")
+                            val all = snapshots.getValue(wanted)
+                            val known = snapshots[command.optString("baseRevision")]?.map(::key)?.toSet().orEmpty()
+                            val end = (all.size - command.getInt("offset")).coerceAtLeast(0)
+                            val start = (end - command.getInt("limit")).coerceAtLeast(0)
+                            val entries = JSONArray()
+                            for (position in start until end) {
+                                val message = all[position]
+                                val entry = JSONObject().put("key", key(message)).put("position", position)
+                                if (key(message) in known) entry.put("message", JSONObject.NULL)
+                                else {
+                                    bodies.incrementAndGet()
+                                    entry.put("message", JSONObject().put("id", message.id).put("role", "assistant").put("timestamp", message.timestamp).put("content", message.content))
+                                }
+                                entries.put(entry)
+                            }
+                            response.put("type", "history-page").put("revision", wanted).put("entries", entries).put("hasMore", start > 0)
+                        }
+                        else -> return
+                    }
+                    webSocket.send(response.toString())
+                }
+            })
+        }
+        server.start()
+        val socket = SessionSocket(client)
+        socket.connect("ws://localhost:${server.port}/ws")
+        try {
+            withTimeout(10_000) { socket.isConnected.first { it } }
+            val db = database()
+            val repo = repository(db)
+            val target = ChatTarget.create("server-a", "codex:keyed", isAcp = true)
+            repo.syncHistoryIncremental(socket, target)
+            assertEquals(630, db.offlineCacheDao().historySync(target.key)!!.offset)
+            source.set(source.get() + message("m801", 801))
+            revision.set("r2")
+            repo.syncHistoryIncremental(socket, target)
+            assertEquals("finish the pinned snapshot despite concurrent appends", "r1", db.offlineCacheDao().historySync(target.key)!!.revision)
+            assertTrue(db.offlineCacheDao().historySync(target.key)!!.complete)
+            val beforeAppend = bodies.get()
+            repo.syncHistoryIncremental(socket, target)
+            repo.syncHistoryIncremental(socket, target)
+            assertEquals(1, bodies.get() - beforeAppend)
+            assertEquals(source.get().map { it.id }, repo.history(target)!!.messages.map { it.id })
+            source.set(source.get().filterNot { it.id == "m10" }.map { if (it.id == "m3") it.copy(content = "edited") else it }
+                .toMutableList().apply { add(6, message("inserted", 5, "inserted in the middle")) })
+            revision.set("r3")
+            val beforeEdits = bodies.get()
+            repo.syncHistoryIncremental(socket, target)
+            repo.syncHistoryIncremental(socket, target)
+            assertEquals(2, bodies.get() - beforeEdits)
+            val saved = repo.history(target)!!.messages
+            assertEquals(source.get().map { it.id }, saved.map { it.id })
+            assertEquals("edited", saved.first { it.id == "m3" }.content)
+            val completeBodies = bodies.get()
+            repo.syncHistoryIncremental(socket, target)
+            assertEquals(completeBodies, bodies.get())
+        } finally { socket.dispose(); server.shutdown() }
+    }
+
+    @Test fun attachmentDownloadsResumeAfterRestartWithoutAnotherHistoryFetch() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(503))
+        server.enqueue(MockResponse().setBody("durable attachment"))
+        server.start()
+        val id = "restart-${java.util.UUID.randomUUID()}"
+        val url = "${server.url("files/")}$id"
+        val first = OfflineAttachmentStore(context, client)
+        var second: OfflineAttachmentStore? = null
+        try {
+            first.enqueue(server.url("files").toString(), listOf(ChatMessage("attachment", "assistant", timestamp = 1, blocks = listOf(ChatBlock(type = "file", id = id)))))
+            withTimeout(10_000) { while (server.requestCount < 1) delay(25) }
+            delay(100)
+            first.close()
+            second = OfflineAttachmentStore(context, client)
+            withTimeout(10_000) { while (OfflineAttachmentStore.cachedFile(context, url) == null) delay(25) }
+            assertEquals("durable attachment", OfflineAttachmentStore.cachedFile(context, url)!!.readText())
+            assertEquals(2, server.requestCount)
+        } finally {
+            first.close(); second?.close()
+            OfflineAttachmentStore.cachedFile(context, url)?.delete()
+            server.shutdown()
+        }
     }
 
     @Test fun attachmentBytesRemainReadableAfterServerStopsAndStoreRestarts() = runBlocking {

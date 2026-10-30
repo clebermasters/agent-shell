@@ -477,6 +477,11 @@ pub(crate) async fn ensure_codex_client(app_state: &Arc<AppState>) -> Result<(),
                 } => {
                     crate::chat_activity::report_direct(&session_id, status, &detail, turn_id);
                 }
+                crate::codex_app::CodexEvent::ArchivedMessage{session_id,message}=>{
+                    let session_key=format!("acp_{session_id}");
+                    let _=app_state_clone.chat_event_store.append_message(&session_key,0,"codex-large",&message);
+                    app_state_clone.client_manager.broadcast(ServerMessage::ChatEvent{session_name:session_key,window_index:0,message,source:Some("codex".into())}).await;
+                }
                 crate::codex_app::CodexEvent::SessionUpdate { session_id, update } => {
                     crate::chat_activity::report_direct(
                         &session_id,
@@ -1292,7 +1297,7 @@ pub(crate) async fn handle(
             let (provider, _) = parse_direct_session_id(&session_id);
             let session_key = session_key_for_external_id(&session_id);
 
-            let messages = match provider {
+            match provider {
                 DirectSessionProvider::Opencode => {
                     match app_state.chat_event_store.list_messages_page(
                         &session_key,
@@ -1320,44 +1325,13 @@ pub(crate) async fn handle(
                     }
                 }
                 DirectSessionProvider::Codex => {
-                    if let Err(e) = ensure_codex_client(&app_state).await {
-                        let response = ServerMessage::AcpError { message: e };
-                        send_message(&state.message_tx, response).await?;
-                        return Ok(());
-                    }
-                    let codex_guard = app_state.codex_app_client.read().await;
-                    match codex_guard.as_ref() {
-                        Some(client) => match client.read_thread_messages(&session_id).await {
-                            Ok(messages) => messages,
-                            Err(e) => {
-                                let response = ServerMessage::AcpError { message: e };
-                                send_message(&state.message_tx, response).await?;
-                                return Ok(());
-                            }
-                        },
-                        None => {
-                            let response = ServerMessage::AcpError {
-                                message: "Codex client not initialized".to_string(),
-                            };
-                            send_message(&state.message_tx, response).await?;
-                            return Ok(());
-                        }
+                    let cleared=app_state.chat_clear_store.get_cleared_at(&session_key,0).await;
+                    match super::chat_cmds::load_codex_page(app_state.clone(),session_id.clone(),session_key,cleared,offset,limit).await {
+                        Ok(page)=>send_message(&state.message_tx,ServerMessage::AcpHistoryLoaded{session_id,messages:page.messages,has_more:page.has_more}).await?,
+                        Err(error)=>send_message(&state.message_tx,ServerMessage::AcpError{message:error}).await?,
                     }
                 }
-            };
-
-            let total = messages.len();
-            let start = total.saturating_sub(offset + limit);
-            let end = total.saturating_sub(offset);
-            let has_more = start > 0;
-            let paginated = messages[start..end].to_vec();
-
-            let response = ServerMessage::AcpHistoryLoaded {
-                session_id,
-                messages: paginated,
-                has_more,
-            };
-            send_message(&state.message_tx, response).await?;
+            }
         }
         WebSocketMessage::AcpClearHistory { session_id } => {
             let session_key = session_key_for_external_id(&session_id);

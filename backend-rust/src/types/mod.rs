@@ -404,6 +404,19 @@ pub enum WebSocketMessage {
         #[serde(rename = "sessionName")] session_name: String,
         #[serde(rename = "windowIndex")] window_index: u32,
     },
+    GetHistorySyncCapabilities,
+    GetHistoryState {
+        #[serde(rename="requestId")] request_id:String,
+        #[serde(rename="sessionName")] session_name:String,
+        #[serde(rename="windowIndex")] window_index:u32,
+    },
+    GetHistoryPage {
+        #[serde(rename="requestId")] request_id:String,
+        #[serde(rename="sessionName")] session_name:String,
+        #[serde(rename="windowIndex")] window_index:u32,
+        revision:String, offset:usize, limit:usize,
+        #[serde(default,rename="baseRevision")] base_revision:Option<String>,
+    },
     GetAgentActivities,
     WatchChatLog {
         #[serde(rename = "sessionName")]

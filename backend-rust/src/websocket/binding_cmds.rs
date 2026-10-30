@@ -1,7 +1,7 @@
 use super::types::{send_message, BroadcastMessage, WsState};
 use crate::{
     chat_binding::ChatBinding,
-    chat_log::{ChatLogEvent, ChatMessage},
+    chat_log::ChatLogEvent,
     types::{ServerMessage, WebSocketMessage},
     AppState,
 };
@@ -141,18 +141,17 @@ pub(crate) async fn start_watch(
                             .as_ref()
                             .filter(|b| b.transcript_path.as_os_str().is_empty())
                         {
-                            let overlay = events
-                                .list_messages(binding.storage_key(), 0)
-                                .unwrap_or_default();
+                            let cleared=clears.get_cleared_at(binding.storage_key(),0).await;
+                            let page=match read_bound_page(events.clone(),binding.clone(),cleared,0,limit.unwrap_or(30)).await{Ok(page)=>page,Err(_)=>return};
                             let _ = send_bound(
                                 &tx,
                                 ServerMessage::ChatHistory {
                                     session_name: session.clone(),
                                     window_index: window,
-                                    messages: overlay,
+                                    messages: page.messages,
                                     tool: Some(binding.ai_tool()),
-                                    has_more: false,
-                                    total_count: 0,
+                                    has_more: page.has_more,
+                                    total_count: page.total,
                                     context_window_usage: None,
                                     model_name: None,
                                 },
@@ -185,7 +184,7 @@ pub(crate) async fn start_watch(
                                     .await;
                                     return;
                                 }
-                                let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+                                let (event_tx, mut event_rx) = mpsc::channel(32);
                                 let _watcher = match crate::chat_log::watcher::watch_log_file(
                                     &binding.transcript_path,
                                     binding.ai_tool(),
@@ -204,25 +203,24 @@ pub(crate) async fn start_watch(
                                 while let Some(event) = event_rx.recv().await {
                                     let message = match event {
                                         ChatLogEvent::History {
-                                            messages,
+                                            messages: _,
                                             tool,
-                                            has_more,
-                                            total_count,
+                                            has_more: _,
+                                            total_count: _,
                                             context_window_usage,
                                             model_name,
                                         } => {
-                                            let overlay = events
-                                                .list_messages(binding.storage_key(), 0)
-                                                .unwrap_or_default();
+                                            let page=match read_bound_page(events.clone(),binding.clone(),cleared,0,limit.unwrap_or(30)).await {
+                                                Ok(page)=>page,
+                                                Err(error)=>{let _=send_bound(&tx,ServerMessage::ChatLogError{error:error.to_string()},&binding).await;return;}
+                                            };
                                             ServerMessage::ChatHistory {
                                                 session_name: name.clone(),
                                                 window_index: window,
-                                                messages: super::types::merge_history_messages(
-                                                    messages, overlay,
-                                                ),
+                                                messages: page.messages,
                                                 tool: Some(tool),
-                                                has_more,
-                                                total_count,
+                                                has_more: page.has_more,
+                                                total_count: page.total,
                                                 context_window_usage,
                                                 model_name,
                                             }
@@ -465,6 +463,13 @@ pub(crate) async fn handle(
     Ok(())
 }
 
+async fn read_bound_page(events:Arc<crate::chat_event_store::ChatEventStore>,binding:ChatBinding,cleared:Option<i64>,offset:usize,limit:usize)->Result<crate::history::Page>{
+    let cached=crate::history::cached_bound_page(&events,&binding,cleared,offset,limit)?;
+    if let Some(page)=cached{return Ok(page);}
+    let permit=crate::history::permit().await?;
+    tokio::task::spawn_blocking(move||{let _permit=permit;crate::history::bound_page(&events,&binding,cleared,offset,limit)}).await?
+}
+
 pub(crate) async fn load_more(
     state: &WsState,
     session: String,
@@ -477,23 +482,15 @@ pub(crate) async fn load_more(
         .chat_clear_store
         .get_cleared_at(binding.storage_key(), 0)
         .await;
-    let native = read_history(&binding, cleared).await?;
-    let overlay = state
-        .chat_event_store
-        .list_messages(binding.storage_key(), 0)?;
-    let messages = super::types::merge_history_messages(native, overlay);
-    let start = messages
-        .len()
-        .saturating_sub(offset.saturating_add(limit.min(200)));
-    let end = messages.len().saturating_sub(offset);
+    let page=read_bound_page(state.chat_event_store.clone(),binding.clone(),cleared,offset,limit).await?;
     state.chat_event_store.bindings.validate(&binding).await?;
     send_bound(
         &state.message_tx,
         ServerMessage::ChatHistoryChunk {
             session_name: session,
             window_index: window,
-            messages: messages[start..end].to_vec(),
-            has_more: start > 0,
+            messages: page.messages,
+            has_more: page.has_more,
         },
         &binding,
     )
@@ -527,40 +524,6 @@ pub(crate) async fn clear(state: &mut WsState, session: String, window: u32) -> 
     start_watch(state, session, window, Some(30)).await
 }
 
-pub(crate) async fn read_history(
-    binding: &ChatBinding,
-    cleared: Option<i64>,
-) -> Result<Vec<ChatMessage>> {
-    if binding.pane.tool == "kiro" {
-        return Ok(vec![]);
-    }
-    if binding.pane.tool == "opencode" {
-        return Ok(crate::chat_log::opencode_parser::fetch_all_messages(
-            &binding.transcript_path,
-            &binding.conversation_id,
-            cleared,
-        )?
-        .0);
-    }
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let _watcher = crate::chat_log::watcher::watch_log_file(
-        &binding.transcript_path,
-        binding.ai_tool(),
-        tx,
-        cleared,
-        None,
-    )
-    .await?;
-    while let Some(event) = rx.recv().await {
-        match event {
-            ChatLogEvent::History { messages, .. } => return Ok(messages),
-            ChatLogEvent::Error { error } => anyhow::bail!(error),
-            _ => {}
-        }
-    }
-    anyhow::bail!("This conversation's history is unavailable")
-}
-
 async fn run_kiro(
     binding: &ChatBinding,
     tx: &mpsc::Sender<BroadcastMessage>,
@@ -572,29 +535,16 @@ async fn run_kiro(
 ) -> Result<()> {
     let (output_tx, mut output_rx) = mpsc::unbounded_channel();
     *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(output_tx);
-    let history = events
-        .list_messages(binding.storage_key(), 0)?
-        .into_iter()
-        .filter(|msg| {
-            cleared
-                .map(|limit| {
-                    msg.timestamp
-                        .map(|t| t.timestamp_millis() > limit)
-                        .unwrap_or(false)
-                })
-                .unwrap_or(true)
-        })
-        .collect::<Vec<_>>();
-    let count = history.len();
+    let page=read_bound_page(Arc::new(events.clone()),binding.clone(),cleared,0,30).await?;
     send_bound(
         tx,
         ServerMessage::ChatHistory {
             session_name: session.into(),
             window_index: window,
-            messages: history,
+            messages: page.messages,
             tool: Some(binding.ai_tool()),
-            has_more: false,
-            total_count: count,
+            has_more: page.has_more,
+            total_count: page.total,
             context_window_usage: None,
             model_name: None,
         },

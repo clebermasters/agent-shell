@@ -28,18 +28,51 @@ data class CachedConversation(
 )
 
 // One row per message avoids putting an entire unlimited history in a CursorWindow blob.
-@Entity(tableName = "cached_chat_messages", primaryKeys = ["targetKey", "messageId"], indices = [Index(value = ["targetKey", "position"])])
+@Entity(tableName = "cached_chat_messages", primaryKeys = ["targetKey", "messageId"], indices = [Index(value = ["targetKey", "position"]), Index(value = ["targetKey", "serverKey"])])
 data class CachedChatMessage(
     val targetKey: String,
     val messageId: String,
     val position: Int,
     val payload: String,
+    val syncRevision: String = "",
+    val serverKey: String = "",
 )
+
+@Entity(tableName = "cached_history_sync", primaryKeys = ["targetKey"])
+data class CachedHistorySync(
+    val targetKey: String,
+    val revision: String,
+    val offset: Int = 0,
+    val beforeMessageId: String? = null,
+    val complete: Boolean = false,
+    val keyed: Boolean = false,
+    val baseRevision: String? = null,
+)
+
+data class CachedServerMessage(val messageId: String, val serverKey: String)
 
 data class CachedMessageBounds(val firstPosition: Int?, val lastPosition: Int?)
 
 @Dao
 abstract class OfflineCacheDao {
+    @Query("SELECT * FROM cached_history_sync WHERE targetKey = :key")
+    abstract suspend fun historySync(key: String): CachedHistorySync?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun saveHistorySync(state: CachedHistorySync)
+
+    @Query("SELECT messageId,serverKey FROM cached_chat_messages WHERE targetKey = :key AND serverKey IN (:keys)")
+    abstract suspend fun serverMessagesByKeys(key: String, keys: List<String>): List<CachedServerMessage>
+
+    @Query("UPDATE cached_chat_messages SET position = :position, syncRevision = :revision, serverKey = :serverKey WHERE targetKey = :key AND messageId = :id")
+    abstract suspend fun assignSyncedMessage(key: String, id: String, serverKey: String, position: Int, revision: String): Int
+
+    @Query("UPDATE cached_chat_messages SET syncRevision = :revision WHERE targetKey = :key AND messageId IN (:ids)")
+    abstract suspend fun markSyncedMessages(key: String, ids: List<String>, revision: String)
+
+    @Query("DELETE FROM cached_chat_messages WHERE targetKey = :key AND syncRevision != :revision")
+    abstract suspend fun removeUnsyncedMessages(key: String, revision: String)
+
     @Query("SELECT * FROM cached_sessions WHERE hostId = :hostId ORDER BY kind, position")
     abstract fun observeSessions(hostId: String): Flow<List<CachedSession>>
 

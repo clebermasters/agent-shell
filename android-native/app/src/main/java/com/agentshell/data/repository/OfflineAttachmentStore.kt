@@ -7,7 +7,6 @@ import com.agentshell.data.model.ChatMessage
 import com.agentshell.data.model.chatFingerprint
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.*
@@ -29,30 +28,42 @@ class OfflineAttachmentStore @Inject constructor(
     private val client: OkHttpClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val pending = ConcurrentHashMap.newKeySet<String>()
-    private val downloads = Channel<String>(Channel.UNLIMITED)
+    private val downloadSignals = Channel<Unit>(Channel.CONFLATED)
+    private val jobsDirectory = File(context.filesDir, "offline_chat_files/pending")
 
     init {
+        // URLs are durable jobs, so failed or interrupted downloads are retried
+        // even when unchanged history no longer downloads message bodies.
         scope.launch {
-            for (url in downloads) {
-                try {
-                    if (cachedFile(context, url) != null) continue
-                    val destination = attachmentFile(context, url)
-                    destination.parentFile?.mkdirs()
-                    val temporary = File(destination.path + ".part")
+            while (isActive) {
+                downloadSignals.trySend(Unit)
+                delay(60_000)
+            }
+        }
+        scope.launch {
+            for (signal in downloadSignals) {
+                for (job in jobsDirectory.listFiles().orEmpty()) {
+                    if (job.extension != "job") continue
                     try {
-                        val request = Request.Builder().url(url).header("X-Auth-Token", BuildConfig.AUTH_TOKEN).build()
-                        client.newCall(request).execute().use { response ->
-                            if (!response.isSuccessful) return@use
-                            val body = response.body ?: return@use
-                            body.byteStream().use { input -> temporary.outputStream().use { input.copyTo(it) } }
-                            if (temporary.renameTo(destination)) completed.emit(url)
-                        }
-                    } finally { temporary.delete() }
-                } catch (error: Exception) {
-                    if (error is CancellationException) throw error
-                    // Retry missing files on the next history refresh. Keep saved bytes on failures.
-                } finally { pending.remove(url) }
+                        val url = job.readText()
+                        if (cachedFile(context, url) != null) { job.delete(); continue }
+                        val destination = attachmentFile(context, url)
+                        destination.parentFile?.mkdirs()
+                        val temporary = File(destination.path + ".part")
+                        try {
+                            val request = Request.Builder().url(url).header("X-Auth-Token", BuildConfig.AUTH_TOKEN).build()
+                            client.newCall(request).execute().use { response ->
+                                if (!response.isSuccessful) return@use
+                                val body = response.body ?: return@use
+                                body.byteStream().use { input -> temporary.outputStream().use { input.copyTo(it) } }
+                                if (temporary.renameTo(destination)) { job.delete(); completed.emit(url) }
+                            }
+                        } finally { temporary.delete() }
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        // Keep the durable job for the next refresh/restart.
+                    }
+                }
             }
         }
     }
@@ -62,7 +73,17 @@ class OfflineAttachmentStore @Inject constructor(
             if (block.blockType !in setOf(ChatBlockType.IMAGE, ChatBlockType.AUDIO, ChatBlockType.FILE)) continue
             val id = block.id?.takeIf { it.isNotBlank() } ?: continue
             val url = "$baseUrl/$id"
-            if (cachedFile(context, url) == null && pending.add(url)) downloads.trySend(url)
+            if (cachedFile(context, url) != null) continue
+            jobsDirectory.mkdirs()
+            val job = File(jobsDirectory, "${chatFingerprint(url)}.job")
+            if (!job.exists()) {
+                val temporary = File(jobsDirectory, "${java.util.UUID.randomUUID()}.tmp")
+                try {
+                    temporary.writeText(url)
+                    check(temporary.renameTo(job) || job.exists()) { "Could not save attachment download" }
+                } finally { temporary.delete() }
+            }
+            downloadSignals.trySend(Unit)
         }
     }
 

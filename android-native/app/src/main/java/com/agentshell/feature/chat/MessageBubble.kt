@@ -1011,11 +1011,15 @@ private fun FileBlock(block: ChatBlock, fileBaseUrl: String = "") {
     val coroutineScope = rememberCoroutineScope()
     var isDownloading by remember { mutableStateOf(false) }
     var previewBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var previewFile by remember { mutableStateOf<File?>(null) }
+    val isHistoryArchive = block.id?.startsWith("history-") == true
     val filename = block.filename ?: "file"
     val mimeType = block.mimeType ?: "application/octet-stream"
     val supportsInlinePreview = remember(filename, mimeType) {
         supportsInlineFilePreview(mimeType, filename)
     }
+
+    previewFile?.let { file -> LargeHistoryViewer(file, filename, onDismiss = { previewFile = null }) }
 
     previewBytes?.let { bytes ->
         InlineFileViewer(
@@ -1031,7 +1035,16 @@ private fun FileBlock(block: ChatBlock, fileBaseUrl: String = "") {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = fileUrl != null && !isDownloading) {
-                if (supportsInlinePreview) {
+                if (isHistoryArchive) {
+                    isDownloading = true
+                    coroutineScope.launch {
+                        previewFile = withContext(Dispatchers.IO) {
+                            runCatching { downloadFileToDisk(context, fileUrl!!, filename) }.getOrNull()
+                        }
+                        isDownloading = false
+                        if (previewFile == null) Toast.makeText(context, "File is not available offline yet", Toast.LENGTH_SHORT).show()
+                    }
+                } else if (supportsInlinePreview) {
                     isDownloading = true
                     coroutineScope.launch {
                         val bytes = downloadFileBytes(
@@ -1174,6 +1187,22 @@ private fun FullScreenImageDialog(imageUrl: String, onDismiss: () -> Unit) {
 // File download + open helper
 // ---------------------------------------------------------------------------
 
+/** Stream to disk so opening/exporting an attachment cannot allocate its full size. */
+private fun downloadFileToDisk(context: android.content.Context, url: String, filename: String): File {
+    OfflineAttachmentStore.cachedFile(context, url)?.let { return it }
+    val directory = File(context.cacheDir, "chat_files").apply { mkdirs() }
+    val destination = File(directory, "${java.util.UUID.randomUUID()}-${File(filename).name}")
+    try {
+        val request = Request.Builder().url(url).header("X-Auth-Token", BuildConfig.AUTH_TOKEN).build()
+        OkHttpClient().newCall(request).execute().use { response ->
+            check(response.isSuccessful) { "Download failed: ${response.code}" }
+            val body = response.body ?: error("Empty file")
+            body.byteStream().use { input -> destination.outputStream().use { input.copyTo(it) } }
+        }
+        return destination
+    } catch (error: Exception) { destination.delete(); throw error }
+}
+
 private fun downloadAndOpenFile(
     context: android.content.Context,
     url: String,
@@ -1183,30 +1212,10 @@ private fun downloadAndOpenFile(
 ) {
     Thread {
         try {
-            val bytes = runCatching {
-                OfflineAttachmentStore.cachedFile(context, url)?.let { return@runCatching it.readBytes() }
-                val client = OkHttpClient()
-                val request = Request.Builder()
-                    .url(url)
-                    .addHeader("X-Auth-Token", BuildConfig.AUTH_TOKEN)
-                    .build()
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IllegalStateException("Download failed: ${response.code}")
-                    }
-                    response.body?.bytes() ?: throw IllegalStateException("Empty file")
-                }
-            }.getOrElse { error ->
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    Toast.makeText(context, error.message ?: "Download failed", Toast.LENGTH_SHORT).show()
-                    onComplete()
-                }
-                return@Thread
-            }
-            val cacheDir = File(context.cacheDir, "chat_files")
-            cacheDir.mkdirs()
-            val file = File(cacheDir, filename)
-            file.writeBytes(bytes)
+            val source = downloadFileToDisk(context, url, filename)
+            val cacheDir = File(context.cacheDir, "chat_files").apply { mkdirs() }
+            val file = File(cacheDir, "${java.util.UUID.randomUUID()}-${File(filename).name}")
+            source.inputStream().use { input -> file.outputStream().use { input.copyTo(it) } }
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",

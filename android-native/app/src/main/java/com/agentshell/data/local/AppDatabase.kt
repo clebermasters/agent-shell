@@ -18,6 +18,7 @@ import com.agentshell.data.model.SessionTagAssignment
         CachedSession::class,
         CachedConversation::class,
         CachedChatMessage::class,
+        CachedHistorySync::class,
         PanelLayoutEntity::class,
         PanelEntity::class,
         FavoriteSession::class,
@@ -25,7 +26,7 @@ import com.agentshell.data.model.SessionTagAssignment
         SessionTag::class,
         SessionTagAssignment::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -37,6 +38,15 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sessionTagDao(): SessionTagDao
 
     companion object {
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cached_chat_messages ADD COLUMN syncRevision TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE cached_chat_messages ADD COLUMN serverKey TEXT NOT NULL DEFAULT ''")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_cached_chat_messages_targetKey_serverKey ON cached_chat_messages(targetKey,serverKey)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS cached_history_sync (targetKey TEXT NOT NULL PRIMARY KEY, revision TEXT NOT NULL, offset INTEGER NOT NULL, beforeMessageId TEXT, complete INTEGER NOT NULL, keyed INTEGER NOT NULL, baseRevision TEXT)")
+            }
+        }
+
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_cached_chat_messages_targetKey_position ON cached_chat_messages (targetKey, position)")

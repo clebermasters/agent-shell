@@ -34,6 +34,7 @@ mod chat_clear_store;
 mod chat_event_store;
 mod chat_file_storage;
 mod chat_log;
+mod history;
 mod codex_app;
 mod cron;
 mod cron_handler;
@@ -85,8 +86,16 @@ pub struct AppState {
     pub shutdown_token: CancellationToken,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Apply allocator limits before Tokio starts worker threads and their heaps.
+    history::configure_allocator();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run_backend())
+}
+
+async fn run_backend() -> Result<()> {
     let args = Args::parse();
     // Initialize tracing
     tracing_subscriber::registry()
@@ -184,7 +193,7 @@ async fn main() -> Result<()> {
                 let storage = app_state.chat_file_storage.clone();
                 move |axum::extract::Path(id): axum::extract::Path<String>| async move {
                     if let Some(path) = storage.get_path(&id) {
-                        if let Ok(data) = tokio::fs::read(&path).await {
+                        if let Ok(file) = tokio::fs::File::open(&path).await {
                             let mime = storage
                                 .get_mime_type(&id)
                                 .unwrap_or_else(|| "application/octet-stream".to_string());
@@ -195,7 +204,7 @@ async fn main() -> Result<()> {
                                     "public, max-age=3600".to_string(),
                                 ),
                             ];
-                            return Ok((headers, data));
+                            return Ok((headers,axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file))));
                         }
                     }
                     Err(axum::http::StatusCode::NOT_FOUND)

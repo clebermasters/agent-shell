@@ -104,15 +104,14 @@ fn detect_tool_name_from_pane_pids(mut pane_pids: Vec<u32>) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 pub enum LogWatcher {
-    File(#[allow(dead_code)] notify::RecommendedWatcher),
+    File(#[allow(dead_code)] notify::RecommendedWatcher,tokio::task::JoinHandle<()>),
     Task(tokio::task::JoinHandle<()>),
 }
 
 impl Drop for LogWatcher {
     fn drop(&mut self) {
-        if let LogWatcher::Task(ref handle) = self {
-            handle.abort();
-        }
+        match self{LogWatcher::Task(handle)|LogWatcher::File(_,handle)=>handle.abort()}
+
     }
 }
 
@@ -120,7 +119,7 @@ impl Drop for LogWatcher {
 pub async fn watch_log_file(
     path: &Path,
     tool: AiTool,
-    event_tx: mpsc::UnboundedSender<ChatLogEvent>,
+    event_tx: mpsc::Sender<ChatLogEvent>,
     cleared_at: Option<i64>,
     limit: Option<usize>,
 ) -> Result<LogWatcher> {
@@ -133,30 +132,17 @@ pub async fn watch_log_file(
     // --- initial history read ---
     let file =
         File::open(path).with_context(|| format!("failed to open log file: {}", path.display()))?;
+    let initial_position=file.metadata()?.len();
     let mut reader = BufReader::new(file);
-    let history = read_all_messages(&mut reader, &tool);
-
-    // Filter messages based on cleared_at timestamp
-    let filtered_history: Vec<_> = if let Some(ts) = cleared_at {
-        history
-            .into_iter()
-            .filter(|msg| {
-                if let Some(msg_ts) = msg.timestamp {
-                    msg_ts.timestamp_millis() > ts
-                } else {
-                    false // Exclude un-timestamped historical messages after a clear
-                }
-            })
-            .collect()
-    } else {
-        history
+    let path_owned=path.to_owned();let tool_owned=tool.clone();
+    let page=if let Some(page)=crate::history::cached_transcript_page(path,&tool,cleared_at,0,limit.unwrap_or(30))?{page}else{
+        let permit=crate::history::permit().await?;
+        tokio::task::spawn_blocking(move ||{let _permit=permit;crate::history::transcript_page(&path_owned,&tool_owned,cleared_at,0,limit.unwrap_or(30))}).await??
     };
-
-    let total_count = filtered_history.len();
-    let (paginated, has_more) = match limit {
-        Some(n) if total_count > n => (filtered_history[total_count - n..].to_vec(), true),
-        _ => (filtered_history, false),
-    };
+    let total_count=page.total;let paginated=page.messages;let has_more=page.has_more;
+    // Watch only bytes appended after the initial snapshot. Older page requests
+    // use the same disk index rather than constructing another watcher.
+    reader.seek(SeekFrom::Start(crate::history::transcript_offset(path,&tool).unwrap_or(initial_position)))?;
 
     let ctx_info: Option<(f64, String)> = match &tool {
         AiTool::Claude => {
@@ -174,20 +160,21 @@ pub async fn watch_log_file(
             total_count,
             context_window_usage: ctx_info.as_ref().map(|(usage, _)| *usage),
             model_name: ctx_info.as_ref().map(|(_, model)| model.clone()),
-        })
+        }).await
         .ok();
 
     // Record the position after the initial read so we only parse new data.
     let start_pos = reader.stream_position()?;
 
     // --- set up file-system watcher ---
-    // `notify` callbacks are sync; bridge to async with an unbounded channel.
-    let (notify_tx, mut notify_rx) = mpsc::unbounded_channel::<()>();
+    // Coalesce synchronous file notifications into one pending wakeup.
+    let (notify_tx, mut notify_rx) = mpsc::channel::<()>(1);
+    let continue_tx=notify_tx.clone();
 
     let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         match res {
             Ok(event) if event.kind.is_modify() => {
-                let _ = notify_tx.send(());
+                let _ = notify_tx.try_send(());
             }
             Ok(_) => {} // ignore non-modify events
             Err(e) => {
@@ -202,8 +189,9 @@ pub async fn watch_log_file(
 
     // Spawn a background task that reads new lines whenever notify fires.
     let file_path = path.to_path_buf();
-    tokio::spawn(async move {
+    let task=tokio::spawn(async move {
         let mut pos = start_pos;
+        let _=continue_tx.try_send(());
         while notify_rx.recv().await.is_some() {
             // Drain any extra notifications that arrived while we were
             // processing so we do a single read per burst.
@@ -211,17 +199,19 @@ pub async fn watch_log_file(
 
             match read_new_lines(&file_path, &mut pos, &tool) {
                 Ok(messages) => {
+                    let more=messages.len()==crate::history::LIVE_BATCH;
                     for msg in messages {
                         if event_tx
-                            .send(ChatLogEvent::NewMessage { message: msg })
+                            .send(ChatLogEvent::NewMessage { message: msg }).await
                             .is_err()
                         {
                             debug!("event_tx closed, stopping watcher task");
                             return;
                         }
                     }
-                    // Recalculate context window usage for the active chat
-                    if matches!(tool, AiTool::Claude | AiTool::Codex) {
+                    if more {let _=continue_tx.try_send(());}
+                    // Recalculate after draining the bounded live backlog.
+                    if !more && matches!(tool, AiTool::Claude | AiTool::Codex) {
                         let info: Option<(f64, String)> = if matches!(tool, AiTool::Claude) {
                             claude_parser::extract_context_usage(&file_path)
                                 .map(|c| (c.usage_pct, c.model))
@@ -233,7 +223,7 @@ pub async fn watch_log_file(
                             let _ = event_tx.send(ChatLogEvent::ContextWindowUpdate {
                                 usage,
                                 model_name: Some(model),
-                            });
+                            }).await;
                         }
                     }
                 }
@@ -241,20 +231,20 @@ pub async fn watch_log_file(
                     warn!("failed to read new log lines: {e}");
                     let _ = event_tx.send(ChatLogEvent::Error {
                         error: e.to_string(),
-                    });
+                    }).await;
                 }
             }
         }
     });
 
-    Ok(LogWatcher::File(watcher))
+    Ok(LogWatcher::File(watcher,task))
 }
 
 async fn watch_opencode_db(
     db_path: &Path,
     cwd: &Path,
     pid: u32,
-    event_tx: mpsc::UnboundedSender<ChatLogEvent>,
+    event_tx: mpsc::Sender<ChatLogEvent>,
     cleared_at: Option<i64>,
     limit: Option<usize>,
 ) -> Result<LogWatcher> {
@@ -274,28 +264,11 @@ async fn watch_opencode_db(
     // Small delay to ensure client has subscribed to the channel if this was triggered by a message
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Initial fetch for history
-    if let Ok(messages) = opencode_parser::fetch_new_messages(&db_path_owned, &mut state) {
-        info!("Initial fetch got {} messages", messages.len());
-        let total_count = messages.len();
-        let (paginated, has_more) = match limit {
-            Some(n) if total_count > n => (messages[total_count - n..].to_vec(), true),
-            _ => (messages, false),
-        };
-        let _ = event_tx.send(ChatLogEvent::History {
-            messages: paginated,
-            tool: AiTool::Opencode {
-                cwd: cwd.to_path_buf(),
-                pid,
-            },
-            has_more,
-            total_count,
-            context_window_usage: None,
-            model_name: None,
-        });
-    } else {
-        info!("Initial fetch got no messages or error");
-    }
+    let path=db_path_owned.clone();let session=state.session_id.clone();
+    let permit=crate::history::permit().await?;
+    let (page,last)=tokio::task::spawn_blocking(move||{let _permit=permit;crate::history::opencode_native_page(&path,&session,cleared_at,0,limit.unwrap_or(30))}).await??;
+    state.last_time_updated=last;
+    let _=event_tx.send(ChatLogEvent::History{messages:page.messages,tool:AiTool::Opencode{cwd:cwd.to_path_buf(),pid},has_more:page.has_more,total_count:page.total,context_window_usage:None,model_name:None}).await;
 
     // Polling task
     let handle = tokio::spawn(async move {
@@ -333,7 +306,7 @@ async fn watch_opencode_db(
                             warn!("Failed to re-detect OpenCode session: {}", e);
                             let _ = event_tx.send(ChatLogEvent::Error {
                                 error: format!("OpenCode session re-detection failed: {}", e),
-                            });
+                            }).await;
                             continue;
                         }
                     }
@@ -351,7 +324,7 @@ async fn watch_opencode_db(
                     }
                     for msg in messages {
                         if event_tx
-                            .send(ChatLogEvent::NewMessage { message: msg })
+                            .send(ChatLogEvent::NewMessage { message: msg }).await
                             .is_err()
                         {
                             debug!("event_tx closed, stopping opencode polling task");
@@ -363,7 +336,7 @@ async fn watch_opencode_db(
                     warn!("failed to fetch opencode messages: {}", e);
                     let _ = event_tx.send(ChatLogEvent::Error {
                         error: format!("Opencode DB error: {}", e),
-                    });
+                    }).await;
                 }
             }
         }
@@ -373,15 +346,13 @@ async fn watch_opencode_db(
 }
 
 async fn watch_opencode_session(
-    db_path: &Path, session_id: &str, event_tx: mpsc::UnboundedSender<ChatLogEvent>,
+    db_path: &Path, session_id: &str, event_tx: mpsc::Sender<ChatLogEvent>,
     cleared_at: Option<i64>, limit: Option<usize>,
 ) -> Result<LogWatcher> {
-    let (messages, last_time_updated) = opencode_parser::fetch_all_messages(db_path, session_id, cleared_at)?;
-    let total_count = messages.len();
-    let count = limit.unwrap_or(total_count).min(total_count);
-    let tool = AiTool::OpencodeBound { session_id: session_id.to_owned() };
-    let _ = event_tx.send(ChatLogEvent::History { messages: messages[total_count-count..].to_vec(), tool,
-        has_more: count < total_count, total_count, context_window_usage: None, model_name: None });
+    let path=db_path.to_owned();let session=session_id.to_owned();let permit=crate::history::permit().await?;
+    let (page,last_time_updated)=tokio::task::spawn_blocking(move||{let _permit=permit;crate::history::opencode_native_page(&path,&session,cleared_at,0,limit.unwrap_or(30))}).await??;
+    let tool=AiTool::OpencodeBound{session_id:session_id.to_owned()};
+    let _=event_tx.send(ChatLogEvent::History{messages:page.messages,tool,has_more:page.has_more,total_count:page.total,context_window_usage:None,model_name:None}).await;
     let path = db_path.to_owned();
     let mut state = opencode_parser::OpencodeState { pid: 0, session_id: session_id.to_owned(), last_time_updated,
         cleared_at, seen_text_lengths: HashMap::new(), seen_tool_calls: Default::default(), seen_tool_results: Default::default() };
@@ -391,9 +362,9 @@ async fn watch_opencode_session(
             interval.tick().await;
             match opencode_parser::fetch_new_messages(&path, &mut state) {
                 Ok(messages) => for message in messages {
-                    if event_tx.send(ChatLogEvent::NewMessage { message }).is_err() { return; }
+                    if event_tx.send(ChatLogEvent::NewMessage { message }).await.is_err() { return; }
                 },
-                Err(error) => { if event_tx.send(ChatLogEvent::Error { error: error.to_string() }).is_err() { return; } },
+                Err(error) => { if event_tx.send(ChatLogEvent::Error { error: error.to_string() }).await.is_err() { return; } },
             }
         }
     });
@@ -433,32 +404,8 @@ fn read_all_messages(reader: &mut BufReader<File>, tool: &AiTool) -> Vec<ChatMes
 
 /// Open the file, seek to `pos`, read any new complete lines, advance `pos`,
 /// and return parsed messages.
-fn read_new_lines(path: &Path, pos: &mut u64, tool: &AiTool) -> Result<Vec<ChatMessage>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    reader.seek(SeekFrom::Start(*pos))?;
-
-    let mut messages = Vec::new();
-    let mut line_buf = String::new();
-
-    loop {
-        line_buf.clear();
-        match reader.read_line(&mut line_buf) {
-            Ok(0) => break,
-            Ok(_) => {
-                if let Some(msg) = parse_line(&line_buf, tool) {
-                    messages.push(msg);
-                }
-            }
-            Err(e) => {
-                warn!("error reading new log line: {e}");
-                break;
-            }
-        }
-    }
-
-    *pos = reader.stream_position()?;
-    Ok(messages)
+fn read_new_lines(path:&Path,pos:&mut u64,tool:&AiTool)->Result<Vec<ChatMessage>>{
+    crate::history::new_transcript_messages(path,pos,tool)
 }
 
 /// Dispatch a single line to the appropriate parser.
@@ -991,6 +938,18 @@ pub fn find_opencode_db() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dropping_file_watcher_aborts_its_reader_task() {
+        use std::io::Write;
+        let mut file=tempfile::NamedTempFile::new().unwrap();
+        writeln!(file,"{}",serde_json::json!({"type":"event_msg","payload":{"type":"agent_message","message":"hello"}})).unwrap();
+        let (tx,_rx)=mpsc::channel(32);
+        let watcher=watch_log_file(file.path(),AiTool::Codex,tx,None,Some(30)).await.unwrap();
+        let abort=match &watcher{LogWatcher::File(_,task)=>task.abort_handle(),_=>panic!("expected file watcher")};
+        drop(watcher);
+        tokio::time::timeout(std::time::Duration::from_secs(1),async{while !abort.is_finished(){tokio::task::yield_now().await;}}).await.unwrap();
+    }
 
     #[test]
     fn test_get_descendant_pids_includes_self() {

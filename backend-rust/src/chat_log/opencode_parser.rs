@@ -279,13 +279,19 @@ pub fn fetch_all_messages(
     session_id: &str,
     cleared_at: Option<i64>,
 ) -> Result<(Vec<ChatMessage>, i64)> {
+    let mut messages=Vec::new();
+    let max=visit_all_messages(db_path,session_id,cleared_at,&mut |message|{messages.push(message);Ok(())})?;
+    Ok((messages,max))
+}
+
+pub fn visit_all_messages(db_path:&Path,session_id:&str,cleared_at:Option<i64>,sink:&mut dyn FnMut(ChatMessage)->Result<()>) -> Result<i64> {
     let conn = Connection::open(db_path)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
     let min_time = cleared_at.unwrap_or(0);
 
     let mut stmt = conn.prepare(
-        "SELECT p.id, p.data, p.time_updated, json_extract(m.data, '$.role')
+        "SELECT p.id, p.data, p.time_updated, json_extract(m.data, '$.role'), length(CAST(p.data AS BLOB)), p.rowid
          FROM part p
          JOIN message m ON p.message_id = m.id
          WHERE p.session_id = ? AND p.time_updated > ?
@@ -305,12 +311,11 @@ pub fn fetch_all_messages(
         seen_tool_results: std::collections::HashSet::new(),
     };
 
-    let mut messages = Vec::new();
     let mut max_time_updated: i64 = 0;
 
     while let Some(row) = rows.next()? {
         let id: String = row.get(0)?;
-        let data: String = row.get(1)?;
+
         let time_updated: i64 = row.get(2)?;
         let role: Option<String> = row.get(3)?;
         let role = role.unwrap_or_else(|| "assistant".to_string());
@@ -319,14 +324,22 @@ pub fn fetch_all_messages(
             max_time_updated = time_updated;
         }
 
+        let size:i64=row.get(4)?;
+        if size>crate::history::INLINE_RECORD_BYTES as i64{
+            let blob=conn.blob_open("main","part","data",row.get(5)?,true)?;
+            sink(crate::history::archive_large(blob,&crate::history::attachment_directory()?,&role,Utc.timestamp_millis_opt(time_updated).single())?)?;
+            continue;
+        }
+        let data:String=row.get(1)?;
         if let Ok(part) = serde_json::from_str::<PartData>(&data) {
             if let Some(msg) = parse_part(&id, &part, time_updated, &mut state, &role) {
-                messages.push(msg);
+                sink(msg)?;
             }
         }
+        state.seen_text_lengths.clear();state.seen_tool_calls.clear();state.seen_tool_results.clear();
     }
 
-    Ok((messages, max_time_updated))
+    Ok(max_time_updated)
 }
 
 fn parse_part(

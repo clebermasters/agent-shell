@@ -195,18 +195,10 @@ pub struct ContextInfo {
 }
 
 pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
-    let data = std::fs::read_to_string(path).ok()?;
+    let records=crate::history::context_records(path).ok()?;
     let mut last_input: Option<(u64, String)> = None; // (total_input_tokens, model)
 
-    for line in data.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+    for v in records {
         let msg = match v.get("message") {
             Some(m) => m,
             None => continue,
@@ -233,7 +225,6 @@ pub fn extract_context_usage(path: &std::path::Path) -> Option<ContextInfo> {
             .unwrap_or("")
             .to_string();
         last_input = Some((input + cache_read + cache_create, model));
-        break;
     }
 
     let (total_tokens, model) = last_input?;

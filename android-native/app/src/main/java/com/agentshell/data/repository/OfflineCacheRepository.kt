@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.room.withTransaction
 import com.agentshell.data.local.AppDatabase
 import com.agentshell.data.local.CachedChatMessage
+import com.agentshell.data.local.CachedHistorySync
 import com.agentshell.data.local.CachedConversation
 import com.agentshell.data.local.CachedSession
 import com.agentshell.data.model.AcpSession
@@ -337,7 +338,8 @@ class OfflineCacheRepository @Inject constructor(
                 val newId = ids[start + offset]
                 val position = insertion + offset
                 positions[newId] = position
-                changed.add(CachedChatMessage(key, newId, position, payloads.getValue(newId)))
+                changed.add(CachedChatMessage(key, newId, position, payloads.getValue(newId), existing[newId]?.syncRevision.orEmpty(),
+                    existing[newId]?.takeIf { it.payload == payloads.getValue(newId) }?.serverKey.orEmpty()))
             }
             cursor = insertion + runLength - 1
             firstPosition = minOf(firstPosition, insertion)
@@ -353,6 +355,7 @@ class OfflineCacheRepository @Inject constructor(
         try {
             socket.connect(url)
             withTimeout(20_000) { socket.isConnected.first { it } }
+            val incremental = supportsIncrementalSync(socket)
             for (session in snapshot.tmux) {
                 try {
                     val windows = request(socket, mapOf("type" to "list-windows", "sessionName" to session.name)) {
@@ -363,12 +366,15 @@ class OfflineCacheRepository @Inject constructor(
                         dao.insertSessions(listOf(CachedSession(host.id, "windows", session.name, 0, json.encodeToString(indexes))))
                     }
                     for (index in indexes) {
-                        try { syncHistory(socket, ChatTarget.create(host.id, session.name, index)) }
+                        try {
+                            val target = ChatTarget.create(host.id, session.name, index)
+                            if (incremental) syncHistoryIncremental(socket, target) else syncHistory(socket, target)
+                        }
                         catch (error: Exception) {
                             if (error is CancellationException && error !is TimeoutCancellationException) throw error
                             Log.w("OfflineCache", "History refresh deferred for a terminal window", error)
                         }
-                        delay(150)
+                        if (incremental) yield() else delay(150)
                     }
                 } catch (error: Exception) {
                     if (error is CancellationException && error !is TimeoutCancellationException) throw error
@@ -376,17 +382,126 @@ class OfflineCacheRepository @Inject constructor(
                 }
             }
             for (session in snapshot.acp) {
-                try { syncHistory(socket, ChatTarget.create(host.id, session.sessionId, isAcp = true, cwd = session.cwd)) }
+                try {
+                    val target = ChatTarget.create(host.id, session.sessionId, isAcp = true, cwd = session.cwd)
+                    if (incremental) syncHistoryIncremental(socket, target) else syncHistory(socket, target)
+                }
                 catch (error: Exception) {
                     if (error is CancellationException && error !is TimeoutCancellationException) throw error
                     Log.w("OfflineCache", "History refresh deferred for a direct session", error)
                 }
-                delay(150)
+                if (incremental) yield() else delay(150)
             }
         } catch (error: Exception) {
             if (error is CancellationException && error !is TimeoutCancellationException) throw error
             Log.w("OfflineCache", "Offline history refresh deferred", error)
         } finally { socket.dispose() }
+    }
+
+    private suspend fun supportsIncrementalSync(socket: SessionSocket): Boolean = try {
+        withTimeout(1_500) {
+            request(socket, mapOf("type" to "get-history-sync-capabilities")) {
+                it["type"] == "history-sync-capabilities" || it["type"] == "error"
+            }.let { (it["version"] as? Number)?.toInt() == 1 }
+        }
+    } catch (error: Exception) {
+        if (error is CancellationException && error !is TimeoutCancellationException) throw error
+        false
+    }
+
+    /** Fetch finite disk-backed snapshots; never establish live archive watchers. */
+    internal suspend fun syncHistoryIncremental(socket: SessionSocket, target: ChatTarget) {
+        val session = if (target.isAcp) "acp_${target.sessionName}" else target.sessionName
+        val requestId = java.util.UUID.randomUUID().toString()
+        val state = request(socket, mapOf("type" to "get-history-state", "requestId" to requestId,
+            "sessionName" to session, "windowIndex" to target.windowIndex)) { it["type"] == "history-state" && it["requestId"] == requestId }
+        if (state["available"] != true) return // An unavailable source never erases a local archive.
+        val currentRevision = state["revision"] as? String ?: return
+        val existing = database.withTransaction { dao.historySync(target.key) to dao.conversation(target.key) }
+        if (existing.first?.revision == currentRevision && existing.first?.complete == true && existing.second?.complete == true) return
+        // Finish a pinned snapshot before catching up with concurrent appends.
+        // A busy conversation must not restart its oldest-page download forever.
+        var progress = existing.first?.takeIf { it.revision == currentRevision || !it.complete }
+            ?: CachedHistorySync(target.key, currentRevision,
+                baseRevision = existing.first?.takeIf { it.complete && it.keyed }?.revision)
+        val revision = progress.revision
+        val localRevision = historyRevision(target.key)
+        val conversationKey = state["conversationKey"] as? String
+        repeat(4) {
+            if (historyRevision(target.key) != localRevision) return
+            val id = java.util.UUID.randomUUID().toString()
+            val command = mapOf("type" to "get-history-page", "requestId" to id,
+                "sessionName" to session, "windowIndex" to target.windowIndex, "revision" to revision,
+                "offset" to progress.offset, "limit" to if (progress.offset == 0) 30 else 200,
+                "baseRevision" to progress.baseRevision)
+            suspend fun fetch(command: Map<String, Any?>) = request(socket, command) {
+                it["type"] == "history-page" && it["requestId"] == command["requestId"]
+            }
+            var page = fetch(command)
+            if (page["error"] != null || page["revision"] != revision) {
+                if (revision != currentRevision && page["error"]?.toString()?.contains("changed", ignoreCase = true) == true) {
+                    dao.saveHistorySync(CachedHistorySync(target.key, currentRevision))
+                    syncRequests.trySend(Unit)
+                }
+                return
+            }
+            @Suppress("UNCHECKED_CAST")
+            fun entries(page: Map<String, Any?>) = (page["entries"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }
+            var entries = entries(page)
+            var known = entries?.mapNotNull { it["key"] as? String }?.chunked(400)?.flatMap {
+                dao.serverMessagesByKeys(target.key, it)
+            }?.associate { it.serverKey to it.messageId }.orEmpty()
+            if (entries?.any { it["message"] == null && it["key"] !in known } == true) {
+                // A local edit or missing base snapshot can invalidate elision.
+                // Re-fetch this finite page with all bodies before acknowledging it.
+                page = fetch(command + mapOf("requestId" to java.util.UUID.randomUUID().toString(), "baseRevision" to null))
+                if (page["error"] != null || page["revision"] != revision) return
+                entries = entries(page)
+                known = emptyMap()
+            }
+            val downloaded = if (entries == null) emptyMap() else entries.mapNotNull { entry ->
+                @Suppress("UNCHECKED_CAST")
+                (entry["message"] as? Map<String, Any?>)?.let { ChatMessageParser.parse(it) }?.let { (entry["key"] as String) to it }
+            }.toMap()
+            val messages = if (entries == null) parseMessages(page) else downloaded.values.toList()
+            val count = entries?.size ?: messages.size
+            val hasMore = page["hasMore"] == true
+            if (hasMore && count == 0) return
+            if (entries?.any { it["key"] !in downloaded && it["key"] !in known } == true) return
+            saveHistoryWindow(target, messages, false, conversationKey, page["tool"] as? String,
+                beforeMessageId = if (entries == null) progress.beforeMessageId else null, expectedRevision = localRevision)
+            val next = progress.copy(offset = progress.offset + count,
+                beforeMessageId = messages.firstOrNull()?.id ?: progress.beforeMessageId, complete = !hasMore,
+                keyed = entries != null)
+            val committed = database.withTransaction {
+                if (historyRevision(target.key) != localRevision) return@withTransaction false
+                if (entries == null) {
+                    for (ids in messages.map { it.id }.chunked(400)) dao.markSyncedMessages(target.key, ids, revision)
+                } else {
+                    for (entry in entries) {
+                        val key = entry["key"] as String
+                        val messageId = downloaded[key]?.id ?: known[key] ?: return@withTransaction false
+                        val position = (entry["position"] as? Number)?.toInt() ?: return@withTransaction false
+                        check(dao.assignSyncedMessage(target.key, messageId, key, position, revision) == 1)
+                    }
+                }
+                if (!hasMore) {
+                    dao.removeUnsyncedMessages(target.key, revision)
+                    dao.conversation(target.key)?.let { dao.insertConversation(it.copy(complete = true)) }
+                }
+                dao.saveHistorySync(next)
+                true
+            }
+            if (!committed) return
+            if (!hasMore) {
+                if (revision != currentRevision) syncRequests.trySend(Unit)
+                return
+            }
+            progress = next
+            delay(100)
+        }
+        // A conflated continuation lets other conversations and live UI work run.
+        syncRequests.trySend(Unit)
     }
 
     private suspend fun syncHistory(socket: SessionSocket, target: ChatTarget) {

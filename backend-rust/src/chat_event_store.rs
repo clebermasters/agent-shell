@@ -51,12 +51,42 @@ impl ChatEventStore {
 
             CREATE INDEX IF NOT EXISTS idx_chat_events_session_window_time
             ON chat_events(session_name, window_index, timestamp_millis);
+            CREATE TABLE IF NOT EXISTS history_revisions (session_name TEXT NOT NULL,window_index INTEGER NOT NULL,revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(session_name,window_index));
+            CREATE TRIGGER IF NOT EXISTS history_event_insert AFTER INSERT ON chat_events BEGIN
+              INSERT INTO history_revisions VALUES (NEW.session_name,NEW.window_index,1) ON CONFLICT(session_name,window_index) DO UPDATE SET revision=revision+1;
+            END;
+            CREATE TRIGGER IF NOT EXISTS history_event_update AFTER UPDATE ON chat_events BEGIN
+              INSERT INTO history_revisions VALUES (NEW.session_name,NEW.window_index,1) ON CONFLICT(session_name,window_index) DO UPDATE SET revision=revision+1;
+            END;
+            CREATE TRIGGER IF NOT EXISTS history_event_delete AFTER DELETE ON chat_events BEGIN
+              INSERT INTO history_revisions VALUES (OLD.session_name,OLD.window_index,1) ON CONFLICT(session_name,window_index) DO UPDATE SET revision=revision+1;
+            END;
 
             CREATE TABLE IF NOT EXISTS acp_deleted_sessions (
                 session_id TEXT PRIMARY KEY
             );
             "#,
         )?;
+        Ok(())
+    }
+
+    pub fn history_index_path(&self) -> PathBuf { self.db_path.with_file_name("history_index.db") }
+
+    pub fn history_revision(&self, session: &str, window: u32) -> Result<i64> {
+        Ok(self.open_connection()?.query_row("SELECT revision FROM history_revisions WHERE session_name=? AND window_index=?",params![session,window],|r|r.get(0)).optional()?.unwrap_or(0))
+    }
+
+    pub fn visit_history(&self, session: &str, window: u32, acp_overlay: bool, sink: &mut dyn FnMut(ChatMessage)->Result<()>) -> Result<()> {
+        let conn=self.open_connection()?;
+        let mut stmt=conn.prepare("SELECT message_json,length(CAST(message_json AS BLOB)),rowid,timestamp_millis FROM chat_events WHERE session_name=? AND window_index=? AND (?=0 OR source IN ('webhook','webhook-file')) ORDER BY timestamp_millis,rowid")?;
+        let mut rows=stmt.query(params![session,window,acp_overlay])?;
+        while let Some(row)=rows.next()? {
+            let size:i64=row.get(1)?;
+            if size>crate::history::INLINE_RECORD_BYTES as i64 {
+                let blob=conn.blob_open("main","chat_events","message_json",row.get(2)?,true)?;
+                sink(crate::history::archive_large(blob,&self.db_path.parent().unwrap_or(std::path::Path::new(".")).join("chat_files"),"assistant",Utc.timestamp_millis_opt(row.get(3)?).single())?)?;
+            }else{let body:String=row.get(0)?;sink(serde_json::from_str(&body)?)?;}
+        }
         Ok(())
     }
 

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
+import com.agentshell.data.model.BrowserContentSize
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -207,6 +208,16 @@ class PreferencesDataStore @Inject constructor(
     suspend fun setBrowserProfileId(hostId: String, profileId: String) {
         require(hostId.isNotBlank() && profileId.isNotBlank())
         dataStore.edit { it[browserProfileKey(hostId)] = profileId }
+    }
+
+    private fun browserContentSizeKey(hostId: String) = intPreferencesKey("browser_content_density_$hostId")
+
+    fun browserContentSize(hostId: String): Flow<BrowserContentSize> =
+        dataStore.data.map { BrowserContentSize.fromDensityPercent(it[browserContentSizeKey(hostId)]) }
+
+    suspend fun setBrowserContentSize(hostId: String, size: BrowserContentSize) {
+        require(hostId.isNotBlank())
+        dataStore.edit { it[browserContentSizeKey(hostId)] = size.densityPercent }
     }
 
     // ─── recent sessions (swipe navigation) ───────────────────────────────────

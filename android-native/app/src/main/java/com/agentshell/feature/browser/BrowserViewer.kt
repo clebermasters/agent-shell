@@ -30,10 +30,12 @@ data class BrowserLaunch(val origin: String, val sessionId: String, val grant: S
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BrowserViewer(launch: BrowserLaunch, onConnection: (String) -> Unit,
-    onView: (WebView?) -> Unit, modifier: Modifier = Modifier) {
+    onView: (WebView?) -> Unit, modifier: Modifier = Modifier,
+    onDisplaySupport: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val connection by rememberUpdatedState(onConnection)
+    val displaySupport by rememberUpdatedState(onDisplaySupport)
     var connected by remember(launch) { mutableStateOf(false) }
     var routeReady by remember(launch) { mutableStateOf(launch.tunnelAddress==null) }
     DisposableEffect(launch) {
@@ -75,6 +77,9 @@ fun BrowserViewer(launch: BrowserLaunch, onConnection: (String) -> Unit,
                 WebViewCompat.addWebMessageListener(this, "BrowserHost", setOf(launch.origin)) { _, message, origin, mainFrame, _ ->
                     if (!mainFrame || origin.toString().trimEnd('/') != launch.origin) return@addWebMessageListener
                     val data = runCatching { JSONObject(message.data ?: "") }.getOrNull() ?: return@addWebMessageListener
+                    if (data.optString("type") == "display-capability") post {
+                        displaySupport(data.optBoolean("resizeSupported", false))
+                    }
                     if (data.optString("type") == "connection") post {
                         connected = data.optString("state") == "connected"
                         connection(data.optString("state"))

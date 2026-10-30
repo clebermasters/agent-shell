@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentshell.data.model.Host
+import com.agentshell.data.model.BrowserContentSize
 import com.agentshell.data.repository.*
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.TranscriptionJob
@@ -30,6 +31,16 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     private val viewerId = saved.get<String>("browserViewerId") ?: browser.viewerId.also { saved["browserViewerId"] = it }
     private val _ui = MutableStateFlow(BrowserUiState())
     val uiState = _ui.asStateFlow()
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val contentSize = hosts.getSelectedHost().map { it?.id }.distinctUntilChanged().flatMapLatest { id ->
+        if (id == null) flowOf(BrowserContentSize.DEFAULT) else preferences.browserContentSize(id)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, BrowserContentSize.DEFAULT)
+
+    fun setContentSize(size: BrowserContentSize) {
+        val id = host?.id ?: return
+        viewModelScope.launch { preferences.setBrowserContentSize(id, size) }
+    }
+
     private val _profiles = MutableStateFlow(BrowserProfilesUiState())
     val profileUiState = _profiles.asStateFlow()
     private var profilesJob: Job? = null

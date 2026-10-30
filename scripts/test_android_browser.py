@@ -63,7 +63,8 @@ class Android:
                         if(!window.AgentShellUI?.connected || !o?.adaptive || !r || !innerHeight) return false;
                         if(!o.keyboardVisible && Math.abs((r._fbWidth/r._fbHeight)/(innerWidth/innerHeight)-1)>.005) return false;
                         return r._canvas.width>100 && r._canvas.getBoundingClientRect().width>100 && r._canvas.getContext("2d").getImageData(100,100,1,1).data[3]>0})()'''):return target
-            except (OSError,StopIteration,RuntimeError,subprocess.CalledProcessError,websockets.ConnectionClosed):pass
+            except (OSError,StopIteration,RuntimeError,subprocess.CalledProcessError,
+                    websockets.ConnectionClosed,websockets.exceptions.InvalidHandshake):pass
             await asyncio.sleep(.25)
         raise AssertionError('No current secure browser frame')
     async def screenshot(self,name):

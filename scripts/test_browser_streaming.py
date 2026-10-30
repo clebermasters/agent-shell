@@ -27,11 +27,12 @@ HTTP='http://127.0.0.1:18999'
 HTTPS='https://127.0.0.1:18998'
 
 class Fixture:
-    def __init__(self, output, binary, shared_credentials=False, automatic_profile_check=False):
+    def __init__(self, output, binary, shared_credentials=False, automatic_profile_check=False, tls_directory=None):
         self.output=output;self.binary=binary;self.backend=None;self.pages=None;self.cookie_seen=False
         self.config_path=output/'browser.json';self.config={}
         self.results={};self.ssl=None;self.shared_credentials=shared_credentials;self.mouse_events=[];self.pages_loaded=0
         self.automatic_profile_check=automatic_profile_check
+        self.tls_directory=tls_directory
     def api(self,path,body=None,token=TOKEN,cookie=None,https=False,raw=False):
         headers={}
         if token:headers['X-Auth-Token']=token
@@ -51,7 +52,9 @@ class Fixture:
         assert q.returncode==0;return json.loads(q.stdout)
     def start_backend(self):
         environment=dict(os.environ,AUTH_TOKEN=TOKEN,AGENTSHELL_BROWSER_CONFIG=str(self.config_path),
-            AGENTSHELL_HTTP_PORT='18999',AGENTSHELL_HTTPS_PORT='18998',RUST_LOG='error',HOME=str(self.output/'home'))
+            AGENTSHELL_HTTP_PORT='18999',AGENTSHELL_HTTPS_PORT='18998',
+            AGENTSHELL_TLS_CERT_PATH=str(self.output/'certs/cert.pem'),
+            AGENTSHELL_TLS_KEY_PATH=str(self.output/'certs/key.pem'),RUST_LOG='error',HOME=str(self.output/'home'))
         with (self.output/'backend.log').open('ab') as log:
             self.backend=subprocess.Popen([str(self.binary)],cwd=self.output/'backend',env=environment,stdout=log,stderr=log)
         for _ in range(50):
@@ -66,7 +69,7 @@ class Fixture:
         self.output.mkdir(parents=True,exist_ok=True);self.output.chmod(0o700)
         if self.config_path.exists(): self.helper('stop')
         for name in ['backend','home','certs']:(self.output/name).mkdir(exist_ok=True)
-        source=Path('/tmp/agentshell-browser-implementation/tls')
+        source=self.tls_directory or Path('/tmp/agentshell-browser-implementation/tls')
         for name in ['cert.pem','key.pem','ca.pem']:shutil.copyfile(source/name,self.output/'certs'/name)
         self.ssl=ssl.create_default_context(cafile=str(self.output/'certs/ca.pem'))
         self.config={'sessionId':str(uuid.uuid4()),'userDataDir':str(self.output/'chrome-profile'),
@@ -231,8 +234,9 @@ def main():
     parser.add_argument('--keep-running',action='store_true');parser.add_argument('--cleanup',action='store_true')
     parser.add_argument('--shared-credential-store',action='store_true',help='Verify existing keyring access and desktop-portal isolation without reading credentials')
     parser.add_argument('--automatic-profile-check',action='store_true',help='Verify Chrome selects its own existing fixture profile without a forced profile argument')
+    parser.add_argument('--tls-directory',type=Path,help='Directory containing test-only cert.pem, key.pem and ca.pem')
     args=parser.parse_args()
-    fixture=Fixture(args.output,args.binary.resolve(),args.shared_credential_store,args.automatic_profile_check)
+    fixture=Fixture(args.output,args.binary.resolve(),args.shared_credential_store,args.automatic_profile_check,args.tls_directory)
     if args.cleanup:
         fixture.cleanup();return
     try:

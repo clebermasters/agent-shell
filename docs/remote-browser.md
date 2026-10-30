@@ -304,9 +304,25 @@ python3 scripts/test_browser_profiles.py --binary backend-rust/target/release/ag
 The browser follows the viewer's available aspect ratio, including rotation,
 tablets and foldable layouts. The remote desktop resizes through KasmVNC while
 the same Chrome process and profile keep running. Logical dimensions are bounded
-(up to 1600 by 2160 pixels), avoiding an unnecessarily large physical-pixel stream
+(by default up to 1600 by 2160 pixels), avoiding an unnecessarily large physical-pixel stream
 on high-density displays. Unsupported desktop resizing retains the existing
 scaled view. Older APKs keep their previous scaling behavior.
+
+**Content size** in the browser toolbar (or fullscreen menu) changes how much
+fits in the screen. Choose **Larger text**, **Default**, **More content**,
+**Even more content**, or **Most content**. The corresponding remote resolution
+densities are 75%, 100%, 125%, 150%, and 200%. Default preserves the existing
+fit. Each server remembers its own choice on the phone. The desktop keeps the
+screen's aspect ratio and resizes live without restarting Chrome or its tabs.
+Optional sizes are capped at 2560 by 3840 pixels and six megapixels, so the
+largest choices may converge on a large display. Higher resolutions can use
+more bandwidth and encoding resources.
+
+Selecting a size returns the viewer to fit. Pinch zoom still magnifies that
+chosen desktop; **Fit browser to screen** resets magnification while keeping
+the content-size choice. Select **Default** to restore the original density.
+Size changes wait until the keyboard closes. The control is available when
+the updated viewer reports support for desktop resizing.
 
 **Expand browser** hides the app toolbar, keyboard strip, status bar and navigation
 bar. The viewer uses the remaining screen while respecting camera cutouts. A
@@ -558,6 +574,8 @@ python3 scripts/test_android_browser_pointer_lock.py
 python3 scripts/test_android_browser_mouse.py
 python3 scripts/test_android_browser_fullscreen.py
 python3 scripts/test_android_browser_viewport.py --output /tmp/agentshell-viewport-check
+node scripts/test_browser_content_size.js
+python3 scripts/test_android_browser_content_size.py --apk /path/to/isolated-debug.apk --fixture /path/to/owned-streaming-fixture --output /tmp/agentshell-content-size-check
 python3 scripts/test_backend_install.py
 python3 scripts/test_browser_streaming.py --keep-running
 # On a logged-in Linux desktop, additionally verify keyring/portal isolation:
@@ -646,3 +664,14 @@ The Chrome process, selected tab, synthetic authentication, live memory and draf
 remained unchanged. The release APK retained the existing signing identity and
 excluded the isolated test activities/token/CA. Real Google authentication and
 physical-device performance were not inspected by those tests.
+
+The 2026-10-30 content-size update passed six geometry/adapter checks, seven
+dictation bridge regressions, all 234 Android unit tests and 656 Rust tests
+(one existing ignored test). The large TMUX paste test required a sequential
+suite run; it also passed independently. Live Android checks passed all 17
+content-size cases on phone and foldable layouts, including every preset,
+tap coordinates, keyboard, rotation, fullscreen and reconnect persistence,
+while retaining the same Chrome process/profile. Those checks included a camera
+cutout. The existing twelve fullscreen and five direct-touch checks passed on
+the flat-display fixture expected by their original assertions. The release APK
+build passed and excluded the isolated test credentials.

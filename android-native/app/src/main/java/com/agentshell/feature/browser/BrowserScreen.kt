@@ -91,6 +91,9 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val voice by viewModel.voiceUiState.collectAsStateWithLifecycle()
     val profiles by viewModel.profileUiState.collectAsStateWithLifecycle()
+    val contentSize by viewModel.contentSize.collectAsStateWithLifecycle()
+    var contentSizeDialog by remember { mutableStateOf(false) }
+    var displayResizeSupported by remember(ui.launch) { mutableStateOf<Boolean?>(null) }
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     var view by remember { mutableStateOf<WebView?>(null) }
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -170,8 +173,8 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
             previousBehavior?.let{controller?.systemBarsBehavior=it}
         }
     }
-    LaunchedEffect(view,expanded,keyboardVisible,ui.status) {
-        view?.evaluateJavascript("window.AgentShellViewportOptions={adaptive:true,fullscreen:$expanded,keyboardVisible:$keyboardVisible};",null)
+    LaunchedEffect(view,expanded,keyboardVisible,ui.status,contentSize) {
+        view?.evaluateJavascript("window.AgentShellViewportOptions={adaptive:true,fullscreen:$expanded,keyboardVisible:$keyboardVisible,contentDensity:${contentSize.densityPercent}};",null)
     }
     DisposableEffect(lifecycle,viewModel) {
         if(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) viewModel.resume()
@@ -211,7 +214,8 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
             ui.notice?.takeIf{ui.launch!=null && !expanded}?.let { Text(it,Modifier.padding(horizontal=16.dp,vertical=8.dp),style=MaterialTheme.typography.bodySmall) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val launch=ui.launch
-                if(launch!=null) key(launch){BrowserViewer(launch,{viewModel.connection(launch,it)},{view=it})}
+                if(launch!=null) key(launch){BrowserViewer(launch,{viewModel.connection(launch,it)},{view=it},
+                    onDisplaySupport={displayResizeSupported=it})}
                 else Column(Modifier.align(Alignment.Center).padding(28.dp),horizontalAlignment=Alignment.CenterHorizontally,
                     verticalArrangement=Arrangement.spacedBy(12.dp)) {
                     Icon(Icons.Default.Language,contentDescription=null,Modifier.size(48.dp),tint=MaterialTheme.colorScheme.primary)
@@ -287,6 +291,8 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
                             browserKeyboard(view)
                         })
                         DropdownMenuItem(text={Text("Mouse pointer")},onClick={fullscreenTools=false;view?.evaluateJavascript("window.AgentShellViewer?.mouse()",null)})
+                        DropdownMenuItem(text={Text("Content size")},enabled=displayResizeSupported==true,
+                            onClick={fullscreenTools=false;contentSizeDialog=true})
                         DropdownMenuItem(text={Text("Fit browser to screen")},onClick={fullscreenTools=false;view?.evaluateJavascript("window.AgentShellViewer?.fit()",null)})
                         DropdownMenuItem(text={Text("Browser interaction options")},onClick={fullscreenTools=false;view?.evaluateJavascript("window.AgentShellViewer?.controls()",null)})
                         DropdownMenuItem(text={Text("Esc")},onClick={fullscreenTools=false;view?.evaluateJavascript("window.AgentShellViewer?.key(65307)",null)})
@@ -313,6 +319,9 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
                         Spacer(Modifier.width(6.dp));Text(if(voice.isRecording) "Stop" else "Dictate")
                     }
                     TextButton(onClick={browserKeyboard(view)}){Icon(Icons.Default.Keyboard,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text("Keyboard")}
+                    TextButton(onClick={contentSizeDialog=true},enabled=displayResizeSupported==true) {
+                        Icon(Icons.Default.AspectRatio,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text("Content size")
+                    }
                     for((label,code) in listOf("Esc" to 65307,"Tab" to 65289,"Enter" to 65293)) TextButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.key($code)",null)}){Text(label)}
                     IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.zoom(1.25)",null)}){Icon(Icons.Default.ZoomIn,"Zoom browser view in")}
                     IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.fit()",null)}){Icon(Icons.Default.ZoomOut,"Fit browser to screen")}
@@ -322,6 +331,8 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
             }
         }
     }
+    if(contentSizeDialog) BrowserContentSizeDialog(contentSize,
+        onSelect={viewModel.setContentSize(it)},onDismiss={contentSizeDialog=false})
     if(profiles.visible && profiles.confirmation==null) AlertDialog(
         onDismissRequest={viewModel.dismissProfiles()},
         title={Text("Chrome profiles")},

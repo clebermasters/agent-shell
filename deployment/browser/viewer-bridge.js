@@ -1,5 +1,20 @@
 /* Adapter for the checksum-pinned KasmVNC 1.5.0 client. No backend credentials. */
 (() => {
+  // Keep Default byte-for-byte compatible with the existing logical desktop.
+  // Optional density changes the remote resolution, not the local fit/zoom.
+  const contentDensity = value => [75,100,125,150,200].includes(value) ? value : 100;
+  const desktopSize = (w, h, value) => {
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w < 100 || h < 100) return null;
+    let factor = Math.max(1, 640/w, 360/h);
+    factor *= Math.min(1, 1600/(w*factor), 2160/(h*factor));
+    const density = contentDensity(value);
+    if (density === 100) return {width:Math.round(w*factor/2)*2, height:Math.round(h*factor/2)*2, density, capped:false};
+    factor *= density/100;
+    const limit = Math.min(1, 2560/(w*factor), 3840/(h*factor), Math.sqrt(6000000/(w*h*factor*factor)));
+    factor *= limit;
+    return {width:Math.max(2,Math.floor((w*factor+1e-6)/2)*2), height:Math.max(2,Math.floor((h*factor+1e-6)/2)*2), density, capped:limit<1};
+  };
+  window.AgentShellBrowserGeometry = Object.freeze({desktopSize, contentDensity});
   const embeddedWebView = !!window.BrowserHost || /;\s*wv\)/i.test(navigator.userAgent);
   const layout = document.createElement('style');
   layout.textContent = `
@@ -67,7 +82,7 @@
       try { rfb.sendKey(118, 'KeyV', false); rfb.sendKey(65507, 'ControlLeft', false); } catch (_) { /* disconnected */ }
     }
   };
-  let lastState, lastSize, zoom = 1, pinchStart, panStart, mouse;
+  let lastDisplaySupport, lastState, lastSize, zoom = 1, pinchStart, panStart, mouse;
   let fitScale, keyboardFit, keyboardRequestedUntil = 0, keyboardWasVisible = false;
   const keyboardActive = () => {
     const visible = !!window.AgentShellViewportOptions?.keyboardVisible;
@@ -129,12 +144,15 @@
       }
       return;
     }
-    // Use a readable logical desktop size with the viewer's aspect ratio.
-    // Keep encoding cost bounded on high-DPI devices instead of using physical
-    // screen pixels. The keyboard retains the previous desktop geometry.
-    let factor=Math.max(1,640/innerWidth,360/innerHeight);
-    factor*=Math.min(1,1600/(innerWidth*factor),2160/(innerHeight*factor));
-    const width=Math.round(innerWidth*factor/2)*2, height=Math.round(innerHeight*factor/2)*2;
+    const geometry=desktopSize(innerWidth,innerHeight,options.contentDensity);
+    if(!geometry) return;
+    const {width,height,density}=geometry;
+    if(rfb.agentShellContentDensity!==density) {
+      // A deliberate size choice returns to fit; ordinary pinch/rotation keep
+      // their existing behavior. Defer this until the keyboard is closed.
+      if(rfb.agentShellContentDensity!==undefined) {zoom=1;keyboardFit=undefined;}
+      rfb.agentShellContentDensity=density;
+    }
     const size=`${width}:${height}`;
     if (rfb.agentShellDesktopSize===size) return;
     rfb.agentShellDesktopSize=size;
@@ -175,6 +193,13 @@
     }
     const state = ui.connected ? 'connected' : (ui.rfb?._rfbConnectionState || 'connecting');
     if (state !== lastState) { report(state); lastState = state; }
+    if(ui.connected) {
+      const supported=!!ui.rfb?._supportsSetDesktopSize;
+      if(supported!==lastDisplaySupport) {
+        window.BrowserHost?.postMessage(JSON.stringify({type:'display-capability',resizeSupported:supported}));
+        lastDisplaySupport=supported;
+      }
+    }
     adaptDesktop(ui);
     if (ui.connected) scale(ui.rfb);
     mouse?.paint();

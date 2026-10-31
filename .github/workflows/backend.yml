@@ -38,6 +38,19 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install tmux pkg-config openssl@3
 
+      - name: Native Chrome helper build and permission checks
+        if: runner.os == 'macOS'
+        run: |
+          if [[ -f scripts/build-macos-browser.sh ]]; then
+            bash scripts/build-macos-browser.sh --output "$RUNNER_TEMP/AgentShellBrowser.app"
+            "$RUNNER_TEMP/AgentShellBrowser.app/Contents/MacOS/AgentShellBrowser" --self-test
+            "$RUNNER_TEMP/AgentShellBrowser.app/Contents/MacOS/AgentShellBrowser" --check > "$RUNNER_TEMP/browser-permissions.json" || true
+            python3 -c 'import json,sys; assert isinstance(json.load(open(sys.argv[1])),dict)' "$RUNNER_TEMP/browser-permissions.json"
+            ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/AgentShellBrowser.app" "$RUNNER_TEMP/${{ matrix.browser_asset }}"
+          else
+            echo "Native Chrome helper source has not been included in this core checkpoint."
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -65,19 +78,6 @@ jobs:
           .ci-python/bin/python -m pip install 'websockets>=13,<16'
           .ci-python/bin/python scripts/test_native_backend_smoke.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-smoke"
           .ci-python/bin/python scripts/test_native_chat_platform.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-chat"
-
-      - name: Native Chrome helper build and permission checks
-        if: runner.os == 'macOS'
-        run: |
-          if [[ -f scripts/build-macos-browser.sh ]]; then
-            bash scripts/build-macos-browser.sh --output "$RUNNER_TEMP/AgentShellBrowser.app"
-            "$RUNNER_TEMP/AgentShellBrowser.app/Contents/MacOS/AgentShellBrowser" --self-test
-            "$RUNNER_TEMP/AgentShellBrowser.app/Contents/MacOS/AgentShellBrowser" --check > "$RUNNER_TEMP/browser-permissions.json" || true
-            python3 -c 'import json,sys; assert isinstance(json.load(open(sys.argv[1])),dict)' "$RUNNER_TEMP/browser-permissions.json"
-            ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/AgentShellBrowser.app" "$RUNNER_TEMP/${{ matrix.browser_asset }}"
-          else
-            echo "Native Chrome helper source has not been included in this core checkpoint."
-          fi
 
       - name: Stage platform release asset
         run: |

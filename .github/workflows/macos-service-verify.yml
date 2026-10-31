@@ -1,7 +1,7 @@
 name: Verify macOS service installer
 on:
   push:
-    paths: [.github/workflows/macos-service-verify.yml]
+    paths: [.github/workflows/macos-service-verify.yml, scripts/backend-runtime.py, scripts/install-macos.py, scripts/test_macos_service_smoke.py]
 permissions:
   contents: read
   actions: read

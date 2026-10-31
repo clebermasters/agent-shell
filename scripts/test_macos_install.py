@@ -27,7 +27,7 @@ class MacInstallerTests(unittest.TestCase):
         self.commands = []
         def run(command, **kwargs):
             self.commands.append(command)
-            return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+            return subprocess.CompletedProcess(command, 1 if command[:2] == ['launchctl', 'print'] else 0, stdout='', stderr='')
         self.value.run = run
 
     def tearDown(self): self.temporary.cleanup()
@@ -111,6 +111,19 @@ class MacInstallerTests(unittest.TestCase):
         self.assertFalse(self.commands)
         self.assertFalse(self.value.binary.exists())
 
+    def test_upgrade_waits_for_the_previous_job_to_exit_before_bootstrap(self):
+        clock = [0.0]; states = iter([0, 0, 1])
+        def run(command, **kwargs):
+            self.commands.append(command)
+            return subprocess.CompletedProcess(command, next(states) if command[:2] == ['launchctl', 'print'] else 0)
+        self.value.run = run; self.value.health = lambda settings: True
+        with patch.object(runtime.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(runtime.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0]+seconds)):
+            self.value.start({'AUTH_TOKEN': 'fixture', 'AGENTSHELL_HTTP_PORT': '4010'})
+        bootstrap = next(i for i, command in enumerate(self.commands) if command[:2] == ['launchctl', 'bootstrap'])
+        self.assertEqual(3, sum(command[:2] == ['launchctl', 'print'] for command in self.commands[:bootstrap]))
+        self.assertEqual(.1, clock[0])
+
     def test_unsupported_provider_and_invalid_origin_fail_before_any_mutation(self):
         for provider in ['kasmvnc', 'vm', 'native-macos']:
             self.args.with_browser = provider
@@ -173,6 +186,28 @@ class MacInstallerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_stop_waits_through_exiting_state_and_returns_only_when_unloaded(self):
+        commands = []; clock = [0.0]; states = iter([0, 0, 1])
+        def run(arguments, **kwargs):
+            commands.append(arguments)
+            return subprocess.CompletedProcess(arguments, next(states) if arguments[1] == 'print' else 0)
+        with patch.object(runtime, 'service_paths', return_value=(Path('/unused'), Path('/unused'), f'gui/{os.getuid()}')), \
+             patch.object(runtime.sys, 'platform', 'darwin'), patch.object(runtime.subprocess, 'run', side_effect=run), \
+             patch.object(runtime.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(runtime.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0]+seconds)):
+            runtime.service_action('stop', Path('/unused'))
+        self.assertEqual(['print', 'bootout', 'print', 'print'], [command[1] for command in commands])
+        self.assertEqual(.1, clock[0])
+
+    def test_unload_timeout_is_bounded_and_reports_the_target(self):
+        clock = [0.0]
+        with patch.object(runtime.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(runtime.time, 'sleep', side_effect=lambda seconds: clock.__setitem__(0, clock[0]+seconds)):
+            with self.assertRaisesRegex(ValueError, 'did not unload within 0.2 seconds'):
+                runtime.wait_for_unloaded('gui/501/fixture',
+                    run=lambda command, **kwargs: subprocess.CompletedProcess(command, 0), timeout=.2)
+        self.assertEqual(.2, clock[0])
+
     def test_literal_settings_are_not_shell_code_and_explicit_environment_wins(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); settings = root / 'runtime.env'; executable = root / 'backend'

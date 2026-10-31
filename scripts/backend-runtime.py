@@ -7,8 +7,24 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 
 LABEL = 'com.agentshell.backend'
+
+
+def wait_for_unloaded(target, run=None, timeout=15):
+    """bootout may return while the old job is still exiting; wait before reuse."""
+    execute = run or subprocess.run
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0: raise ValueError(f'launchd service did not unload within {timeout:g} seconds: {target}')
+        try:
+            result = execute(['launchctl', 'print', target], capture_output=True, check=False,
+                             timeout=min(2, remaining))
+            if result.returncode != 0: return
+        except subprocess.TimeoutExpired: pass
+        time.sleep(min(.1, max(0, deadline - time.monotonic())))
 
 
 def dotenv(path):
@@ -59,7 +75,9 @@ def service_action(action, prefix, dry_run=False, tail_args=()):
     if action == 'status': return subprocess.run(['launchctl', 'print', target]).returncode
     if action in ('stop', 'disable'):
         if action == 'disable': subprocess.run(['launchctl', 'disable', target], check=True)
-        if loaded: subprocess.run(['launchctl', 'bootout', target], check=True)
+        if loaded:
+            subprocess.run(['launchctl', 'bootout', target], check=True)
+            wait_for_unloaded(target)
         return 0
     if not plist.is_file(): raise ValueError('LaunchAgent is not installed; run ./install.sh first')
     if action == 'enable': subprocess.run(['launchctl', 'enable', target], check=True)

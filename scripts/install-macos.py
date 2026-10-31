@@ -345,7 +345,9 @@ class MacInstaller:
         target = self.domain + '/' + runtime_module.LABEL
         self.was_loaded = self.run(['launchctl', 'print', target], check=False, capture_output=True).returncode == 0
         self.service_changed = True
-        if self.was_loaded: self.run(['launchctl', 'bootout', target], capture_output=True)
+        if self.was_loaded:
+            self.run(['launchctl', 'bootout', target], capture_output=True)
+            runtime_module.wait_for_unloaded(target, self.run)
         self.run(['launchctl', 'enable', target], capture_output=True)
         self.run(['launchctl', 'bootstrap', self.domain, str(self.plist)], capture_output=True)
         self.run(['launchctl', 'kickstart', target], capture_output=True)
@@ -382,7 +384,11 @@ class MacInstaller:
 
     def rollback(self):
         target = self.domain + '/' + runtime_module.LABEL
-        if self.service_changed: self.run(['launchctl', 'bootout', target], check=False, capture_output=True)
+        unload_error = None
+        if self.service_changed:
+            self.run(['launchctl', 'bootout', target], check=False, capture_output=True)
+            try: runtime_module.wait_for_unloaded(target, self.run)
+            except ValueError as error: unload_error = error
         changed, self.changed = self.changed, {}
         for path, previous in reversed(list(changed.items())):
             if previous is None: path.unlink(missing_ok=True)
@@ -396,9 +402,10 @@ class MacInstaller:
         for destination, backup in reversed(self.bundles):
             if destination.exists(): shutil.rmtree(destination)
             if backup: os.replace(backup, destination)
-        if self.service_changed and self.was_loaded:
+        if self.service_changed and self.was_loaded and unload_error is None:
             self.run(['launchctl', 'bootstrap', self.domain, str(self.plist)], check=False, capture_output=True)
             self.run(['launchctl', 'kickstart', target], check=False, capture_output=True)
+        if unload_error is not None: raise unload_error
 
     def execute(self):
         self.validate_options()

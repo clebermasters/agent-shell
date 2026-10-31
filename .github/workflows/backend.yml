@@ -9,6 +9,10 @@ on:
   release:
     types: [published]
 
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:
@@ -78,6 +82,8 @@ jobs:
           .ci-python/bin/python -m pip install 'websockets>=13,<16'
           .ci-python/bin/python scripts/test_native_backend_smoke.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-smoke"
           .ci-python/bin/python scripts/test_native_chat_platform.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-chat"
+          AGENTSHELL_BACKEND_BIN="$PWD/backend-rust/target/release/agentshell-backend" .ci-python/bin/python scripts/test_browser_runtime_macos.py
+          node scripts/test_macos_viewer.js
 
       - name: Stage platform release asset
         run: |
@@ -96,6 +102,17 @@ jobs:
         with:
           name: ${{ matrix.artifact }}-browser-helper
           path: ${{ runner.temp }}/${{ matrix.browser_asset }}
+          if-no-files-found: ignore
+
+      - name: Upload validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshell-validation-${{ matrix.artifact }}
+          path: |
+            ${{ runner.temp }}/native-smoke
+            ${{ runner.temp }}/native-chat
+            ${{ runner.temp }}/browser-permissions.json
           if-no-files-found: ignore
 
   release:

@@ -105,6 +105,9 @@ fn main() -> Result<()> {
     if let Some(DiagnosticCommand::ProcessInfo { pid, open_files }) = args.command {
         let info = process::snapshot(pid)?;
         let mut value = serde_json::to_value(&info)?;
+        if let Some(tool) = process::agent_tool(pid) {
+            value["agentTool"] = tool.into();
+        }
         if open_files {
             value["openFiles"] = serde_json::to_value(process::open_files(pid)?)?;
         }

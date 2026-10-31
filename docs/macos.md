@@ -86,7 +86,8 @@ open "$HOME/Library/Application Support/AgentShell/browser/AgentShellBrowser.app
 
 Permission checks report missing access without granting it or capturing a
 personal window. Native browser architecture and interaction details accompany
-the provider implementation. KasmVNC remains the Linux browser provider.
+the [native provider implementation](native-macos-browser.md). KasmVNC remains
+the Linux browser provider.
 
 ## Verification
 

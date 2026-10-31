@@ -16,6 +16,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import javax.inject.Inject
 
@@ -59,6 +61,8 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     private val voiceReceipt = TranscriptionReceipt()
     private var recording: BrowserVoiceCapture? = null
     private var transcriptionContext: String? = null
+    private var voiceDeliveryJob: Job? = null
+    private var voiceDeliveryRequestId: String? = null
     init { viewModelScope.launch {
         hosts.getSelectedHost().collect { selected ->
             if (host != selected) {
@@ -435,6 +439,20 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     fun isVoiceDeliveryCurrent(delivery: BrowserVoiceDelivery)=_voice.value.delivery==delivery && voiceConnected() &&
         delivery.launch==_ui.value.launch && delivery.attempt==attempt && delivery.target==voiceTarget()
 
+    /** Submit once; an asynchronous native paste is confirmed only by its receipt. */
+    fun deliverVoiceToViewer(delivery: BrowserVoiceDelivery, evaluate: (String, (String?) -> Unit) -> Unit) {
+        if(!isVoiceDeliveryCurrent(delivery)) return
+        if(voiceDeliveryRequestId==delivery.requestId && voiceDeliveryJob?.isActive==true) return
+        voiceDeliveryJob?.cancel()
+        voiceDeliveryRequestId=delivery.requestId
+        voiceDeliveryJob=viewModelScope.launch {
+            val result=awaitBrowserVoiceDelivery(delivery,{ isVoiceDeliveryCurrent(delivery) }) { script ->
+                awaitBrowserJavascriptResult { callback -> evaluate(script,callback) }
+            }
+            voiceDeliveryResult(delivery,result)
+        }
+    }
+
     fun voiceDeliveryResult(delivery: BrowserVoiceDelivery, result: String?) {
         if(!isVoiceDeliveryCurrent(delivery)) return
         val inserted=result in listOf("\"inserted\"","\"duplicate\"")
@@ -467,6 +485,7 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     fun voicePermissionDenied() { _voice.update { it.copy(error="Allow microphone access to dictate into the browser.",failedJobId=null,failedContext=null) } }
 
     private fun invalidateVoice() {
+        voiceDeliveryJob?.cancel();voiceDeliveryJob=null;voiceDeliveryRequestId=null
         voiceGate.invalidate()
         _voice.update { state -> state.copy(delivery=null,transcripts=state.transcripts.map {
             if(state.delivery?.jobId==it.jobId) it.copy(message="Paste was interrupted. Check the field before pasting again.") else it
@@ -485,6 +504,35 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     override fun onCleared() { audio.cancelRecording(audioOwner);super.onCleared() }
 }
 
+/** Reading a receipt never repeats pasteText or embeds the transcript again. */
+internal fun browserVoiceStatusScript(jobId: String): String =
+    """(()=>{const v=window.AgentShellViewer;if(typeof v?.pasteStatus!=='function')return 'unsupported';return v.pasteStatus(${JSONObject.quote(jobId)});})()"""
+
+internal suspend fun awaitBrowserJavascriptResult(evaluate: ((String?) -> Unit) -> Unit): String? =
+    suspendCancellableCoroutine { continuation ->
+        val received=AtomicBoolean(false)
+        evaluate { result ->
+            if(received.compareAndSet(false,true) && continuation.isActive) continuation.resume(result)
+        }
+    }
+
+/** The same viewer/runtime must remain current throughout the bounded wait. */
+internal suspend fun awaitBrowserVoiceDelivery(delivery: BrowserVoiceDelivery, current: () -> Boolean,
+    evaluate: suspend (String) -> String?): String? = try {
+    withTimeoutOrNull(10_000) {
+        if(!current()) return@withTimeoutOrNull null
+        var result=evaluate(browserVoiceScript(delivery))
+        while(result=="\"pending\"") {
+            if(!current()) return@withTimeoutOrNull null
+            delay(150)
+            if(!current()) return@withTimeoutOrNull null
+            result=evaluate(browserVoiceStatusScript(delivery.jobId))
+        }
+        result.takeIf { current() }
+    }
+} catch(cancelled: CancellationException) { throw cancelled }
+catch(_: Exception) { null }
+
 internal fun viewerOrigin(capabilities:JSONObject,host:Host):String {
     val selected=host.httpUrl.toHttpUrl().toString().trimEnd('/')
     val aliases=capabilities.optJSONArray("viewerOrigins")
@@ -495,6 +543,11 @@ internal fun viewerOrigin(capabilities:JSONObject,host:Host):String {
 }
 
 internal fun browserError(code:String):String=when(code) {
+    "MACOS_PERMISSIONS_REQUIRED", "NATIVE_PERMISSIONS_REQUIRED", "SCREEN_CAPTURE_PERMISSION_REQUIRED", "ACCESSIBILITY_PERMISSION_REQUIRED" -> "On your Mac, open AgentShell Browser setup and allow Screen Recording and Accessibility, then reconnect."
+    "CHROME_WINDOW_AMBIGUOUS", "AMBIGUOUS_CHROME_WINDOW", "AMBIGUOUS_ACCESSIBILITY_WINDOW" -> "Chrome has several matching windows on the Mac. Keep the window you want to control open, close the extra windows, then retry."
+    "CHROME_NOT_INSTALLED" -> "Install Google Chrome on the Mac, then reconnect."
+    "NATIVE_HELPER_UNAVAILABLE", "NATIVE_HELPER_MISSING" -> "Install or rebuild the AgentShell Browser helper on the Mac, then reconnect."
+    "NATIVE_HELPER_DISCONNECTED", "NATIVE_HELPER_TIMEOUT" -> "The Mac browser helper stopped responding. Reconnect and check its permission setup."
     "PROFILE_IN_USE" -> "Chrome is open on this computer. Choose its profile to move it to this phone."
     "PROFILE_NOT_FOUND" -> "This Chrome profile is no longer available. Refresh the profile list and choose another."
     "PROFILE_CONFIRMATION_EXPIRED", "PROFILE_CONFIRMATION_INVALID" -> "The browser changed or the confirmation expired. Choose the profile again to review the current warning."

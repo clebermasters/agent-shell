@@ -52,6 +52,74 @@ pub(crate) fn name(pid: u32) -> Option<String> {
     platform::name(pid).ok()
 }
 
+/// Classify only an OS-observed name or a known native executable layout.
+/// argv[0], working directories and conversation recency are not identity.
+pub(crate) fn agent_tool(pid: u32) -> Option<String> {
+    let observed = name(pid)?;
+    let known = match observed.as_str() {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "opencode" => Some("opencode"),
+        "kiro-cli" | "kiro-cli-chat" => Some("kiro"),
+        _ => None,
+    };
+    if let Some(tool) = known {
+        return Some(tool.into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let before = generation(pid).ok()?;
+        let executable = platform::executable(pid).ok()?;
+        let home = dirs::home_dir()?.canonicalize().ok()?;
+        let tool = macos_tool_from_executable(&executable, &home)?;
+        // The versioned Claude path is user-managed code, not an arbitrary
+        // argv alias or another user's writable installation.
+        if tool == "claude" {
+            let metadata = std::fs::metadata(&executable).ok()?;
+            let directory = std::fs::metadata(executable.parent()?).ok()?;
+            let home_metadata = std::fs::metadata(&home).ok()?;
+            let user = unsafe { libc::geteuid() };
+            if [&metadata, &directory, &home_metadata]
+                .iter()
+                .any(|value| value.uid() != user || value.mode() & 0o022 != 0)
+            {
+                return None;
+            }
+        }
+        if generation(pid).ok()? == before {
+            return Some(tool.into());
+        }
+    }
+    None
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_tool_from_executable(
+    executable: &std::path::Path,
+    home: &std::path::Path,
+) -> Option<&'static str> {
+    let name = executable.file_name()?.to_str()?;
+    if matches!(
+        name,
+        "codex-aarch64-apple-darwin" | "codex-x86_64-apple-darwin"
+    ) {
+        return Some("codex");
+    }
+    let versions = home.join(".local/share/claude/versions");
+    let parts: Vec<_> = name.split('.').collect();
+    if executable.parent() == Some(versions.as_path())
+        && name.len() <= 128
+        && parts.len() >= 2
+        && parts.iter().all(|part| {
+            !part.is_empty() && part.len() <= 16 && part.bytes().all(|b| b.is_ascii_digit())
+        })
+    {
+        return Some("claude");
+    }
+    None
+}
+
 pub(crate) fn argv(pid: u32) -> Result<Vec<String>> {
     valid_pid(pid)?;
     let before = generation(pid)?;
@@ -350,6 +418,23 @@ mod platform {
     }
     pub(super) fn name(pid: u32) -> Result<String> {
         Ok(process_name(&bsd(pid)?))
+    }
+    pub(super) fn executable(pid: u32) -> Result<PathBuf> {
+        let mut bytes = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let length = unsafe {
+            libc::proc_pidpath(pid as i32, bytes.as_mut_ptr().cast(), bytes.len() as u32)
+        };
+        ensure!(
+            length > 0 && (length as usize) < bytes.len(),
+            "Native executable path unavailable"
+        );
+        let end = bytes
+            .iter()
+            .position(|b| *b == 0)
+            .context("Native executable path is not terminated")?;
+        let path = PathBuf::from(OsString::from_vec(bytes[..end].to_vec()));
+        ensure!(path.is_absolute(), "Native executable path is not absolute");
+        Ok(path)
     }
     pub(super) fn argv(pid: u32) -> Result<Vec<String>> {
         let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as i32];
@@ -673,5 +758,50 @@ mod tests {
         assert!(parse_macos_argv(&[0, 0]).is_err());
         assert!(parse_macos_argv(&(-1i32).to_ne_bytes()).is_err());
         assert!(parse_linux_stat("123 malformed").is_err());
+    }
+
+    #[test]
+    fn darwin_native_agent_aliases_use_exact_executable_layouts() {
+        use std::path::Path;
+        let home = Path::new("/Users/alice");
+        assert_eq!(
+            macos_tool_from_executable(
+                Path::new("/Users/alice/.local/share/claude/versions/2.1.75"),
+                home
+            ),
+            Some("claude")
+        );
+        for path in [
+            "/tmp/2.1.75",
+            "/Users/bob/.local/share/claude/versions/2.1.75",
+            "/Users/alice/project/.local/share/claude/versions/2.1.75",
+            "/Users/alice/.local/share/claude/versions/2..75",
+            "/Users/alice/.local/share/claude/versions/2.1.75-copy",
+            "/Users/alice/.local/share/claude/versions/claude",
+            "/Users/alice/.local/share/claude/versions/2.1.75/other",
+        ] {
+            assert_eq!(
+                macos_tool_from_executable(Path::new(path), home),
+                None,
+                "{path}"
+            );
+        }
+        for path in [
+            "/opt/homebrew/bin/codex-aarch64-apple-darwin",
+            "/usr/local/bin/codex-x86_64-apple-darwin",
+        ] {
+            assert_eq!(
+                macos_tool_from_executable(Path::new(path), home),
+                Some("codex")
+            );
+        }
+        assert_eq!(
+            macos_tool_from_executable(Path::new("/tmp/not-codex-aarch64-apple-darwin"), home),
+            None
+        );
+        assert_eq!(
+            macos_tool_from_executable(Path::new("/tmp/codex-aarch64-apple-darwin-helper"), home),
+            None
+        );
     }
 }

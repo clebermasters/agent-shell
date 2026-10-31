@@ -210,8 +210,10 @@ class MacInstaller:
         try:
             shutil.copytree(source, staging, symlinks=True)
             if backup: os.replace(destination, backup)
-            os.replace(staging, destination)
+            # Once the old bundle moves, rollback must know how to restore it
+            # even if publishing the replacement fails.
             self.bundles.append((destination, backup))
+            os.replace(staging, destination)
         finally:
             if staging.exists(): shutil.rmtree(staging)
 

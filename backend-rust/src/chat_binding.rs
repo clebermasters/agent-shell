@@ -704,7 +704,7 @@ pub(crate) fn process_start(pid: u32) -> Result<u64> {
 }
 
 fn native_tool(pid: u32) -> Option<String> {
-    native_tool_name(&crate::process::name(pid)?)
+    crate::process::agent_tool(pid)
 }
 
 fn native_tool_name(name: &str) -> Option<String> {
@@ -805,7 +805,15 @@ pub async fn inspect_pane(target: &str) -> Result<PaneIdentity> {
         let server_start = process_start(server_pid)?;
         let root_start = process_start(root_pid)?;
         let pids = crate::chat_log::watcher::get_descendant_pids(root_pid)?;
-        let (agent, tool) = foreground_agent(root_pid, &pids, crate::process::snapshot)?;
+        let (agent, tool) = foreground_agent(root_pid, &pids, |pid| {
+            let mut info = crate::process::snapshot(pid)?;
+            if native_tool_name(&info.name).is_none() {
+                if let Some(tool) = crate::process::agent_tool(pid).filter(|tool| matches!(tool.as_str(), "claude" | "codex")) {
+                    info.name = tool;
+                }
+            }
+            Ok(info)
+        })?;
         let agent_pid = agent.pid;
         let mut cwd = initial_cwd;
         for pair in agent.argv.windows(2) {

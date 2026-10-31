@@ -52,6 +52,13 @@ def _native_info(pid, include_open_files):
         paths = value.get('openFiles')
         if not isinstance(paths, list) or not all(isinstance(path, str) and path.startswith('/') for path in paths):
             raise ValueError('Invalid native open-file response')
+    tool = value.get('agentTool')
+    if tool is not None and tool not in ('codex', 'claude', 'opencode', 'kiro'):
+        raise ValueError('Invalid native agent identity response')
+    # The daemon verifies macOS package aliases against the physical executable,
+    # rather than trusting a version-shaped process name or an arbitrary argv[0].
+    if tool in ('codex', 'claude', 'opencode'):
+        value['name'] = tool
     return value
 
 

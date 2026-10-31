@@ -129,6 +129,31 @@ class MacInstallerTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.value.write(self.value.runtime, 'replacement')
         self.assertEqual('keep', outside.read_text())
 
+    def test_failed_bundle_rename_restores_the_previous_signed_app_and_profile(self):
+        destination = self.value.prefix / 'browser/AgentShellBrowser.app'
+        old_helper = destination / 'Contents/MacOS/AgentShellBrowser'
+        old_helper.parent.mkdir(parents=True); old_helper.write_bytes(b'old-helper'); old_helper.chmod(0o755)
+        signature = destination / 'Contents/_CodeSignature/CodeResources'
+        signature.parent.mkdir(); signature.write_bytes(b'old-signature')
+        profile = self.value.prefix / 'chrome/Default/Cookies'
+        profile.parent.mkdir(parents=True); profile.write_bytes(b'keep-cookie')
+        source = self.root / 'replacement.app'; (source / 'Contents/MacOS').mkdir(parents=True)
+        (source / 'Contents/MacOS/AgentShellBrowser').write_bytes(b'new-helper')
+        replace = os.replace
+        def fail_publish(old, new):
+            if Path(old).name.startswith('.AgentShellBrowser-') and Path(new) == destination:
+                raise OSError('injected bundle publication failure')
+            return replace(old, new)
+        with patch.object(installer.os, 'replace', side_effect=fail_publish):
+            with self.assertRaises(OSError): self.value.install_bundle(source, destination)
+            self.value.rollback()
+        self.assertEqual(b'old-helper', old_helper.read_bytes())
+        self.assertEqual(0o755, old_helper.stat().st_mode & 0o777)
+        self.assertEqual(b'old-signature', signature.read_bytes())
+        self.assertEqual(b'keep-cookie', profile.read_bytes())
+        self.assertEqual(['AgentShellBrowser.app'], [path.name for path in destination.parent.iterdir()])
+        self.assertFalse(self.commands)
+
 
 class RuntimeTests(unittest.TestCase):
     def test_literal_settings_are_not_shell_code_and_explicit_environment_wins(self):

@@ -34,6 +34,17 @@ class ProcessIdentityTests(unittest.TestCase):
     def test_mac_generation_is_exactly_the_canonical_unsigned_integer(self):
         self.assertEqual(self.query()['generation'],1_791_234_567_123_456)
 
+    def test_mac_versioned_agent_name_uses_only_the_daemon_verified_alias(self):
+        value=self.query(self.native(name='2.1.284',agentTool='claude'))
+        self.assertEqual(value['name'],'claude')
+        self.assertEqual(value['generation'],1_791_234_567_123_456)
+        self.assertEqual(self.query(self.native(name='2.1.284'))['name'],'2.1.284')
+
+    def test_unknown_native_agent_alias_is_rejected(self):
+        for tool in ['arbitrary-program',42,True]:
+            with self.subTest(tool=tool),self.assertRaises(ValueError):
+                self.query(self.native(agentTool=tool))
+
     def test_mac_open_files_are_explicit_and_validated(self):
         value=self.native(openFiles=['/Users/test/.codex/sessions/owned.jsonl'])
         self.assertEqual(self.query(value,files=True)['openFiles'],value['openFiles'])

@@ -89,7 +89,7 @@ def main():
     args=parser.parse_args();binary=args.binary.resolve()
     output=args.output.resolve();output.mkdir(parents=True,exist_ok=True);output.chmod(0o700)
     assert sys.platform in ('linux','darwin') and binary.is_file()
-    checks={};backend=None
+    checks={};backend=None;trace=[]
     with tempfile.TemporaryDirectory(prefix='as-native-',dir='/tmp') as temporary:
         root=Path(temporary).resolve();home=root/'native home Ω';home.mkdir()
         project=home/'project with spaces';project.mkdir();instance=root/'backend';instance.mkdir()
@@ -102,8 +102,11 @@ def main():
             return subprocess.check_output(['tmux','-L',socket_name,*arguments],env=tmux_env,text=True).strip()
         try:
             identities={}
-            for tool in ('codex','claude'):
-                executable=root/tool
+            cases=[('codex','codex',False),('claude','claude',False)]
+            if sys.platform=='darwin':cases.append(('claude-versioned','claude',True))
+            for label,tool,versioned in cases:
+                executable=home/'.local/share/claude/versions/2.1.284' if versioned else root/tool
+                executable.parent.mkdir(parents=True,exist_ok=True)
                 subprocess.run(['cc','-O2',str(wrapper),'-o',str(executable)],check=True,capture_output=True)
                 identifier=str(uuid.uuid4())
                 folder=home/('.codex/sessions' if tool=='codex' else '.claude/projects/native-fixture')
@@ -116,32 +119,31 @@ def main():
                         'uuid':str(uuid.uuid4()),'sessionId':identifier,
                         'message':{'role':'assistant','content':[{'type':'text','text':'Native Claude fixture ready'}]}}
                 transcript.write_text(json.dumps(initial)+'\n')
-                ready=root/(tool+'.ready')
+                ready=root/(label+'.ready')
                 command='exec '+' '.join(shlex.quote(str(value)) for value in
                     [executable,transcript,sys.executable,worker,ready,tool,identifier,project])
-                tmux('new-session','-d','-s',tool,'-c',str(project),command)
+                tmux('new-session','-d','-s',label,'-c',str(project),command)
                 deadline=time.monotonic()+10
                 while not ready.exists():
                     assert time.monotonic()<deadline,'Owned native fixture did not start';time.sleep(.02)
-                pid=int(tmux('display-message','-p','-t',tool,'#{pane_pid}'))
-                native=json.loads(subprocess.check_output([str(binary),'process-info','--pid',str(pid),'--open-files']))
-                assert native['name']==tool and native['hasTty']
+                pid=int(tmux('display-message','-p','-t',label,'#{pane_pid}'))
+                native=json.loads(subprocess.check_output([str(binary),'process-info','--pid',str(pid),'--open-files'],env=dict(os.environ,HOME=str(home))))
+                assert native.get('agentTool',native['name'])==tool and native['hasTty']
                 assert native['processGroup']==native['foregroundGroup']
                 assert transcript in [Path(p) for p in native['openFiles']],native['openFiles']
-                previous=os.environ.get('AGENTSHELL_BACKEND_BIN');os.environ['AGENTSHELL_BACKEND_BIN']=str(binary)
-                try: python_identity=process_info(pid,include_open_files=True)
-                finally:
-                    if previous is None:os.environ.pop('AGENTSHELL_BACKEND_BIN',None)
-                    else:os.environ['AGENTSHELL_BACKEND_BIN']=previous
+                from unittest.mock import patch
+                with patch.dict(os.environ,AGENTSHELL_BACKEND_BIN=str(binary),HOME=str(home)):
+                    python_identity=process_info(pid,include_open_files=True)
                 assert python_identity['generation']==native['generation'] and python_identity['name']==tool
-                identities[tool]=(identifier,pid,transcript)
-                checks[tool+'_native_foreground_identity_and_python_agreement']=True
+                identities[label]=(identifier,pid,transcript)
+                checks[label+'_native_foreground_identity_and_python_agreement']=True
+                print(label+' native identity verified',flush=True)
             context=tmux('display-message','-p','-t','codex','#{socket_path},#{pid},0')
             port=free_port();tls=free_port()
             while tls==port:tls=free_port()
             environment=dict(tmux_env,AUTH_TOKEN=token,HOME=str(home),XDG_CONFIG_HOME=str(root/'config'),
                 TMUX=context,AGENTSHELL_HTTP_PORT=str(port),AGENTSHELL_HTTPS_PORT=str(tls),
-                AGENTSHELL_BROWSER_CONFIG=str(root/'absent-browser.json'),RUST_LOG='warn',
+                AGENTSHELL_BROWSER_CONFIG=str(root/'absent-browser.json'),RUST_LOG='agentshell_backend=info',
                 AGENTSHELL_TLS_CERT_PATH=str(root/'absent.pem'),AGENTSHELL_TLS_KEY_PATH=str(root/'absent.key'))
             backend=subprocess.Popen([str(binary)],cwd=instance,env=environment,stdout=log,stderr=log)
             deadline=time.monotonic()+15
@@ -154,20 +156,28 @@ def main():
             async def verify():
                 bindings={}
                 async with websockets.connect(f'ws://127.0.0.1:{port}/ws',additional_headers={'X-Auth-Token':token},max_size=16*1024*1024) as connection:
-                    for tool in ('codex','claude'):
-                        binding,_=await watch(connection,tool)
-                        assert binding['conversationId']==identities[tool][0]
-                        bindings[tool]=binding
-                        text='native-platform-'+tool+'-'+uuid.uuid4().hex[:8]
-                        await send(connection,tool,binding,text)
-                        lines=[json.loads(line) for line in identities[tool][2].read_text().splitlines()]
+                    for label,tool,_ in cases:
+                        binding,_=await watch(connection,label)
+                        assert binding['conversationId']==identities[label][0]
+                        bindings[label]=binding
+                        print(label+' native conversation bound',flush=True)
+                        text='native-platform-'+label+'-'+uuid.uuid4().hex[:8]
+                        observed=[]
+                        try:
+                            await send(connection,label,binding,text,observed=observed)
+                        finally:
+                            trace.append({'tool':label,'packets':observed,
+                                'transcript':identities[label][2].read_text().splitlines()[-8:]})
+                            (output/'trace.json').write_text(json.dumps(trace,indent=2)+'\n')
+                        lines=[json.loads(line) for line in identities[label][2].read_text().splitlines()]
                         if tool=='codex':
                             count=sum(event.get('payload',{}).get('type')=='user_message' and event['payload'].get('message')==text for event in lines)
                         else:
                             count=sum(event.get('type')=='user' and any(block.get('text')==text for block in event.get('message',{}).get('content',[])) for event in lines)
                         assert count==1,'Input must reach exactly one native conversation once'
-                        checks[tool+'_bound_history_and_terminal_send']=True
-                    assert bindings['codex']['bindingId']!=bindings['claude']['bindingId']
+                        checks[label+'_bound_history_and_terminal_send']=True
+                        print(label+' native chat submitted once and reply received',flush=True)
+                    assert len({value['bindingId'] for value in bindings.values()})==len(cases)
                     checks['shared_working_directory_does_not_mix_conversations']=True
             asyncio.run(verify())
         finally:

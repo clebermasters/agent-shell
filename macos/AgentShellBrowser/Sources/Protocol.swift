@@ -43,6 +43,23 @@ enum Validation {
         }
         return value
     }
+    static func textMethod(_ value:Any?) throws -> String {
+        guard let value=value else { return "paste" }
+        guard let method=value as? String,["unicode","paste"].contains(method) else {
+            throw BrowserFailure("INVALID_INPUT","Text method must be unicode or paste")
+        }
+        return method
+    }
+    static func unicodeChunks(_ text:String) -> [[UInt16]] {
+        var result:[[UInt16]]=[];var current:[UInt16]=[]
+        for scalar in text.unicodeScalars {
+            let units=Array(String(scalar).utf16)
+            if current.count+units.count>20 { result.append(current);current=[] }
+            current.append(contentsOf:units)
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
+    }
     static func size(_ width: Int, _ height: Int) throws -> PixelSize {
         guard (320...8192).contains(width), (240...8192).contains(height) else {
             throw BrowserFailure("INVALID_SIZE", "Browser size must be between 320×240 and 8192×8192")
@@ -61,6 +78,12 @@ enum Validation {
         }
         return (window.x + x * window.width / Double(frame.width),
                 window.y + y * window.height / Double(frame.height))
+    }
+    static func sameWindow(_ first:WindowRect,_ second:WindowRect) -> Bool {
+        [first.x,first.y,first.width,first.height,second.x,second.y,second.width,second.height].allSatisfy({$0.isFinite})
+            && first.width>0 && first.height>0 && second.width>0 && second.height>0
+            && abs(first.x-second.x)<3 && abs(first.y-second.y)<3
+            && abs(first.width-second.width)<3 && abs(first.height-second.height)<3
     }
     static func zoomSteps(_ value: Int) throws -> Int {
         switch value {
@@ -138,6 +161,9 @@ enum PureTests {
         let point = try Validation.point(500,250,frame: PixelSize(width:1000,height:500),
             window:WindowRect(x:-800,y:40,width:800,height:400))
         try check("retina_and_negative_display_coordinates", point.0 == -400 && point.1 == 240)
+        try check("stale_moved_or_resized_frame_rejected",
+            !Validation.sameWindow(WindowRect(x:-800,y:40,width:800,height:400),WindowRect(x:0,y:40,width:800,height:400))
+            && !Validation.sameWindow(WindowRect(x:0,y:0,width:640,height:800),WindowRect(x:0,y:0,width:960,height:1200)))
         for value in [-1.0,Double.nan,Double.infinity,1000] {
             do { _ = try Validation.point(value,0,frame:PixelSize(width:1000,height:500),window:WindowRect(x:0,y:0,width:1000,height:500))
                 throw BrowserFailure("SELF_TEST_FAILED", "Invalid pointer accepted")
@@ -146,6 +172,11 @@ enum PureTests {
         results["invalid_pointer_rejected"] = true
         try check("density_fallback_steps", try [75,100,125,150,200].map(Validation.zoomSteps) == [2,0,-2,-4,-6])
         try check("unicode_text_preserved", try Validation.text("ação 🌈\nκόσμε") == "ação 🌈\nκόσμε")
+        let complex=String(repeating:"a",count:19)+"🌈e\u{301}中文"+String(repeating:"z",count:24)
+        let chunks=Validation.unicodeChunks(complex)
+        try check("unicode_chunks_preserve_nonbmp_and_combining",chunks.allSatisfy({$0.count<=20}) && chunks.flatMap({$0})==Array(complex.utf16)
+            && chunks.allSatisfy({ chunk in !(0xD800...0xDBFF).contains(chunk.last ?? 0) }))
+        try check("ordinary_typing_and_explicit_paste_are_distinct",try Validation.textMethod("unicode")=="unicode" && Validation.textMethod(nil)=="paste")
         do { _ = try Validation.number(true,"width"); throw BrowserFailure("SELF_TEST_FAILED","Boolean coordinate accepted") }
         catch let error as BrowserFailure where error.code == "INVALID_INPUT" { results["boolean_numeric_input_rejected"] = true }
         do { _ = try Validation.profileComponent("../Default"); throw BrowserFailure("SELF_TEST_FAILED","Traversal accepted") }

@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>AgentShell Chrome</title><link rel="stylesheet" href="macos-viewer.css"><script defer src="macos-viewer.js"></script></head>
+<body>
+<main id="viewport" aria-label="Remote Chrome"><canvas id="frame" aria-label="Chrome window"></canvas></main>
+<div id="cursor" hidden aria-hidden="true">↖</div>
+<div id="status" role="status">Connecting to Chrome…</div>
+<textarea id="keyboard" aria-label="Type in remote Chrome" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="8192" readonly></textarea>
+<dialog id="controls"><h1>Browser controls</h1><p>Pinch to zoom the view. Drag two fingers to move a zoomed view. Drag one finger to scroll a page.</p><div class="buttons"><button id="fit">Fit to screen</button><button id="mouse">Use mouse pointer</button><button id="right-click">Right-click</button><button id="show-keyboard">Keyboard</button></div><section id="retained" hidden><label for="retained-text">Text awaiting confirmation</label><p>Check the page before pasting this text. It may already have reached Chrome.</p><textarea id="retained-text" readonly></textarea><button id="copy-retained">Copy and reconnect</button><button id="clear-retained">Discard copy and reconnect</button></section><button id="close-controls">Close</button></dialog>
+</body></html>

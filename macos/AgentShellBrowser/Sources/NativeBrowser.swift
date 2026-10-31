@@ -30,6 +30,7 @@ private final class FrameOutput: NSObject, SCStreamOutput {
     private let lock = NSLock()
     private var active = false
     private var dimensions = PixelSize(width:1280,height:900)
+    private var screenRect:WindowRect?
     private var sequence: UInt64 = 0
     private var owner: Identity?
     var invalidated: (() -> Void)?
@@ -37,16 +38,22 @@ private final class FrameOutput: NSObject, SCStreamOutput {
     func enable(_ value:Bool) { lock.lock(); active = value; lock.unlock() }
     func pin(_ value:Identity) { lock.lock(); owner=value; lock.unlock() }
     var size: PixelSize { lock.lock(); defer { lock.unlock() }; return dimensions }
+    var mapping:(size:PixelSize,screen:WindowRect?) { lock.lock();defer { lock.unlock() };return (dimensions,screenRect) }
     func stream(_ stream:SCStream,didOutputSampleBuffer sampleBuffer:CMSampleBuffer,of type:SCStreamOutputType) {
         lock.lock(); let enabled = active;let pin=owner; lock.unlock()
         guard enabled else { return }
         let permission=Permissions.current
         let validWindow:Bool
+        var capturedScreen:WindowRect?
         if let pin=pin,let id=pin.windowId,
            let rows=CGWindowListCopyWindowInfo([.optionIncludingWindow],id) as? [[String:Any]],
            let row=rows.first {
-            validWindow=(row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value==pin.chromePid
+            validWindow=(row[kCGWindowNumber as String] as? NSNumber)?.uint32Value==id
+                && (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value==pin.chromePid
                 && ASProcessBirth(pin.chromePid)==pin.chromeStart
+            if let bounds=row[kCGWindowBounds as String] as? [String:Any],let rect=CGRect(dictionaryRepresentation:bounds as CFDictionary) {
+                capturedScreen=WindowRect(x:rect.minX,y:rect.minY,width:rect.width,height:rect.height)
+            }
         } else { validWindow=false }
         guard permission.ready && validWindow else {
             lock.lock();let notify=active;active=false;lock.unlock()
@@ -57,6 +64,19 @@ private final class FrameOutput: NSObject, SCStreamOutput {
               let rows = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer,createIfNecessary:false) as? [[SCStreamFrameInfo:Any]],
               let metadata = rows.first, let raw = metadata[.status] as? Int,
               SCFrameStatus(rawValue:raw) == .complete else { return }
+        if #available(macOS 13.1, *),let value=metadata[.screenRect] as? [String:Any],
+           let rect=CGRect(dictionaryRepresentation:value as CFDictionary),let owner=capturedScreen {
+            let precise=WindowRect(x:rect.minX,y:rect.minY,width:rect.width,height:rect.height)
+            // Capture is deliberately one main window. A larger union could
+            // include a child/XPC dialog and is not a safe pointer target.
+            if #available(macOS 14.0, *) {
+                // Shadows are disabled on this path, so the captured metadata
+                // is authoritative even if the window moved after the sample.
+                if precise.width>0 && precise.height>0 && [precise.x,precise.y,precise.width,precise.height].allSatisfy({$0.isFinite}) {
+                    capturedScreen=precise
+                }
+            } else if Validation.sameWindow(precise,owner) { capturedScreen=precise }
+        }
         autoreleasepool {
             var image = CIImage(cvPixelBuffer:buffer)
             // ScreenCaptureKit attaches the actual content rectangle, excluding
@@ -80,7 +100,7 @@ private final class FrameOutput: NSObject, SCStreamOutput {
             lock.lock()
             guard active else { lock.unlock(); return }
             sequence &+= 1; let number = sequence
-            dimensions = PixelSize(width:cg.width,height:cg.height); lock.unlock()
+            dimensions = PixelSize(width:cg.width,height:cg.height);screenRect=capturedScreen; lock.unlock()
             wire.frame(["type":"frame","width":cg.width,"height":cg.height,
                         "sequence":number,"data":(encoded as Data).base64EncodedString()])
         }
@@ -94,6 +114,8 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
     private let frames: FrameOutput
     private let videoQueue = DispatchQueue(label:"com.agentshell.browser.capture",qos:.userInitiated)
     private var stream: SCStream?
+    private var disposition = "native"
+    private var guardTask: Task<Void,Never>?
     private var identity: Identity?
     private var launch: Process?
     private var keyCodes = Set<CGKeyCode>()
@@ -195,7 +217,7 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
             if let window = id.windowId { result["windowId"]=window }
         }
         if let (_,rect,_) = try? windowInfo() {
-            if permission.ready { result["state"] = stream == nil ? "native" : "ready" }
+            if permission.ready { result["state"] = stream == nil ? disposition : "ready" }
             let size = frames.size
             result["width"] = stream == nil ? Int(rect.width) : size.width
             result["height"] = stream == nil ? Int(rect.height) : size.height
@@ -240,15 +262,31 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
         try value.addStreamOutput(frames,type:.screen,sampleHandlerQueue:videoQueue)
         frames.pin(try verifiedOwner())
         frames.enable(true)
-        do { try await value.startCapture();stream=value }
+        do { try await value.startCapture();stream=value;watchOwner() }
         catch { frames.enable(false);throw error }
     }
     private func endCapture() async {
+        guardTask?.cancel();guardTask=nil
         frames.enable(false);wire.discardFrames()
         let previous = stream;stream=nil
         if let previous = previous { try? await previous.stopCapture() }
     }
+    private func watchOwner() {
+        guardTask?.cancel()
+        guardTask=Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds:1_000_000_000) } catch { return }
+                guard let browser=self,browser.stream != nil else { return }
+                if !Permissions.current.ready || (try? browser.windowInfo()) == nil {
+                    browser.release();await browser.endCapture()
+                    var value=browser.status();value["type"]="state";browser.wire.event(value)
+                    return
+                }
+            }
+        }
+    }
     func start() async throws -> [String:Any] {
+        disposition="native"
         guard Permissions.current.ready else { return status() }
         try validateProfile(create:true)
         let existingOwner=try? verifiedOwner()
@@ -354,10 +392,7 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
     }
     private func inputOwner() throws -> (Identity,CGRect,AXUIElement) {
         guard stream != nil else { throw BrowserFailure("CAPTURE_PAUSED","Use the phone viewer before sending input") }
-        let result=try focus();let size=frames.size
-        let aspect=(Double(size.width)/Double(size.height))/(Double(result.1.width)/Double(result.1.height))
-        guard abs(aspect-1)<0.03 else { throw BrowserFailure("FRAME_UPDATING","Wait for the resized Chrome frame before sending input") }
-        return result
+        return try focus()
     }
     private func postKey(_ code:CGKeyCode,_ down:Bool,_ owner:Identity,_ eventFlags:CGEventFlags?=nil) throws {
         guard ASProcessBirth(owner.chromePid)==owner.chromeStart,
@@ -416,8 +451,17 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
         let button=try Validation.integer(raw["button"] ?? 0,"button")
         guard (0...2).contains(button) else { throw BrowserFailure("INVALID_POINTER","Unsupported mouse button") }
         let x=try Validation.number(raw["x"],"x"),y=try Validation.number(raw["y"],"y")
-        let (owner,rect,_)=try inputOwner();let dimensions=frames.size
-        let mapped=try Validation.point(x,y,frame:dimensions,window:WindowRect(x:rect.minX,y:rect.minY,width:rect.width,height:rect.height))
+        let (owner,rect,_)=try inputOwner();let mapping=frames.mapping
+        guard let screen=mapping.screen,Validation.sameWindow(screen,WindowRect(x:rect.minX,y:rect.minY,width:rect.width,height:rect.height)) else {
+            throw BrowserFailure("FRAME_UPDATING","Wait for the moved or resized Chrome frame before pointer input")
+        }
+        if raw["frameWidth"] != nil || raw["frameHeight"] != nil {
+            guard try Validation.integer(raw["frameWidth"],"frameWidth")==mapping.size.width,
+                  try Validation.integer(raw["frameHeight"],"frameHeight")==mapping.size.height else {
+                throw BrowserFailure("FRAME_UPDATING","The displayed frame changed before pointer input")
+            }
+        }
+        let mapped=try Validation.point(x,y,frame:mapping.size,window:screen)
         lastPointer=CGPoint(x:mapped.0,y:mapped.1)
         if kind=="scroll" {
             let dx=try Validation.number(raw["deltaX"] ?? 0,"deltaX"),dy=try Validation.number(raw["deltaY"] ?? 0,"deltaY")
@@ -465,6 +509,23 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
         _=try focus();try shortcut(9,owner)
         try await Task.sleep(nanoseconds:350_000_000)
     }
+    private func unicode(_ text:String) throws {
+        let (owner,_,_)=try inputOwner();release()
+        for units in Validation.unicodeChunks(text) {
+            _=try focus()
+            guard ASProcessBirth(owner.chromePid)==owner.chromeStart,
+                  let down=CGEvent(keyboardEventSource:nil,virtualKey:0,keyDown:true),
+                  let up=CGEvent(keyboardEventSource:nil,virtualKey:0,keyDown:false) else {
+                throw BrowserFailure("INPUT_OWNER_CHANGED","Chrome changed before Unicode input")
+            }
+            units.withUnsafeBufferPointer { buffer in
+                down.keyboardSetUnicodeString(stringLength:buffer.count,unicodeString:buffer.baseAddress)
+                up.keyboardSetUnicodeString(stringLength:buffer.count,unicodeString:buffer.baseAddress)
+            }
+            down.flags=[];up.flags=[];down.postToPid(owner.chromePid)
+            if ASProcessBirth(owner.chromePid)==owner.chromeStart { up.postToPid(owner.chromePid) }
+        }
+    }
     private func resize(_ command:Command) async throws -> [String:Any] {
         let size=try Validation.size(Validation.integer(command.raw["width"],"width"),Validation.integer(command.raw["height"],"height"))
         let density=try Validation.integer(command.raw["contentDensity"] ?? 100,"contentDensity")
@@ -479,7 +540,7 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
         guard let actual=axSize(window),actual.width>0,actual.height>0 else { throw BrowserFailure("RESIZE_UNAVAILABLE","Chrome window size could not be verified") }
         let clamped=abs(actual.width-requested.width)>3 || abs(actual.height-requested.height)>3
         let applied=clamped ? steps : 0
-        if fallbackSteps != applied {
+        if (fallbackSteps != nil && fallbackSteps != applied) || (applied != 0 && fallbackSteps != applied) {
             _=try focus();try shortcut(29,owner) // Cmd+0, then Chrome's page zoom steps.
             for _ in 0..<abs(applied) { try shortcut(applied>0 ? 24 : 27,owner) }
             fallbackSteps=applied
@@ -489,14 +550,15 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
         var result=status();result["resolutionClamped"]=clamped;result["contentDensity"]=density;result["pageZoomFallback"]=clamped
         return result
     }
-    func stop() async -> [String:Any] { release();await endCapture();return status() }
+    func stop() async -> [String:Any] { disposition="stopped";release();await endCapture();return status() }
     func handle(_ command:Command) async -> [String:Any] {
         let receiptKey=(command.id is String ? "s:" : "n:")+String(describing:command.id)
         var textDigest:String?
         do {
             if command.type=="text" {
                 let text=try Validation.text(command.raw["text"])
-                let digest=SHA256.hash(data:Data(text.utf8)).map { String(format:"%02x",$0) }.joined();textDigest=digest
+                let method=try Validation.textMethod(command.raw["method"])
+                let digest=SHA256.hash(data:Data((method+"\0"+text).utf8)).map { String(format:"%02x",$0) }.joined();textDigest=digest
                 if let previous=inputReceipts[receiptKey] {
                     guard previous.0==digest else {
                         return ["id":command.id,"ok":false,"error":BrowserFailure("INPUT_ID_CONFLICT","This input ID belongs to different text").json]
@@ -512,11 +574,15 @@ final class NativeBrowser: NSObject, SCStreamDelegate {
             case "release": release();result=status()
             case "pointer": try pointer(command);result=["delivered":true]
             case "key": try key(command);result=["delivered":true]
-            case "text": try await paste(Validation.text(command.raw["text"]));result=["delivered":true]
+            case "text":
+                let text=try Validation.text(command.raw["text"])
+                if try Validation.textMethod(command.raw["method"])=="unicode" { try unicode(text) }
+                else { try await paste(text) }
+                result=["delivered":true]
             case "resize": result=try await resize(command)
             case "handoff":
                 guard let destination=command.raw["destination"] as? String,["desktop","phone"].contains(destination) else { throw BrowserFailure("INVALID_HANDOFF","Choose desktop or phone") }
-                if destination=="desktop" { _=try focus();result=await stop() }
+                if destination=="desktop" { _=try focus();release();await endCapture();disposition="native";result=status() }
                 else { result=try await start() }
             default: throw BrowserFailure("UNKNOWN_COMMAND","Unsupported native browser command")
             }

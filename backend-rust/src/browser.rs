@@ -35,10 +35,30 @@ const UI_SHA: &str = "351b7a0b3b05261b8bff17419e28a8216f691e2eee1e6800842f4773a1
 const HTML_SHA: &str = "e83beef3521001888e20a47a261165f9507acc1e5588f3ba2b384ac3d7a68844";
 const BRIDGE: &str = include_str!("../../deployment/browser/viewer-bridge.js");
 const TOUCH_MOUSE: &str = include_str!("../../deployment/browser/touch-mouse.js");
+const MAC_VIEWER_HTML: &str = include_str!("../../deployment/browser/macos-viewer.html");
+const MAC_VIEWER_JS: &str = include_str!("../../deployment/browser/macos-viewer.js");
+const MAC_VIEWER_CSS: &str = include_str!("../../deployment/browser/macos-viewer.css");
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum Provider {
+    #[default]
+    Kasmvnc,
+    MacosNative,
+}
+impl Provider {
+    fn transport(self) -> &'static str {
+        match self { Self::Kasmvnc => "kasmvnc", Self::MacosNative => "native-macos" }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Config {
+    #[serde(default)]
+    provider: Provider,
+    #[serde(default)]
+    python_path: Option<PathBuf>,
     session_id: Uuid,
     port: u16,
     password: String,
@@ -50,6 +70,9 @@ struct Config {
     display_name: String,
     #[serde(default)]
     allow_insecure_loopback: bool,
+}
+fn runtime_python(config: &Config) -> &std::path::Path {
+    config.python_path.as_deref().unwrap_or_else(|| std::path::Path::new("/usr/bin/python3"))
 }
 fn default_label() -> String {
     "Chrome".into()
@@ -339,7 +362,7 @@ async fn runtime_command(command: &str, args: &[&str], timeout: Duration, output
     let (path, config) = configured()?;
     let output = tokio::time::timeout(
         timeout,
-        tokio::process::Command::new("/usr/bin/python3")
+        tokio::process::Command::new(runtime_python(config))
             .arg(&config.runner)
             .arg("--config")
             .arg(path)
@@ -406,11 +429,11 @@ async fn capabilities() -> ApiResult {
     let state = runtime("status").await?;
     Ok(no_store(
         Json(
-            json!({"available":true,"transport":"kasmvnc","displayName":config.display_name,
+            json!({"available":true,"transport":config.provider.transport(),"displayName":config.display_name,
         "sessionId":config.session_id,"viewerOrigin":config.public_origin,"viewerOrigins":viewer_origins(config),"session":state,
         "httpPort":super::read_port_from_env("AGENTSHELL_HTTP_PORT",4010),
         "httpsPort":super::read_port_from_env("AGENTSHELL_HTTPS_PORT",4443),
-        "desktopHandoff":true,"mobileHandoff":true,"nativeHandoff":true,"profileSelection":true}),
+        "desktopHandoff":config.provider==Provider::Kasmvnc,"mobileHandoff":true,"nativeHandoff":true,"profileSelection":true}),
         )
         .into_response(),
     ))
@@ -591,6 +614,7 @@ struct HandoffRequest {
 }
 async fn desktop_handoff(Path(id): Path<String>, Json(request): Json<HandoffRequest>) -> ApiResult {
     let (path, config) = configured()?;
+    if config.provider == Provider::MacosNative { return Err(error("USE_NATIVE_HANDOFF")); }
     id_matches(&id, config)?;
     let _guard = SERVICE
         .handoff
@@ -634,7 +658,7 @@ async fn desktop_handoff(Path(id): Path<String>, Json(request): Json<HandoffRequ
     let desktop_config = path.with_file_name("browser-desktop.json");
     let output = tokio::time::timeout(
         Duration::from_secs(55),
-        tokio::process::Command::new("/usr/bin/python3")
+        tokio::process::Command::new(runtime_python(config))
             .arg(helper)
             .arg("--config")
             .arg(desktop_config)
@@ -763,9 +787,14 @@ async fn native_handoff(Path(id): Path<String>, Json(request): Json<NativeReques
             "phone"
         }
     };
+    let result = if config.provider == Provider::MacosNative {
+        let command = if direction == "desktop" { "native-desktop" } else { "native-phone" };
+        runtime_command(command, &["--generation", &request.runtime_generation], Duration::from_secs(75), 4096)
+            .await.unwrap_or_else(|failure| json!({"code":failure.1,"connected":false}))
+    } else {
     let output = tokio::time::timeout(
         Duration::from_secs(75),
-        tokio::process::Command::new("/usr/bin/python3")
+        tokio::process::Command::new(runtime_python(config))
             .arg(config.runner.with_file_name("browser-native.py"))
             .arg("--config")
             .arg(path)
@@ -779,12 +808,13 @@ async fn native_handoff(Path(id): Path<String>, Json(request): Json<NativeReques
             .output(),
     )
     .await;
-    let result = output
+    output
         .ok()
         .and_then(Result::ok)
         .filter(|o| o.stdout.len() <= 4096)
         .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok())
-        .unwrap_or(json!({"code":"NATIVE_HANDOFF_FAILED","connected":false}));
+        .unwrap_or(json!({"code":"NATIVE_HANDOFF_FAILED","connected":false}))
+    };
     let state = runtime("status").await?;
     let preserved = state["state"] == "ready"
         && state["runtimeGeneration"].as_str() == Some(&request.runtime_generation);
@@ -885,6 +915,9 @@ async fn authorize(id: &str, headers: &HeaderMap) -> Result<(String, Uuid, Strin
 
 async fn asset(Path((id, path)): Path<(String, String)>, headers: HeaderMap) -> ApiResult {
     let (_, _, _, origin) = authorize(&id, &headers).await?;
+    if configured()?.1.provider == Provider::MacosNative {
+        return native_asset(&path, &origin);
+    }
     if path == "viewer-bridge.js" {
         return Ok(no_store(
             (
@@ -975,6 +1008,26 @@ async fn asset(Path((id, path)): Path<(String, String)>, headers: HeaderMap) -> 
     Ok(no_store(response))
 }
 
+fn native_asset(path: &str, origin: &str) -> ApiResult {
+    let (content_type, body) = match path {
+        "vnc.html" => ("text/html; charset=utf-8", MAC_VIEWER_HTML),
+        "macos-viewer.js" => ("text/javascript; charset=utf-8", MAC_VIEWER_JS),
+        "macos-viewer.css" => ("text/css; charset=utf-8", MAC_VIEWER_CSS),
+        _ => return Err(BrowserError(StatusCode::NOT_FOUND, "VIEWER_ASSET_NOT_FOUND")),
+    };
+    let websocket_origin = if let Some(host) = origin.strip_prefix("https://") {
+        format!("wss://{host}")
+    } else if let Some(host) = origin.strip_prefix("http://") {
+        format!("ws://{host}")
+    } else { return Err(error("INVALID_RUNTIME_CONFIG")); };
+    let mut response = ([(header::CONTENT_TYPE, content_type)], body).into_response();
+    response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_str(&format!(
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src {websocket_origin}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+    )).map_err(|_| error("INVALID_RUNTIME_CONFIG"))?);
+    response.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    Ok(no_store(response))
+}
+
 async fn socket(
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -1060,6 +1113,10 @@ async fn relay(
     request
         .headers_mut()
         .insert("Sec-WebSocket-Protocol", HeaderValue::from_static("binary"));
+    if config.provider == Provider::MacosNative {
+        let Ok(value) = HeaderValue::from_str(&generation) else { return; };
+        request.headers_mut().insert("X-AgentShell-Runtime-Generation", value);
+    }
     if let Ok(Ok((up, _))) =
         tokio::time::timeout(Duration::from_secs(5), connect_async(request)).await
     {
@@ -1371,6 +1428,8 @@ mod tests {
     }
     fn config(origin: &str, insecure: bool) -> Config {
         Config {
+            provider: Provider::Kasmvnc,
+            python_path: None,
             session_id: Uuid::new_v4(),
             port: 18000,
             password: "x".repeat(32),
@@ -1380,6 +1439,19 @@ mod tests {
             display_name: "Chrome".into(),
             allow_insecure_loopback: insecure,
         }
+    }
+    #[test]
+    fn native_provider_keeps_platform_viewer_separate_and_origin_scoped() {
+        let response = native_asset("vnc.html", "https://native.example.test:4443").unwrap();
+        let policy = response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(policy.contains("connect-src wss://native.example.test:4443"));
+        assert!(policy.contains("frame-ancestors 'none'"));
+        assert!(!policy.contains("unsafe-inline"));
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(native_asset("../config.json", "https://native.example.test").is_err());
+        assert!(native_asset("assets/ui.js", "https://native.example.test").is_err());
+        assert_eq!(Provider::MacosNative.transport(), "native-macos");
+        assert_eq!(Provider::Kasmvnc.transport(), "kasmvnc");
     }
     #[test]
     fn secure_origin_only() {

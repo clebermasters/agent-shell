@@ -139,10 +139,11 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
             viewModel.voiceDeliveryResult(delivery,null)
             return@LaunchedEffect
         }
-        viewer.evaluateJavascript(browserVoiceScript(delivery)) { result -> viewModel.voiceDeliveryResult(delivery,result) }
-        // Losing the WebView or its acknowledgement must never automatically repeat a paste.
-        delay(3000)
-        viewModel.voiceDeliveryResult(delivery,null)
+        viewModel.deliverVoiceToViewer(delivery) { script, callback ->
+            if (viewer.isAttachedToWindow && viewer.url?.startsWith(delivery.launch.origin+delivery.launch.basePath)==true)
+                viewer.evaluateJavascript(script, callback)
+            else callback(null)
+        }
     }
     fun sendToComputer() {
         transferMenu=false;fullscreenTools=false

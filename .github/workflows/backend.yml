@@ -83,6 +83,7 @@ jobs:
           .ci-python/bin/python scripts/test_native_backend_smoke.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-smoke"
           .ci-python/bin/python scripts/test_native_chat_platform.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-chat"
           AGENTSHELL_BACKEND_BIN="$PWD/backend-rust/target/release/agentshell-backend" .ci-python/bin/python scripts/test_browser_runtime_macos.py
+          .ci-python/bin/python scripts/test_native_browser_gateway.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-browser-gateway"
           node scripts/test_macos_viewer.js
 
       - name: Stage platform release asset
@@ -112,6 +113,7 @@ jobs:
           path: |
             ${{ runner.temp }}/native-smoke
             ${{ runner.temp }}/native-chat
+            ${{ runner.temp }}/native-browser-gateway
             ${{ runner.temp }}/browser-permissions.json
           if-no-files-found: ignore
 

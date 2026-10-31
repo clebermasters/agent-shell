@@ -9,12 +9,12 @@ import sys
 import tempfile
 import time
 import urllib.request
+from process_identity import process_info as native_process_info
 
 
 def process_info(pid):
-    raw = Path(f"/proc/{pid}/stat").read_text()
-    fields = raw[raw.rfind(")") + 2:].split()
-    return int(fields[1]), int(fields[19]), Path(f"/proc/{pid}/comm").read_text().strip()
+    value = native_process_info(pid)
+    return value['parentPid'], value['generation'], value['name']
 
 
 def owner(tool):

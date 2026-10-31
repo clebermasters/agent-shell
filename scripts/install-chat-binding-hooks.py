@@ -8,6 +8,7 @@ from pathlib import Path
 import shlex
 import shutil
 import tempfile
+from process_identity import python_command
 
 
 def merge_hook(value, command):
@@ -83,6 +84,7 @@ def main():
     parser.add_argument("--script", type=Path, required=True)
     parser.add_argument("--url", default="http://127.0.0.1:4010")
     parser.add_argument("--user-home", type=Path, default=Path.home())
+    parser.add_argument("--python", help="Python interpreter for the installed hook")
     args = parser.parse_args()
     token = os.environ.get("AUTH_TOKEN")
     if not token:
@@ -90,7 +92,7 @@ def main():
     for tool, relative in [("codex", ".codex/hooks.json"), ("claude", ".claude/settings.json")]:
         path = args.user_home / relative
         previous = json.loads(path.read_text()) if path.exists() else {}
-        command = "/usr/bin/python3 " + shlex.quote(str(args.script.resolve())) + " --tool " + tool
+        command = shlex.quote(python_command(args.python)) + " " + shlex.quote(str(args.script.resolve())) + " --tool " + tool
         atomic_write(path, merge_hook(previous, command))
     configure_codex_footer(args.user_home / ".codex/config.toml")
     atomic_write(args.user_home / ".config/agentshell/chat-binding-hook.json", {"url": args.url, "token": token})

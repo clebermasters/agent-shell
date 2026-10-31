@@ -52,7 +52,7 @@ impl Reader {
         let Some(source) = &self.source else {
             return Ok(());
         };
-        if !std::path::Path::new(&format!("/proc/{}", source.pid)).exists() {
+        if !crate::process::is_alive(source.pid) {
             self.evidence = None;
             return Ok(());
         }
@@ -116,14 +116,11 @@ fn discover_source(root_pid: u32) -> Option<Source> {
         if tool != "codex" && tool != "claude" {
             continue;
         }
-        let Ok(fds) = fs::read_dir(format!("/proc/{pid}/fd")) else {
+        let Ok(files) = crate::process::open_files(pid) else {
             continue;
         };
         let mut paths = Vec::new();
-        for fd in fds.flatten() {
-            let Ok(path) = fs::read_link(fd.path()) else {
-                continue;
-            };
+        for path in files {
             let text = path.to_string_lossy();
             if text.ends_with(".jsonl")
                 && ((tool == "codex" && text.contains("/.codex/sessions/"))

@@ -31,7 +31,9 @@
     {"source": "scripts/browser-native.py", "destination": "browser/browser-native.py", "mode": "755"},
     {"source": "deployment/browser", "destination": "browser", "mode": "644", "directory": true},
     {"source": "scripts/chat-binding-hook.py", "destination": "hooks/chat-binding-hook.py", "mode": "755"},
+    {"source": "scripts/process_identity.py", "destination": "hooks/process_identity.py", "mode": "644"},
     {"source": "scripts/agent-ui-mcp.py", "destination": "ui/agent-ui-mcp.py", "mode": "755"},
+    {"source": "scripts/process_identity.py", "destination": "ui/process_identity.py", "mode": "644"},
     {"source": "scripts/reload-codex-mcp.py", "destination": "hooks/reload-codex-mcp.py", "mode": "755"},
     {"source": "android-native/app/src/main/assets/ui", "destination": "ui", "mode": "644", "directory": true}
   ]

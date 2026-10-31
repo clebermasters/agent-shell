@@ -1,5 +1,13 @@
 #!/bin/bash
 
+if [[ "$(uname -s)" == Darwin ]]; then
+    AGENTSHELL_PROJECT="$(cd "$(dirname "$0")" && pwd)"
+    export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+    ACTION="${1:-start}"
+    if [[ "$#" -gt 0 ]]; then shift; fi
+    exec python3 "$AGENTSHELL_PROJECT/scripts/backend-runtime.py" service "$ACTION" "$@"
+fi
+
 ACTION="${1:-start}"
 SERVICE_NAME="agentshell"
 

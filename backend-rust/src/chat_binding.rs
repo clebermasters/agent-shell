@@ -673,10 +673,10 @@ pub(crate) async fn resolve_codex_publisher(
         "The Codex conversation must be open in exactly one identified terminal"
     );
     let binding = matches.pop().unwrap();
-    let owns_transcript = fs::read_dir(format!("/proc/{pid}/fd"))?
-        .flatten()
-        .filter_map(|f| fs::read_link(f.path()).ok())
-        .any(|p| p == binding.transcript_path);
+    let owns_transcript = pid == binding.pane.agent_pid
+        || crate::process::open_files(pid)?
+            .iter()
+            .any(|p| p == &binding.transcript_path);
     anyhow::ensure!(
         pid == binding.pane.agent_pid || owns_transcript,
         "Publisher does not own this conversation"
@@ -700,25 +700,61 @@ fn bound_state(pane: PaneIdentity, binding: ChatBinding) -> BindingState {
 }
 
 pub(crate) fn process_start(pid: u32) -> Result<u64> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
-    let fields: Vec<_> = stat[stat.rfind(')').context("Invalid process metadata")? + 2..]
-        .split_whitespace()
-        .collect();
-    fields
-        .get(19)
-        .context("Missing process generation")?
-        .parse()
-        .map_err(Into::into)
+    crate::process::generation(pid)
 }
 
 fn native_tool(pid: u32) -> Option<String> {
-    match fs::read_to_string(format!("/proc/{pid}/comm")).ok()?.trim() {
+    native_tool_name(&crate::process::name(pid)?)
+}
+
+fn native_tool_name(name: &str) -> Option<String> {
+    match name.trim() {
         "codex" => Some("codex".into()),
         "claude" => Some("claude".into()),
         "opencode" => Some("opencode".into()),
         "kiro-cli" | "kiro-cli-chat" => Some("kiro".into()),
         _ => None,
     }
+}
+
+fn foreground_agent(
+    root_pid: u32,
+    pids: &[u32],
+    mut inspect: impl FnMut(u32) -> Result<crate::process::ProcessInfo>,
+) -> Result<(crate::process::ProcessInfo, String)> {
+    let mut agents = Vec::new();
+    for pid in pids {
+        let Ok(info) = inspect(*pid) else { continue };
+        let Some(tool) = native_tool_name(&info.name) else {
+            continue;
+        };
+        if !info.has_tty || info.process_group <= 0 || info.process_group != info.foreground_group {
+            continue;
+        }
+        let mut parent = info.pid;
+        let mut depth = 0;
+        while parent != root_pid && depth < 32 {
+            let Ok(ancestor) = inspect(parent) else { break };
+            if ancestor.parent_pid == parent || ancestor.parent_pid == 0 {
+                break;
+            }
+            parent = ancestor.parent_pid;
+            depth += 1;
+        }
+        if parent == root_pid {
+            agents.push((depth, info, tool));
+        }
+    }
+    agents.sort_by_key(|entry| entry.0);
+    let first = agents
+        .first()
+        .context("No supported foreground agent is running in this terminal")?;
+    anyhow::ensure!(
+        agents.iter().filter(|entry| entry.0 == first.0).count() == 1,
+        "More than one foreground agent was found; terminal identity is ambiguous"
+    );
+    let (_, info, tool) = agents.remove(0);
+    Ok((info, tool))
 }
 
 pub async fn locate_pane(target: &str) -> Result<String> {
@@ -766,61 +802,31 @@ pub async fn inspect_pane(target: &str) -> Result<PaneIdentity> {
     let root_pid = parts[2].parse()?;
     let initial_cwd = parts[3].to_owned();
     tokio::task::spawn_blocking(move || {
+        let server_start = process_start(server_pid)?;
+        let root_start = process_start(root_pid)?;
         let pids = crate::chat_log::watcher::get_descendant_pids(root_pid)?;
-        let mut agents: Vec<_> = pids
-            .iter()
-            .filter_map(|pid| {
-                let tool = native_tool(*pid)?;
-                let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-                let fields: Vec<_> = stat[stat.rfind(')')? + 2..].split_whitespace().collect();
-                if fields.get(2) != fields.get(5) || fields.get(4) == Some(&"0") {
-                    return None;
-                }
-                let mut parent = *pid;
-                let mut depth = 0;
-                while parent != root_pid && depth < 32 {
-                    let stat = fs::read_to_string(format!("/proc/{parent}/stat")).ok()?;
-                    parent = stat[stat.rfind(')')? + 2..]
-                        .split_whitespace()
-                        .nth(1)?
-                        .parse()
-                        .ok()?;
-                    depth += 1;
-                }
-                if parent != root_pid {
-                    return None;
-                }
-                Some((depth, *pid, tool))
-            })
-            .collect();
-        agents.sort_by_key(|entry| entry.0);
-        let first = agents
-            .first()
-            .context("No supported foreground agent is running in this terminal")?;
-        if agents.iter().filter(|entry| entry.0 == first.0).count() != 1 {
-            bail!("More than one foreground agent was found; terminal identity is ambiguous");
-        }
-        let (agent_pid, tool) = (first.1, first.2.clone());
+        let (agent, tool) = foreground_agent(root_pid, &pids, crate::process::snapshot)?;
+        let agent_pid = agent.pid;
         let mut cwd = initial_cwd;
-        if let Ok(args) = fs::read(format!("/proc/{agent_pid}/cmdline")) {
-            let words: Vec<_> = args
-                .split(|b| *b == 0)
-                .filter_map(|s| std::str::from_utf8(s).ok())
-                .collect();
-            for pair in words.windows(2) {
-                if matches!(pair[0], "-C" | "--cd" | "--cwd") {
-                    cwd = pair[1].to_owned();
-                }
+        for pair in agent.argv.windows(2) {
+            if matches!(pair[0].as_str(), "-C" | "--cd" | "--cwd") {
+                cwd = pair[1].to_owned();
             }
         }
+        anyhow::ensure!(
+            process_start(server_pid)? == server_start
+                && process_start(root_pid)? == root_start
+                && process_start(agent_pid)? == agent.generation,
+            "The terminal process changed while its identity was checked"
+        );
         Ok(PaneIdentity {
             pane_id,
             server_pid,
-            server_start: process_start(server_pid)?,
+            server_start,
             root_pid,
-            root_start: process_start(root_pid)?,
+            root_start,
             agent_pid,
-            agent_start: process_start(agent_pid)?,
+            agent_start: agent.generation,
             tool,
             cwd,
         })
@@ -829,17 +835,13 @@ pub async fn inspect_pane(target: &str) -> Result<PaneIdentity> {
 }
 
 fn explicit_session_id(pid: u32, tool: &str) -> Option<String> {
-    let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let words: Vec<_> = bytes
-        .split(|b| *b == 0)
-        .filter_map(|v| std::str::from_utf8(v).ok())
-        .collect();
+    let words = crate::process::argv(pid).ok()?;
     for pair in words.windows(2) {
         if (tool == "codex" && pair[0] == "resume")
-            || (tool == "claude" && matches!(pair[0], "--resume" | "-r" | "--session-id"))
-            || (tool == "opencode" && matches!(pair[0], "--session" | "-s"))
+            || (tool == "claude" && matches!(pair[0].as_str(), "--resume" | "-r" | "--session-id"))
+            || (tool == "opencode" && matches!(pair[0].as_str(), "--session" | "-s"))
         {
-            if valid_id(pair[1]) {
+            if valid_id(&pair[1]) {
                 return Some(pair[1].to_owned());
             }
         }
@@ -1034,15 +1036,15 @@ pub(crate) fn exact_open_transcript(pane: &PaneIdentity) -> Result<Option<Conver
     if pane.tool == "opencode" {
         return Ok(None);
     }
-    let fds = match fs::read_dir(format!("/proc/{}/fd", pane.agent_pid)) {
-        Ok(fds) => fds,
+    if process_start(pane.agent_pid).ok() != Some(pane.agent_start) {
+        return Ok(None);
+    }
+    let paths = match crate::process::open_files(pane.agent_pid) {
+        Ok(paths) => paths,
         Err(_) => return Ok(None),
     };
     let mut candidates = Vec::new();
-    for fd in fds.flatten() {
-        let Ok(path) = fs::read_link(fd.path()) else {
-            continue;
-        };
+    for path in paths {
         let text = path.to_string_lossy();
         if text.contains("/subagents/") {
             continue;
@@ -1087,6 +1089,9 @@ pub(crate) fn exact_open_transcript(pane: &PaneIdentity) -> Result<Option<Conver
     }
     candidates.sort_by(|a, b| a.id.cmp(&b.id));
     candidates.dedup_by(|a, b| a.id == b.id);
+    if process_start(pane.agent_pid).ok() != Some(pane.agent_start) {
+        return Ok(None);
+    }
     Ok(if candidates.len() == 1 {
         candidates.pop()
     } else {
@@ -1213,6 +1218,82 @@ pub async fn register_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn process_fixture(
+        pid: u32,
+        parent: u32,
+        name: &str,
+        group: i32,
+        foreground: i32,
+        tty: bool,
+    ) -> crate::process::ProcessInfo {
+        crate::process::ProcessInfo {
+            pid,
+            parent_pid: parent,
+            process_group: group,
+            foreground_group: foreground,
+            has_tty: tty,
+            name: name.into(),
+            argv: vec![name.into()],
+            cwd: Some(PathBuf::from("/same/project")),
+            generation: 1_791_234_567_123_000 + pid as u64,
+            started_at_epoch_ms: Some(1_791_234_567_123),
+        }
+    }
+
+    #[test]
+    fn native_agent_selection_preserves_foreground_and_ancestor_proofs_on_every_platform() {
+        let processes = HashMap::from([
+            (10, process_fixture(10, 1, "zsh", 10, 20, true)),
+            (20, process_fixture(20, 10, "codex", 20, 20, true)),
+            (21, process_fixture(21, 20, "claude", 20, 20, true)),
+            (30, process_fixture(30, 10, "claude", 30, 20, true)),
+            (40, process_fixture(40, 10, "codex", 40, 40, false)),
+            (50, process_fixture(50, 99, "codex", 50, 50, true)),
+        ]);
+        let (agent, tool) = foreground_agent(10, &[10, 20, 21, 30, 40, 50], |pid| {
+            processes
+                .get(&pid)
+                .cloned()
+                .context("Process is unavailable")
+        })
+        .unwrap();
+        assert_eq!((agent.pid, tool.as_str()), (20, "codex"));
+        assert_eq!(agent.generation, 1_791_234_567_123_020);
+    }
+
+    #[test]
+    fn ambiguous_foreground_agents_and_uninspectable_parents_fail_closed() {
+        let processes = HashMap::from([
+            (10, process_fixture(10, 1, "zsh", 10, 20, true)),
+            (20, process_fixture(20, 10, "codex", 20, 20, true)),
+            (30, process_fixture(30, 10, "claude", 20, 20, true)),
+        ]);
+        assert!(foreground_agent(10, &[20, 30], |pid| processes
+            .get(&pid)
+            .cloned()
+            .context("Process unavailable"))
+        .is_err());
+        assert!(foreground_agent(10, &[20], |_| anyhow::bail!("Permission denied")).is_err());
+        let mut detached = processes[&20].clone();
+        detached.parent_pid = 99;
+        assert!(foreground_agent(10, &[20], |pid| {
+            if pid == 20 {
+                Ok(detached.clone())
+            } else {
+                anyhow::bail!("Parent exited")
+            }
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn process_parent_cycles_cannot_become_foreground_identity() {
+        let mut cyclic = process_fixture(20, 21, "codex", 20, 20, true);
+        assert!(foreground_agent(10, &[20], |_| Ok(cyclic.clone())).is_err());
+        cyclic.parent_pid = 20;
+        assert!(foreground_agent(10, &[20], |_| Ok(cyclic.clone())).is_err());
+    }
 
     fn pane(id: &str) -> PaneIdentity {
         PaneIdentity {

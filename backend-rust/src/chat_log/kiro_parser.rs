@@ -594,11 +594,7 @@ pub fn find_session_id(cwd: &Path) -> Result<String> {
 
 /// Check if the kiro-cli-chat process with given PID is still running.
 pub fn is_process_alive(pid: u32) -> bool {
-    let path = format!("/proc/{}/comm", pid);
-    std::fs::read_to_string(&path)
-        .ok()
-        .map(|s| s.trim() == "kiro-cli-chat")
-        .unwrap_or(false)
+    crate::process::name(pid).as_deref() == Some("kiro-cli-chat")
 }
 
 // ---------------------------------------------------------------------------

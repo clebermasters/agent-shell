@@ -446,49 +446,37 @@ async fn get_pane_pid(target: &str) -> Result<u32> {
     Ok(pid)
 }
 
-/// Recursively collect all descendant PIDs of `parent_pid` via procfs.
-///
-/// This avoids shelling out to `ps` on every call and works on Linux by
-/// scanning `/proc/*/stat` for processes whose PPID matches.
+/// Recursively collect descendant PIDs using the native platform inventory.
 pub(crate) fn get_descendant_pids(parent_pid: u32) -> Result<Vec<u32>> {
-    let children_by_parent = scan_proc_children_map();
+    let children_by_parent = crate::process::children_map()?;
     let mut result = vec![parent_pid];
     let mut queue = vec![parent_pid];
+    let mut seen = std::collections::HashSet::from([parent_pid]);
 
     while let Some(ppid) = queue.pop() {
         for child in children_by_parent.get(&ppid).into_iter().flatten() {
-            result.push(*child);
-            queue.push(*child);
+            if seen.insert(*child) {
+                result.push(*child);
+                queue.push(*child);
+            }
         }
     }
 
     Ok(result)
 }
 
-/// Return the immediate child PIDs of `ppid` by scanning `/proc`.
+/// Return the immediate children observable by this backend user.
 fn direct_children(ppid: u32) -> Vec<u32> {
-    scan_proc_children_map().remove(&ppid).unwrap_or_default()
+    crate::process::children_map().unwrap_or_default().remove(&ppid).unwrap_or_default()
 }
 
-/// Read the executable name for a given PID from `/proc/<pid>/comm`.
 fn process_name(pid: u32) -> Option<String> {
-    let path = format!("/proc/{pid}/comm");
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
+    crate::process::name(pid)
 }
 
 fn process_cmdline(pid: u32) -> Option<String> {
-    let path = format!("/proc/{pid}/cmdline");
-    let mut cmdline = std::fs::read_to_string(path).ok()?;
-    if cmdline.is_empty() {
-        return None;
-    }
-
-    // Convert NUL bytes in cmdline into spaces so tokenization can work with
-    // shell-like command strings and wrappers.
-    cmdline = cmdline.replace('\0', " ");
-    Some(cmdline.trim().to_string())
+    let arguments = crate::process::argv(pid).ok()?;
+    (!arguments.is_empty()).then(|| arguments.join(" "))
 }
 
 fn detect_tool_from_name(name: &str) -> Option<&'static str> {
@@ -686,41 +674,8 @@ fn detect_log_file_for_pane_pid(pane_pid: u32) -> Result<(PathBuf, AiTool)> {
     bail!("no AI tool (claude/codex/opencode/kiro) found among descendants of pane PID {pane_pid}");
 }
 
-fn scan_proc_children_map() -> HashMap<u32, Vec<u32>> {
-    let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return children_by_parent;
-    };
-
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
-            continue;
-        };
-
-        let stat_path = format!("/proc/{pid}/stat");
-        let Ok(stat) = std::fs::read_to_string(&stat_path) else {
-            continue;
-        };
-
-        if let Some(parent) = parse_parent_pid_from_stat(&stat) {
-            children_by_parent.entry(parent).or_default().push(pid);
-        }
-    }
-
-    children_by_parent
-}
-
-fn parse_parent_pid_from_stat(stat: &str) -> Option<u32> {
-    let after_comm = stat.rfind(')')?;
-    let fields: Vec<&str> = stat[after_comm + 2..].split_whitespace().collect();
-    fields.get(1).and_then(|s| s.parse::<u32>().ok())
-}
-
-/// Read the current working directory of a process via its `/proc` symlink.
 fn get_process_cwd(pid: u32) -> Result<PathBuf> {
-    let link = format!("/proc/{pid}/cwd");
-    std::fs::read_link(&link).with_context(|| format!("failed to read {link}"))
+    crate::process::cwd(pid).with_context(|| format!("Process working directory unavailable for PID {pid}"))
 }
 
 /// Check if a process with given PID is still running and has the expected CWD.
@@ -746,32 +701,14 @@ fn is_process_alive_with_cwd(pid: u32, expected_cwd: &Path) -> bool {
 
 /// Find an opencode process PID that matches the given CWD.
 fn find_opencode_pid_for_cwd(cwd: &Path) -> Result<u32> {
-    // Scan /proc for all running processes
-    let entries = match std::fs::read_dir("/proc") {
-        Ok(e) => e,
-        Err(_) => bail!("Cannot read /proc"),
-    };
-
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        let name_str = match file_name.to_str() {
-            Some(n) => n,
-            None => continue,
-        };
-
-        // Must be a number (PID)
-        let pid: u32 = match name_str.parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
-        // Check if it's an opencode process with matching CWD
+    let mut found = None;
+    for pid in crate::process::all_pids()? {
         if is_process_alive_with_cwd(pid, cwd) {
-            return Ok(pid);
+            if found.is_some() { bail!("More than one opencode process shares this working directory"); }
+            found = Some(pid);
         }
     }
-
-    bail!("No opencode process found for {}", cwd.display())
+    found.with_context(|| format!("No opencode process found for {}", cwd.display()))
 }
 
 // ---------------------------------------------------------------------------

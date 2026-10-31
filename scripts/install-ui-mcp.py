@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 from jsonc_config import merge_mcp
+from process_identity import python_command
 
 def backup(path):
     if path.exists():
@@ -44,15 +45,20 @@ def merge_entry(value,key,entry):
 def server_environment(script,config):
     # Codex compares MCP configuration on reload, not the running Python file.
     # A changed revision makes an installed adapter update visible to that check.
-    return {'AGENTSHELL_UI_CONFIG':str(config),'AGENTSHELL_UI_REVISION':hashlib.sha256(Path(script).read_bytes()).hexdigest()}
+    revision = hashlib.sha256(Path(script).read_bytes())
+    helper = Path(script).with_name('process_identity.py')
+    if helper.is_file(): revision.update(b'\0process_identity.py\0' + helper.read_bytes())
+    environment = {'AGENTSHELL_UI_CONFIG':str(config),'AGENTSHELL_UI_REVISION':revision.hexdigest()}
+    if os.environ.get('AGENTSHELL_BACKEND_BIN'): environment['AGENTSHELL_BACKEND_BIN'] = os.environ['AGENTSHELL_BACKEND_BIN']
+    return environment
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--script',type=Path,required=True);parser.add_argument('--url',default='http://127.0.0.1:4010');parser.add_argument('--user-home',type=Path,default=Path.home());parser.add_argument('--tools',default='codex,claude,opencode');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--script',type=Path,required=True);parser.add_argument('--url',default='http://127.0.0.1:4010');parser.add_argument('--user-home',type=Path,default=Path.home());parser.add_argument('--tools',default='codex,claude,opencode');parser.add_argument('--python');args=parser.parse_args()
     token=os.environ.get('AUTH_TOKEN')
     if not token:raise ValueError('AUTH_TOKEN is required')
     script=str(args.script.resolve());config=args.user_home/'.config/agentshell/interactive-ui.json'
     write_json(config,{'url':args.url,'token':token},private=True)
-    command=['/usr/bin/python3',script];installed=[];server_env=server_environment(script,config)
+    command=[python_command(args.python),script];installed=[];server_env=server_environment(script,config)
     for tool in args.tools.split(','):
         if not shutil.which(tool):continue
         if tool=='codex':

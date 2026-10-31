@@ -8,6 +8,8 @@ import sys
 
 
 def daemon_socket(home):
+    if sys.platform != 'linux':
+        raise ValueError('Automatic live MCP reload is unavailable on this platform; reload MCP servers in the running Codex client')
     record = home / '.codex/app-server-daemon/daemon.pid'
     if not record.exists():
         return None

@@ -25,6 +25,7 @@ interface SplitScreenEntryPoint {
     fun chatActivityRepository(): ChatActivityRepository
     fun offlineCacheRepository(): com.agentshell.data.repository.OfflineCacheRepository
     fun hostRepository(): HostRepository
+    fun chatSubmissionStore(): com.agentshell.feature.chat.ChatSubmissionStore
 }
 
 @Composable

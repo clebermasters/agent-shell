@@ -9,6 +9,11 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::{sync::mpsc, task::JoinHandle};
 
+#[path = "send_receipts.rs"]
+mod receipts;
+
+pub(super) async fn record_submission_delivered() { receipts::delivered().await; }
+
 pub(crate) async fn send_value(
     tx: &mpsc::Sender<BroadcastMessage>,
     value: serde_json::Value,
@@ -135,7 +140,7 @@ pub(crate) async fn start_watch(
                         if let Some(binding) = &resolved.binding {
                             pane_target = Some(binding.pane.pane_id.clone());
                         }
-                        if send_value(&tx, serde_json::json!({"type":"chat-binding","sessionName":session,"windowIndex":window,"state":resolved})).await.is_err() { return; }
+                        if send_value(&tx, serde_json::json!({"type":"chat-binding","sessionName":session,"windowIndex":window,"state":resolved,"sendReceipts":true})).await.is_err() { return; }
                         if let Some(binding) = resolved
                             .binding
                             .as_ref()
@@ -288,16 +293,70 @@ pub(crate) async fn handle(
     state: &mut WsState,
     app: Arc<AppState>,
 ) -> Result<()> {
+    let store = receipts::Store::new(state.chat_event_store.send_receipts_path());
+    if let WebSocketMessage::GetChatSendResult { binding_id, request_id } = message {
+        let lookup_store = store.clone();
+        let (binding,request) = (binding_id.clone(),request_id.clone());
+        let receipt = tokio::task::spawn_blocking(move || lookup_store.get(&binding,&request)).await??;
+        return send_value(&state.message_tx,receipt.message(&binding_id,&request_id)).await;
+    }
+    let ids = match &message {
+        WebSocketMessage::SendBoundChatMessage { binding_id,request_id,.. }
+        | WebSocketMessage::SendBoundFileToChat { binding_id,request_id,.. }
+        | WebSocketMessage::SendBoundUiAction { binding_id,request_id,.. } => Some((binding_id.clone(),request_id.clone())),
+        _ => None,
+    };
+    let Some((binding,request)) = ids else { return handle_untracked(message,state,app).await; };
+    let fingerprint = receipts::fingerprint(&message)?;
+    let reserve_store = store.clone();
+    let (b,r) = (binding.clone(),request.clone());
+    let reservation = tokio::task::spawn_blocking(move || {
+        let reservation=reserve_store.reserve(&b,&r,&fingerprint)?;
+        // The guard is created in the same worker as the durable reservation.
+        // If its caller disappears, dropping the unclaimed result marks it
+        // uncertain instead of leaving a permanent "pending" receipt.
+        let guard=matches!(&reservation,receipts::Reservation::New)
+            .then(||receipts::InFlight::new(reserve_store,b,r));
+        Ok::<_,anyhow::Error>((reservation,guard))
+    }).await?;
+    match reservation {
+        Ok((receipts::Reservation::Existing(receipt),_)) => {
+            // This is an idempotency lookup, never a second terminal write.
+            send_value(&state.message_tx,receipt.message(&binding,&request)).await
+        }
+        Err(error) => send_value(&state.message_tx,receipts::Receipt::complete(&Err(error)).message(&binding,&request)).await,
+        Ok((receipts::Reservation::New,Some(mut in_flight))) => {
+            let started = std::time::Instant::now();
+            tracing::info!(request_id=%request,binding_id=%binding,"Chat submission started");
+            let result = receipts::during(store.clone(),binding.clone(),request.clone(),handle_untracked(message,state,app)).await;
+            let receipt = receipts::Receipt::complete(&result);
+            let persisted = receipt.clone();
+            let (b,r) = (binding.clone(),request.clone());
+            // Commit before trying to acknowledge on a socket that may be gone.
+            let receipt = tokio::task::spawn_blocking(move || store.settle(&b,&r,&persisted)).await??;
+            in_flight.settled();
+            tracing::info!(request_id=%request,binding_id=%binding,success=receipt.success.unwrap_or(false),elapsed_ms=started.elapsed().as_millis(),"Chat submission settled");
+            send_value(&state.message_tx,receipt.message(&binding,&request)).await
+        }
+        Ok((receipts::Reservation::New,None)) => unreachable!("A new submission owns its cancellation guard"),
+    }
+}
+
+async fn handle_untracked(
+    message: WebSocketMessage,
+    state: &mut WsState,
+    app: Arc<AppState>,
+) -> Result<()> {
     match message {
         WebSocketMessage::SendBoundUiAction {
             binding_id,
-            request_id,
+            request_id: _,
             session_name,
             window_index,
             widget_id,
             message,
         } => {
-            let result = async {
+            async {
                 anyhow::ensure!(!message.trim().is_empty() && message.len() <= 4000, "Widget action must contain 1–4000 bytes");
                 let binding = require_binding(state, &session_name, window_index).await?;
                 anyhow::ensure!(binding.binding_id == binding_id, "This conversation changed; the widget action was not sent");
@@ -308,8 +367,7 @@ pub(crate) async fn handle(
                 }).await??;
                 anyhow::ensure!(owned, "This widget belongs to another conversation");
                 super::chat_cmds::handle(WebSocketMessage::SendChatMessage { session_name, window_index, message, notify: Some(false) }, state, app).await
-            }.await;
-            send_value(&state.message_tx, serde_json::json!({"type":"chat-send-result","bindingId":binding_id,"requestId":request_id,"success":result.is_ok(),"error":result.err().map(|e| e.to_string())})).await?;
+            }.await?;
         }
         WebSocketMessage::ListChatConversations {
             session_name,
@@ -321,7 +379,7 @@ pub(crate) async fn handle(
                     let pane = binding.pane.clone();
                     state_data.candidates = tokio::task::spawn_blocking(move || crate::chat_binding::conversation_candidates(&pane.tool, &pane.cwd)).await??;
                 }
-                send_value(&state.message_tx, serde_json::json!({"type":"chat-binding","sessionName":session_name,"windowIndex":window_index,"state":state_data})).await
+                send_value(&state.message_tx, serde_json::json!({"type":"chat-binding","sessionName":session_name,"windowIndex":window_index,"state":state_data,"sendReceipts":true})).await
             }.await;
             if let Err(error) = result {
                 send_message(
@@ -364,12 +422,13 @@ pub(crate) async fn handle(
         }
         WebSocketMessage::SendBoundChatMessage {
             binding_id,
-            request_id,
+            request_id: _,
             session_name,
             window_index,
             message,
         } => {
-            let result = async {
+            async {
+                anyhow::ensure!(!message.trim().is_empty(), "A message is required");
                 let binding = require_binding(state, &session_name, window_index).await?;
                 if binding.binding_id != binding_id {
                     anyhow::bail!("This conversation link changed. Reconnect before sending");
@@ -386,18 +445,17 @@ pub(crate) async fn handle(
                 )
                 .await
             }
-            .await;
-            send_value(&state.message_tx, serde_json::json!({"type":"chat-send-result","requestId":request_id,"bindingId":binding_id,"success":result.is_ok(),"error":result.err().map(|e| e.to_string())})).await?;
+            .await?;
         }
         WebSocketMessage::SendBoundFileToChat {
             binding_id,
-            request_id,
+            request_id: _,
             session_name,
             window_index,
             file,
             prompt,
         } => {
-            let result = async {
+            async {
                 let binding = require_binding(state, &session_name, window_index).await?;
                 if binding.binding_id != binding_id {
                     anyhow::bail!("This conversation link changed. Reconnect before sending");
@@ -414,8 +472,7 @@ pub(crate) async fn handle(
                 )
                 .await
             }
-            .await;
-            send_value(&state.message_tx, serde_json::json!({"type":"chat-send-result","requestId":request_id,"bindingId":binding_id,"success":result.is_ok(),"error":result.err().map(|e| e.to_string())})).await?;
+            .await?;
         }
         WebSocketMessage::LoadMoreBoundChatHistory {
             binding_id,

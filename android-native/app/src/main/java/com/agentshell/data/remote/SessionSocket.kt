@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -36,31 +37,74 @@ class SessionSocket(
     private val pendingQueueLock = Any()
     private val pendingQueue = ArrayDeque<String>()
 
-    private var webSocket: WebSocket? = null
-    private var currentUrl: String? = null
+    @Volatile private var webSocket: WebSocket? = null
+    @Volatile private var currentUrl: String? = null
     private var connectJob: Job? = null
     private var reconnectAttempts = 0
     private var intentionalClose = false
-    private var listenerId = 0L
+    @Volatile private var listenerId = 0L
+    private var incoming: OrderedSocketMessages<Map<String, Any?>>? = null
+    private val heartbeat = WebSocketHeartbeat(scope) { connection ->
+        if (connection == listenerId && _isConnected.value) forceReconnect()
+    }
 
     private val _messages = MutableSharedFlow<Map<String, Any?>>(replay = 0, extraBufferCapacity = 128)
     val messages: SharedFlow<Map<String, Any?>> = _messages.asSharedFlow()
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+    private val _connectionGeneration = MutableStateFlow(0L)
+    val connectionGeneration: StateFlow<Long> = _connectionGeneration.asStateFlow()
 
     fun connect(url: String) {
         if (url == currentUrl && (_isConnected.value || connectJob?.isActive == true)) {
             return
         }
 
+        if (currentUrl != null && currentUrl != url) synchronized(pendingQueueLock) { pendingQueue.clear() }
         currentUrl = url
         reconnectAttempts = 0
         intentionalClose = false
 
         connectJob?.cancel()
+        heartbeat.cancel()
+        listenerId++
+        incoming?.cancel()
         webSocket?.cancel()
         _isConnected.value = false
+        doConnect()
+    }
+
+    /** Bound submissions must never be replayed after a link or server changes. */
+    fun sendIfConnected(message: Map<String, Any?>, expectedServerUrl: String): Boolean {
+        val socket = webSocket ?: return false
+        if (!_isConnected.value || currentUrl != expectedServerUrl) return false
+        val payload = mapToJson(message).toString()
+        if (!_isConnected.value || currentUrl != expectedServerUrl || webSocket !== socket) return false
+        return socket.send(payload)
+    }
+
+    fun checkConnection() {
+        val socket = webSocket
+        if (_isConnected.value && socket != null) {
+            val connection = listenerId
+            heartbeat.ping(connection, 10_000) {
+                _isConnected.value && listenerId == connection && webSocket === socket && socket.send("{\"type\":\"ping\"}")
+            }
+        } else if (currentUrl != null) forceReconnect()
+    }
+
+    fun forceReconnect() {
+        if (currentUrl == null) return
+        intentionalClose = false
+        connectJob?.cancel()
+        heartbeat.cancel()
+        listenerId++
+        incoming?.cancel()
+        webSocket?.cancel()
+        webSocket = null
+        _isConnected.value = false
+        reconnectAttempts = 0
         doConnect()
     }
 
@@ -83,6 +127,9 @@ class SessionSocket(
     fun dispose() {
         intentionalClose = true
         connectJob?.cancel()
+        heartbeat.cancel()
+        listenerId++
+        incoming?.cancel()
         webSocket?.close(1000, "Session socket disposed")
         webSocket = null
         _isConnected.value = false
@@ -96,6 +143,11 @@ class SessionSocket(
         val url = currentUrl ?: return
         val request = Request.Builder().url(url).build()
         val activeId = ++listenerId
+        incoming?.cancel()
+        val packets = OrderedSocketMessages<Map<String, Any?>>(scope, 128) { message ->
+            if (activeId == listenerId) _messages.emit(message)
+        }
+        incoming = packets
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             private fun isStale(): Boolean = activeId != listenerId
 
@@ -103,7 +155,8 @@ class SessionSocket(
                 if (isStale()) return
                 _isConnected.value = true
                 reconnectAttempts = 0
-                flushPendingQueue(webSocket)
+                _connectionGeneration.update { it + 1 }
+                flushPendingQueue(webSocket, activeId)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -111,16 +164,24 @@ class SessionSocket(
                 runCatching {
                     jsonObjectToMap(JSONObject(text))
                 }.onSuccess { message ->
-                    scope.launch { _messages.emit(message) }
+                    if (message["type"] == "pong") heartbeat.pong(activeId)
+                    packets.accept(message)
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                packets.close()
                 if (isStale() || intentionalClose) return
                 handleUnexpectedDisconnect()
             }
 
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                packets.close()
+                webSocket.close(if (code == 1005) 1000 else code, reason)
+            }
+
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                packets.close()
                 if (isStale() || intentionalClose) return
                 handleUnexpectedDisconnect()
             }
@@ -129,6 +190,7 @@ class SessionSocket(
 
     private fun handleUnexpectedDisconnect() {
         _isConnected.value = false
+        heartbeat.cancel()
         reconnectAttempts += 1
         connectJob?.cancel()
         connectJob = scope.launch {
@@ -138,13 +200,16 @@ class SessionSocket(
         }
     }
 
-    private fun flushPendingQueue(webSocket: WebSocket) {
+    private fun flushPendingQueue(webSocket: WebSocket, activeId: Long) {
         val pending = synchronized(pendingQueueLock) {
             val snapshot = pendingQueue.toList()
             pendingQueue.clear()
             snapshot
         }
-        pending.forEach(webSocket::send)
+        for (payload in pending) {
+            if (activeId != listenerId || this.webSocket !== webSocket) return
+            webSocket.send(payload)
+        }
     }
 
     private fun mapToJson(map: Map<String, Any?>): JSONObject {

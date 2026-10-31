@@ -26,12 +26,14 @@ use axum::{
     response::IntoResponse,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{types::*, AppState};
+
+const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -52,7 +54,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (tx, mut rx) = mpsc::channel::<BroadcastMessage>(32);
 
     // Register client with the manager
-    state
+    let disconnect = state
         .client_manager
         .add_client(client_id.clone(), tx.clone())
         .await;
@@ -80,41 +82,42 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // Clone client_id for the spawned task
     let _task_client_id = client_id.clone();
 
-    // Oneshot to signal the receiver loop when the sender dies
-    let (close_tx, mut close_rx) = tokio::sync::oneshot::channel::<()>();
-
     // Spawn task to forward server messages to WebSocket with backpressure handling
     let sender_client_id = client_id.clone();
-    tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            match msg {
+    let sender_disconnect = disconnect.clone();
+    let sender_task = tokio::spawn(async move {
+        loop {
+            let msg = tokio::select! {
+                _ = sender_disconnect.cancelled() => break,
+                msg = rx.recv() => match msg { Some(msg) => msg, None => break },
+            };
+            let (message, throttle) = match msg {
                 BroadcastMessage::Text(json) => {
-                    // Check if we can send without blocking
-                    if let Err(e) = sender.send(Message::Text(json.to_string())).await {
-                        error!(
-                            "[CONN] Backend→Flutter send FAILED ({}): {}",
-                            sender_client_id, e
-                        );
-                        let _ = close_tx.send(());
-                        break;
-                    }
-                    // Add small delay to prevent flooding
-                    if json.contains("\"type\":\"output\"") && json.len() > 1000 {
-                        tokio::time::sleep(tokio::time::Duration::from_micros(100)).await;
-                    }
+                    let throttle = json.contains("\"type\":\"output\"") && json.len() > 1000;
+                    (Message::Text(json.to_string()), throttle)
                 }
-                BroadcastMessage::Binary(data) => {
-                    if let Err(e) = sender.send(Message::Binary(data.to_vec())).await {
-                        error!(
-                            "[CONN] Backend→Flutter binary send FAILED ({}): {}",
-                            sender_client_id, e
-                        );
-                        let _ = close_tx.send(());
-                        break;
-                    }
+                BroadcastMessage::Binary(data) => (Message::Binary(data.to_vec()), false),
+            };
+            let result = tokio::select! {
+                _ = sender_disconnect.cancelled() => break,
+                result = tokio::time::timeout(SOCKET_WRITE_TIMEOUT, sender.send(message)) => result,
+            };
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    error!("[CONN] Backend→client send FAILED ({}): {}", sender_client_id, error);
+                    break;
+                }
+                Err(_) => {
+                    warn!(client_id = %sender_client_id, "WebSocket write timed out; reconnect required");
+                    break;
                 }
             }
+            if throttle {
+                tokio::time::sleep(Duration::from_micros(100)).await;
+            }
         }
+        sender_disconnect.cancel();
     });
 
     // Handle incoming messages
@@ -130,7 +133,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                 let msg_type = format!("{:?}", std::mem::discriminant(&ws_msg));
                                 debug!("Parsed message type: {}", msg_type);
                                 let t = std::time::Instant::now();
-                                if let Err(e) = handle_message(ws_msg, &mut ws_state, state.clone()).await {
+                                let result = tokio::select! {
+                                    result = handle_message(ws_msg, &mut ws_state, state.clone()) => result,
+                                    _ = disconnect.cancelled() => break,
+                                    _ = shutdown_token.cancelled() => break,
+                                };
+                                if let Err(e) = result {
                                     error!("Error handling message: {}", e);
                                 }
                                 let elapsed = t.elapsed();
@@ -166,8 +174,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
             }
-            _ = &mut close_rx => {
-                info!("[CONN] Backend→Flutter sender DIED, closing receiver ({})", client_id);
+            _ = disconnect.cancelled() => {
+                info!("[CONN] Closing disconnected or stalled client ({})", client_id);
                 break;
             }
             _ = shutdown_token.cancelled() => {
@@ -176,6 +184,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
     }
+
+    // A reader disconnect must also release its sender and bounded queue. In
+    // particular, do not leave a socket write hanging after its reader exits.
+    disconnect.cancel();
+    sender_task.abort();
+    let _ = sender_task.await;
 
     // Cleanup - use graceful mode to preserve tmux sessions on server shutdown
     state.device_adb_registry.disconnect(&client_id).await;
@@ -372,6 +386,7 @@ async fn handle_message(
         WebSocketMessage::BindChatConversation { .. }
         | WebSocketMessage::ListChatConversations { .. }
         | WebSocketMessage::SendBoundChatMessage { .. }
+        | WebSocketMessage::GetChatSendResult { .. }
         | WebSocketMessage::SendBoundFileToChat { .. }
         | WebSocketMessage::LoadMoreBoundChatHistory { .. }
         | WebSocketMessage::ClearBoundChatLog { .. } => {

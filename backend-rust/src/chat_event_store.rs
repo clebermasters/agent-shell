@@ -72,6 +72,11 @@ impl ChatEventStore {
 
     pub fn history_index_path(&self) -> PathBuf { self.db_path.with_file_name("history_index.db") }
 
+    /// Small delivery receipts live separately from the full offline archive.
+    pub(crate) fn send_receipts_path(&self) -> PathBuf {
+        self.db_path.with_file_name("chat_send_receipts.db")
+    }
+
     pub fn history_revision(&self, session: &str, window: u32) -> Result<i64> {
         Ok(self.open_connection()?.query_row("SELECT revision FROM history_revisions WHERE session_name=? AND window_index=?",params![session,window],|r|r.get(0)).optional()?.unwrap_or(0))
     }

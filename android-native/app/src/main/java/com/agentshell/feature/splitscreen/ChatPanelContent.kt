@@ -29,6 +29,7 @@ import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.feature.chat.ChatListAnchor
+import com.agentshell.feature.chat.ChatSubmission
 import com.agentshell.feature.chat.AgentActivityBar
 import com.agentshell.feature.chat.preferRemoteChatHistory
 import com.agentshell.feature.chat.remoteChatHistoryOffset
@@ -45,6 +46,7 @@ import com.agentshell.feature.chat.UiWidgetBlock
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,6 +69,8 @@ fun ChatPanelContent(
     val services = rememberSplitScreenServices()
     val activityRepository = services.chatActivityRepository()
     val offlineCache = services.offlineCacheRepository()
+    val submissions = services.chatSubmissionStore()
+    val submissionRecords by submissions.records.collectAsStateWithLifecycle(initialValue = emptyList())
     val selectedHost by remember(services) { services.hostRepository().getSelectedHost() }.collectAsStateWithLifecycle(initialValue = null)
     val target = remember(selectedHost?.id, sessionName, windowIndex, isAcp) {
         selectedHost?.let { ChatTarget.create(it.id, sessionName, windowIndex, isAcp) }
@@ -88,20 +92,91 @@ fun ChatPanelContent(
     }
     val panelSocket = remember(panelId, target?.hostId) { SessionSocket(services.okHttpClient()) }
     val isSocketConnected by panelSocket.isConnected.collectAsStateWithLifecycle()
+    val socketGeneration by panelSocket.connectionGeneration.collectAsStateWithLifecycle()
 
     val messages = remember(target?.key) { mutableStateListOf<ChatMessage>() }
     val history = remember(target?.key) { PanelChatHistoryState() }
-    var inputText by remember { mutableStateOf("") }
+    var inputText by remember(target?.key) { mutableStateOf("") }
     var bindingState by remember(target?.key) { mutableStateOf<ChatBindingState?>(if (isAcp) null else ChatBindingState("checking", "", "", null, emptyList(), "Linking this terminal…")) }
-    var pendingSend by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var pendingWidget by remember(target?.key) { mutableStateOf<Pair<String, String>?>(null) }
-    var submissionError by remember { mutableStateOf<String?>(null) }
+    var startingSend by remember(target?.key) { mutableStateOf(false) }
+    var sendReceiptsAvailable by remember(target?.key) { mutableStateOf(false) }
+    var receiptCheckVersion by remember(target?.key) { mutableIntStateOf(0) }
+    val serverUrl = selectedHost?.let { "${it.wsUrl}/ws" }
+    val activeSubmission = submissionRecords.firstOrNull { it.serverUrl == serverUrl && it.sessionName == sessionName &&
+        it.windowIndex == windowIndex && !isAcp && (bindingState?.binding?.id == null || bindingState?.binding?.id == it.bindingId) }
+    val pendingSend = activeSubmission?.takeIf { it.waiting }
+    val awaitingSend = startingSend || pendingSend != null
+    var submissionError by remember(target?.key) { mutableStateOf<String?>(null) }
     val conversationDrafts = remember { mutableMapOf<String, String>() }
     val listState = rememberLazyListState()
     val isDragging by listState.interactionSource.collectIsDraggedAsState()
     val coroutineScope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
     val showOlderHistory = history.hasOlderCachedMessages || (isSocketConnected && history.remoteHasMore)
+
+    fun draftKey(): String = bindingState?.binding?.conversationKey?.let { "chat_draft_native_${serverUrl.orEmpty()}:$it" }
+        ?: "split_chat_draft_${serverUrl.orEmpty()}:${sessionName}_$windowIndex"
+
+    fun refreshWatch() = panelSocket.send(mapOf("type" to if (isAcp) "watch-acp-chat-log" else "watch-chat-log",
+        "sessionName" to sessionName, "sessionId" to sessionName, "windowIndex" to windowIndex))
+
+    fun submitBound(text: String, widgetId: String? = null) {
+        val binding = bindingState?.binding ?: return
+        val url = webSocketUrl ?: return
+        val server = serverUrl ?: return
+        if (awaitingSend || !isSocketConnected || bindingState?.canSend != true) return
+        val ticket = ChatSubmission(UUID.randomUUID().toString(), server, binding.conversationKey, binding.id,
+            sessionName, windowIndex, text, draftKey(), widgetId = widgetId)
+        startingSend = true
+        submissionError = null
+        coroutineScope.launch {
+            try {
+                if (!submissions.begin(ticket)) { submissionError = "A previous message is still being checked"; return@launch }
+                panelSocket.checkConnection()
+                if (!panelSocket.sendIfConnected(mapOf("type" to if (widgetId == null) "send-bound-chat-message" else "send-bound-ui-action",
+                    "bindingId" to binding.id, "requestId" to ticket.id, "sessionName" to sessionName,
+                    "windowIndex" to windowIndex, "message" to text.trim(), "widgetId" to widgetId), url)) {
+                    submissions.record(server, mapOf("requestId" to ticket.id, "bindingId" to ticket.bindingId,
+                        "status" to "complete", "success" to false, "error" to "Unable to send. Your draft is still here"))
+                    return@launch
+                }
+                startingSend = false
+                receiptCheckVersion += 1
+                kotlinx.coroutines.delay(30_000)
+                submissions.checking(ticket.id, sendReceiptsAvailable)
+            } finally { startingSend = false }
+        }
+    }
+
+    LaunchedEffect(target?.key, bindingState?.binding?.conversationKey, activeSubmission?.id) {
+        val before = inputText
+        val saved = submissions.savedDraft(draftKey())
+        if (before.isBlank() && inputText == before) inputText = saved ?: activeSubmission?.takeIf { it.widgetId == null && !it.draftEdited }?.text.orEmpty()
+    }
+
+    LaunchedEffect(activeSubmission, screenActive, history.cacheReady, bindingState?.binding?.id) {
+        val ticket = activeSubmission ?: return@LaunchedEffect
+        if (ticket.phase != "complete" || !screenActive || !history.cacheReady || bindingState?.binding?.id != ticket.bindingId) return@LaunchedEffect
+        if (ticket.success == true) {
+            if (ticket.widgetId == null && ticket.matchesDraft(inputText, null)) inputText = ""
+            submissions.clearSavedDraft(ticket)
+            submissionError = null
+        } else submissionError = ticket.error ?: "Unable to send this draft"
+        submissions.remove(ticket.id)
+        if (ticket.success == true && isSocketConnected) refreshWatch()
+    }
+
+    LaunchedEffect(target?.key, activeSubmission?.id, isSocketConnected, socketGeneration, screenActive, sendReceiptsAvailable, receiptCheckVersion) {
+        if (!screenActive || !isSocketConnected || !sendReceiptsAvailable) return@LaunchedEffect
+        val ticket = activeSubmission ?: return@LaunchedEffect
+        val url = webSocketUrl ?: return@LaunchedEffect
+        for (pause in listOf(500L, 1_500L, 3_000L, 5_000L, 10_000L, 15_000L, 20_000L, 30_000L, 30_000L)) {
+            kotlinx.coroutines.delay(pause)
+            if (submissions.records.first().none { it.id == ticket.id && it.unresolved }) break
+            panelSocket.sendIfConnected(ticket.lookup, url)
+        }
+        submissions.unconfirmed(ticket.id)
+    }
 
     fun loadOlderHistory() {
         val chat = target ?: return
@@ -196,10 +271,10 @@ fun ChatPanelContent(
         }
     }
 
-    LaunchedEffect(isSocketConnected, history.cacheReady, sessionName, windowIndex, isAcp) {
+    LaunchedEffect(isSocketConnected, socketGeneration, history.cacheReady, sessionName, windowIndex, isAcp) {
         if (!history.cacheReady) return@LaunchedEffect
         if (!isSocketConnected) {
-            if (pendingSend != null) { pendingSend = null; submissionError = "Submission was not confirmed. Check the conversation before retrying" }
+            pendingSend?.let { submissions.checking(it.id, sendReceiptsAvailable) }
             return@LaunchedEffect
         }
         if (sessionName.isEmpty()) return@LaunchedEffect
@@ -228,23 +303,13 @@ fun ChatPanelContent(
 
         panelSocket.messages.collect { message ->
             if (message["type"] == "chat-send-result") {
-                if (message["requestId"] == pendingWidget?.first && pendingWidget != null) {
-                    val linked = pendingWidget?.second == bindingState?.binding?.id
-                    pendingWidget = null
-                    if (linked) submissionError = if (message["success"] == true) null else message["error"] as? String ?: "Unable to send this action"
-                    return@collect
-                }
-                val pending = pendingSend
-                if (pending != null && message["requestId"] == pending.first) {
-                    pendingSend = null
-                    if (message["success"] == true) { if (inputText == pending.second) inputText = ""; submissionError = null }
-                    else submissionError = message["error"] as? String ?: "Unable to send this draft"
-                }
+                serverUrl?.let { submissions.record(it, message) }
                 return@collect
             }
             if (message["type"] == "chat-binding") {
                 if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp)) return@collect
                 val next = ChatBindingState.parse(message) ?: return@collect
+                sendReceiptsAvailable = message["sendReceipts"] == true
                 val oldKey = bindingState?.binding?.conversationKey ?: history.cachedConversationKey
                 val newKey = next.binding?.conversationKey
                 if (newKey != null && oldKey != newKey) {
@@ -550,21 +615,7 @@ fun ChatPanelContent(
                 Column {
                     if (msg.id == firstUnreadId) UnreadDivider()
                     CompactMessageBubble(msg) { widgetId, text ->
-                        val linked = bindingState?.binding
-                        if (isAcp || !isSocketConnected || linked == null || pendingWidget != null) return@CompactMessageBubble
-                        val request = UUID.randomUUID().toString()
-                        pendingWidget = request to linked.id
-                        submissionError = null
-                        panelSocket.send(mapOf("type" to "send-bound-ui-action", "bindingId" to linked.id,
-                            "requestId" to request, "sessionName" to sessionName, "windowIndex" to windowIndex,
-                            "widgetId" to widgetId, "message" to text))
-                        coroutineScope.launch {
-                            kotlinx.coroutines.delay(30_000)
-                            if (pendingWidget?.first == request) {
-                                pendingWidget = null
-                                if (bindingState?.binding?.id == linked.id) submissionError = "Action delivery was not confirmed. Check the conversation before retrying"
-                            }
-                        }
+                        if (!isAcp) submitBound(text, widgetId)
                     }
                 }
             }
@@ -572,17 +623,23 @@ fun ChatPanelContent(
 
         // Input bar
         submissionError?.let { Text(it, Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        activeSubmission?.notice?.let { notice ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { receiptCheckVersion += 1; panelSocket.checkConnection() }) { Text("Check") }
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedTextField(
                 value = inputText,
-                onValueChange = { inputText = it },
+                onValueChange = { text -> inputText = text; val key = draftKey(); val ticket = activeSubmission
+                    coroutineScope.launch { submissions.saveDraft(key, text); ticket?.let { submissions.draftEdited(it.id, text, null) } } },
                 placeholder = { Text("Message…", fontSize = 13.sp) },
                 modifier = Modifier.weight(1f).focusRequester(focusRequester),
                 singleLine = true,
-                enabled = pendingSend == null,
                 textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
             )
             Spacer(Modifier.width(4.dp))
@@ -592,15 +649,7 @@ fun ChatPanelContent(
                     if (text.isEmpty()) return@IconButton
                     val binding = bindingState?.binding
                     if (!isAcp && binding != null) {
-                        val request = UUID.randomUUID().toString()
-                        pendingSend = request to inputText
-                        submissionError = null
-                        panelSocket.send(mapOf("type" to "send-bound-chat-message", "bindingId" to binding.id, "requestId" to request,
-                            "sessionName" to sessionName, "windowIndex" to windowIndex, "message" to text))
-                        coroutineScope.launch {
-                            kotlinx.coroutines.delay(30_000)
-                            if (pendingSend?.first == request) { pendingSend = null; submissionError = "Submission was not confirmed. Your draft is still here; check the conversation before retrying" }
-                        }
+                        submitBound(inputText)
                         return@IconButton
                     }
                     if (isAcp) {
@@ -635,7 +684,7 @@ fun ChatPanelContent(
                         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1 + if (showOlderHistory) 1 else 0)
                     }
                 },
-                enabled = inputText.isNotBlank() && pendingSend == null && isSocketConnected && (isAcp || bindingState?.canSend != false),
+                enabled = inputText.isNotBlank() && !awaitingSend && isSocketConnected && (isAcp || bindingState?.canSend != false),
                 modifier = Modifier.size(36.dp),
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))

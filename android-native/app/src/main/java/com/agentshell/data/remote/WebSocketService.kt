@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -51,9 +52,10 @@ class WebSocketService @Inject constructor(
     // -------------------------------------------------------------------------
     // Internal state
     // -------------------------------------------------------------------------
-    private var webSocket: WebSocket? = null
-    private var currentUrl: String? = null
-    private var activeListenerId = 0L  // Monotonic ID to ignore stale listener callbacks
+    @Volatile private var webSocket: WebSocket? = null
+    @Volatile private var currentUrl: String? = null
+    @Volatile private var activeListenerId = 0L  // Monotonic ID to ignore stale listener callbacks
+    private var activeListener: Listener? = null
 
     val currentWebSocketUrl: String? get() = currentUrl
 
@@ -73,8 +75,13 @@ class WebSocketService @Inject constructor(
 
     // Jobs for ping / pong-timeout / reconnect timers
     private var pingJob: Job? = null
-    private var pongTimeoutJob: Job? = null
     private var reconnectJob: Job? = null
+    private val heartbeat = WebSocketHeartbeat(scope) { connection ->
+        if (connection == activeListenerId && _isConnected) {
+            println("[CONN] Android→Backend PONG TIMEOUT — forcing reconnect")
+            forceReconnect()
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Public flows
@@ -84,6 +91,11 @@ class WebSocketService @Inject constructor(
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.CONNECTING)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
+
+    // A fast reconnect can conflate the status enum back to CONNECTED before
+    // observers run. This durable generation still requires fresh chat watches.
+    private val _connectionGeneration = MutableStateFlow(0L)
+    val connectionGeneration: StateFlow<Long> = _connectionGeneration.asStateFlow()
 
     private val _keepAliveEnabled = MutableStateFlow(false)
     val keepAliveEnabled: StateFlow<Boolean> = _keepAliveEnabled.asStateFlow()
@@ -127,6 +139,7 @@ class WebSocketService @Inject constructor(
             log("Switching host — resetting previous websocket")
             intentionalClose = true
             activeListenerId++
+            activeListener?.retire()
             try {
                 webSocket?.cancel()
             } catch (_: Exception) {}
@@ -150,6 +163,8 @@ class WebSocketService @Inject constructor(
         intentionalClose = true
         _keepAliveEnabled.value = false
         cancelTimers()
+        activeListenerId++
+        activeListener?.retire()
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         _isConnected = false
@@ -169,6 +184,7 @@ class WebSocketService @Inject constructor(
         _keepAliveEnabled.value = true
         cancelTimers()
         activeListenerId++
+        activeListener?.retire()
         try {
             webSocket?.cancel()
         } catch (_: Exception) {}
@@ -214,7 +230,7 @@ class WebSocketService @Inject constructor(
     fun checkConnection() {
         log("checkConnection status=${_connectionStatus.value} connected=$_isConnected connecting=$_isConnecting url=${sanitizeUrl(currentUrl ?: "")}")
         if (_isConnected) {
-            send(mapOf("type" to "ping"))
+            probeConnection(10_000)
         } else if (currentUrl != null) {
             forceReconnect()
         }
@@ -257,7 +273,10 @@ class WebSocketService @Inject constructor(
 
         val listenerId = ++activeListenerId
         val request = Request.Builder().url(url).build()
-        webSocket = client.newWebSocket(request, Listener(listenerId))
+        activeListener?.retire()
+        val listener = Listener(listenerId)
+        activeListener = listener
+        webSocket = client.newWebSocket(request, listener)
     }
 
     private fun scheduleReconnect() {
@@ -279,13 +298,13 @@ class WebSocketService @Inject constructor(
 
     private fun cancelTimers() {
         pingJob?.cancel();         pingJob = null
-        pongTimeoutJob?.cancel();  pongTimeoutJob = null
+        heartbeat.cancel()
         reconnectJob?.cancel();    reconnectJob = null
     }
 
     private fun cancelHeartbeat() {
         pingJob?.cancel();        pingJob = null
-        pongTimeoutJob?.cancel(); pongTimeoutJob = null
+        heartbeat.cancel()
     }
 
     private fun handleUnexpectedDisconnect(reason: String) {
@@ -303,15 +322,17 @@ class WebSocketService @Inject constructor(
             while (true) {
                 delay(30_000)
                 if (!_isConnected) break
-                send(mapOf("type" to "ping"))
-                // Expect a pong within 20 s
-                pongTimeoutJob?.cancel()
-                pongTimeoutJob = scope.launch {
-                    delay(20_000)
-                    println("[CONN] Android→Backend PONG TIMEOUT — forcing reconnect")
-                    forceReconnect()
-                }
+                probeConnection(20_000)
             }
+        }
+    }
+
+    private fun probeConnection(timeoutMillis: Long) {
+        val socket = webSocket ?: return
+        val connection = activeListenerId
+        if (!_isConnected) return
+        heartbeat.ping(connection, timeoutMillis) {
+            _isConnected && connection == activeListenerId && webSocket === socket && socket.send("{\"type\":\"ping\"}")
         }
     }
 
@@ -350,6 +371,12 @@ class WebSocketService @Inject constructor(
 
     private inner class Listener(private val id: Long) : WebSocketListener() {
         private val sourceServerUrl = currentUrl?.substringBefore('?')
+        private var serverRestartScheduled = false
+        private val incoming = OrderedSocketMessages<Map<String, Any?>>(scope, 256) { message ->
+            if (!isStale()) _messages.emit(message)
+        }
+
+        fun retire() = incoming.cancel()
 
         /** Returns true if this listener has been superseded by a newer connection. */
         private fun isStale(): Boolean = id != activeListenerId
@@ -362,6 +389,7 @@ class WebSocketService @Inject constructor(
             _isConnected = true
             reconnectAttempts = 0
             _connectionStatus.value = ConnectionStatus.CONNECTED
+            _connectionGeneration.update { it + 1 }
             flushPendingQueue(webSocket, id)
             startPingTimer()
         }
@@ -374,13 +402,13 @@ class WebSocketService @Inject constructor(
 
                 // Cancel pong-timeout when a pong arrives
                 if (type == "pong") {
-                    pongTimeoutJob?.cancel()
-                    pongTimeoutJob = null
+                    heartbeat.pong(id)
                 }
 
                 // Handle server graceful shutdown — reconnect after the suggested delay
                 if (type == "server-shutting-down") {
                     val delayMs = json.optLong("reconnectDelayMs", 2000L)
+                    serverRestartScheduled = true
                     println("[CONN] Server shutting down — will reconnect in ${delayMs}ms")
                     cancelTimers()
                     _isConnected = false
@@ -394,21 +422,30 @@ class WebSocketService @Inject constructor(
                 }
 
                 val messageMap = jsonObjectToMap(json) + ("_sourceServerUrl" to sourceServerUrl)
-                scope.launch { if (!isStale()) _messages.emit(messageMap) }
+                incoming.accept(messageMap)
             } catch (e: Exception) {
                 log("Failed to parse message: $e")
             }
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            if (isStale() || intentionalClose) return
+            incoming.close()
+            if (isStale() || intentionalClose || serverRestartScheduled) return
             log("onFailure listenerId=$id error=${t.message} reconnectAttempts=${reconnectAttempts + 1} url=${sanitizeUrl(currentUrl ?: "")}")
             println("[CONN] Android→Backend WebSocket ERROR: $t (url: ${sanitizeUrl(currentUrl ?: "")})")
             handleUnexpectedDisconnect("WebSocket failure")
         }
 
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            incoming.close()
+            // OkHttp delivers onClosed only after we acknowledge the peer's
+            // close. An empty close frame reports reserved status 1005.
+            webSocket.close(if (code == 1005) 1000 else code, reason)
+        }
+
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            if (isStale() || intentionalClose) return
+            incoming.close()
+            if (isStale() || intentionalClose || serverRestartScheduled) return
             log("onClosed listenerId=$id code=$code reason=$reason reconnectAttempts=${reconnectAttempts + 1} url=${sanitizeUrl(currentUrl ?: "")}")
             println("[CONN] Android→Backend WebSocket CLOSED (url: ${sanitizeUrl(currentUrl ?: "")})")
             handleUnexpectedDisconnect("WebSocket closed code=$code reason=$reason")

@@ -1017,7 +1017,7 @@ pub(crate) async fn handle(
                     }
                     Err(e) => {
                         error!("Failed to save file to session directory: {}", e);
-                        None
+                        return Err(anyhow::anyhow!("Unable to save the attachment for this conversation: {e}"));
                     }
                 }
             } else {
@@ -1034,7 +1034,7 @@ pub(crate) async fn handle(
                     Ok(id) => id,
                     Err(e) => {
                         error!("Failed to save file for display: {}", e);
-                        return Ok(());
+                        return Err(anyhow::anyhow!("Unable to save the attachment: {e}"));
                     }
                 };
 
@@ -1139,6 +1139,8 @@ pub(crate) async fn handle(
                 );
             }
 
+            super::binding_cmds::record_submission_delivered().await;
+
             // Broadcast to all connected clients watching this session
             let msg = ServerMessage::ChatFileMessage {
                 session_name: session_name.clone(),
@@ -1156,8 +1158,8 @@ pub(crate) async fn handle(
             notify,
         } => {
             info!(
-                "Received chat message to send: {} (notify: {:?})",
-                message, notify
+                "Received chat message for {}:{} ({} bytes, notify: {:?})",
+                session_name, window_index, message.len(), notify
             );
 
             if message.trim().is_empty() {
@@ -1193,6 +1195,8 @@ pub(crate) async fn handle(
                     session_name, window_index, e
                 );
             }
+
+            super::binding_cmds::record_submission_delivered().await;
 
             let msg = ServerMessage::ChatEvent {
                 session_name: session_name.clone(),

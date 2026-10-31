@@ -377,6 +377,10 @@ pub enum WebSocketMessage {
         #[serde(rename = "windowIndex")] window_index: u32,
         message: String,
     },
+    GetChatSendResult {
+        #[serde(rename = "bindingId")] binding_id: String,
+        #[serde(rename = "requestId")] request_id: String,
+    },
     SendBoundUiAction {
         #[serde(rename = "bindingId")] binding_id: String,
         #[serde(rename = "requestId")] request_id: String,

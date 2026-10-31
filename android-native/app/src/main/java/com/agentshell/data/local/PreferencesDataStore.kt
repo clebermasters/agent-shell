@@ -270,11 +270,32 @@ class PreferencesDataStore @Inject constructor(
         return dataStore.data.first()[stringPreferencesKey(key)]
     }
 
-    suspend fun setDraftMessage(key: String, text: String) {
+    suspend fun setDraftMessage(key: String, text: String, keepEmpty: Boolean = false) {
         dataStore.edit { prefs ->
-            if (text.isEmpty()) prefs.remove(stringPreferencesKey(key))
+            if (text.isEmpty() && !keepEmpty) prefs.remove(stringPreferencesKey(key))
             else prefs[stringPreferencesKey(key)] = text
         }
+    }
+
+    suspend fun seedDraftMessageIfMissing(key: String, text: String) {
+        dataStore.edit { prefs ->
+            val draft = stringPreferencesKey(key)
+            if (prefs[draft] == null) prefs[draft] = text
+        }
+    }
+
+    suspend fun clearDraftMessageIfMatches(key: String, text: String) {
+        dataStore.edit { prefs ->
+            val draft = stringPreferencesKey(key)
+            if (prefs[draft] == text) prefs.remove(draft)
+        }
+    }
+
+    val chatSubmissions: Flow<String>
+        get() = dataStore.data.map { it[stringPreferencesKey("chat_pending_submissions")] ?: "[]" }
+
+    suspend fun setChatSubmissions(value: String) {
+        dataStore.edit { it[stringPreferencesKey("chat_pending_submissions")] = value }
     }
 
     // ─── last session / auto-attach ──────────────────────────────────────────

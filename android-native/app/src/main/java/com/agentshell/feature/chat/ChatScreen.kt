@@ -451,6 +451,12 @@ fun ChatScreen(
                 // Bottom input bar
                 ConversationLinkBar(uiState.bindingState,
                     onRetry = { viewModel.refreshActiveChat("conversation link retry") })
+                uiState.submissionNotice?.let { notice ->
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { viewModel.refreshActiveChat("check delivery") }) { Text("Check") }
+                    }
+                }
                 ChatInputBar(
                     value = uiState.draftMessage,
                     onValueChange = viewModel::updateDraft,
@@ -476,7 +482,8 @@ fun ChatScreen(
                         }
                     },
                     attachedFile = uiState.attachedFile,
-                    isUploading = uiState.isUploading || uiState.isSending,
+                    isUploading = uiState.isUploading,
+                    isSending = uiState.isSending,
                     canSend = uiState.isAcp || uiState.bindingState?.canSend != false,
                     onAttachClick = { filePickerLauncher.launch(arrayOf("*/*")) },
                     onRemoveAttachment = viewModel::removeAttachedFile,
@@ -561,6 +568,7 @@ private fun ChatInputBar(
     onMicPressed: () -> Unit = {},
     attachedFile: AttachedFile? = null,
     isUploading: Boolean = false,
+    isSending: Boolean = false,
     canSend: Boolean = true,
     onAttachClick: () -> Unit = {},
     onRemoveAttachment: () -> Unit = {},
@@ -733,9 +741,9 @@ private fun ChatInputBar(
 
                 IconButton(
                     onClick = onSend,
-                    enabled = canSend && (value.isNotBlank() || attachedFile != null) && !isStreaming && !isUploading,
+                    enabled = canSend && (value.isNotBlank() || attachedFile != null) && !isStreaming && !isUploading && !isSending,
                 ) {
-                    if (isStreaming || isUploading) {
+                    if (isStreaming || isUploading || isSending) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(24.dp),
                             strokeWidth = 2.dp,

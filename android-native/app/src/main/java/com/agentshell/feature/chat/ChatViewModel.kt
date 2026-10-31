@@ -65,6 +65,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -119,6 +120,7 @@ data class ChatUiState(
     val attachedFile: AttachedFile? = null,
     val isUploading: Boolean = false,
     val isSending: Boolean = false,
+    val submissionNotice: String? = null,
     val bindingState: ChatBindingState? = null,
     val totalMessageCount: Int = 0,
     val hasMoreMessages: Boolean = false,
@@ -150,6 +152,7 @@ class ChatViewModel @Inject constructor(
     private val hostRepository: HostRepository,
     private val sharedContentRepository: SharedContentRepository,
     private val dataStore: PreferencesDataStore,
+    private val submissions: ChatSubmissionStore,
     private val audioService: AudioService,
     private val transcriptionQueue: TranscriptionQueueService,
     private val app: Application,
@@ -202,8 +205,13 @@ class ChatViewModel @Inject constructor(
     private var screenActive = false
     private var followingLive = false
     private val transcriptionReceipt = TranscriptionReceipt()
-    private data class PendingSend(val id: String, val text: String, val file: AttachedFile?, val draftKey: String, val bindingId: String, val widgetId: String? = null)
-    private var pendingSend: PendingSend? = null
+    private var pendingSend: ChatSubmission? = null
+    private var activeSubmission: ChatSubmission? = null
+    private val submissionScreenActive = MutableStateFlow(false)
+    private var submissionRecoveryJob: Job? = null
+    private var sendReceiptsAvailable = false
+    private var lastConnectionGeneration = -1L
+    private val restoredSubmissionDrafts = mutableSetOf<String>()
     private var cacheLoadJob: Job? = null
     private var cacheSaveJob: Job? = null
     private var restoringCache = false
@@ -385,6 +393,7 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(firstUnreadMessageId = null) }
         }
         screenActive = active
+        submissionScreenActive.value = active
         chatActivityRepository.setChatOpen(readOwner, readTarget, active)
         chatActivityRepository.setViewing(readOwner, readTarget, active && followingLive)
         if (active) {
@@ -392,6 +401,9 @@ class ChatViewModel @Inject constructor(
             if (connectionRecovery.pending && webSocketService.isConnected) {
                 resubscribeActiveChat("screen resumed after reconnect")
             }
+            recoverSubmissions()
+        } else {
+            submissionRecoveryJob?.cancel()
         }
     }
 
@@ -495,8 +507,12 @@ class ChatViewModel @Inject constructor(
 
     private fun observeConnectionRecovery() {
         viewModelScope.launch {
-            webSocketService.connectionStatus.collect { status ->
-                if (connectionRecovery.onConnection(status, screenActive)) {
+            combine(webSocketService.connectionStatus, webSocketService.connectionGeneration) { status, generation -> status to generation }.collect { (status, generation) ->
+                val restore = connectionRecovery.onConnection(status, screenActive)
+                if (status != com.agentshell.data.model.ConnectionStatus.CONNECTED) {
+                    pendingSend?.let { submissions.checking(it.id, sendReceiptsAvailable) }
+                } else if (screenActive && (restore || generation != lastConnectionGeneration)) {
+                    lastConnectionGeneration = generation
                     resubscribeActiveChat("reconnected")
                 }
             }
@@ -540,6 +556,83 @@ class ChatViewModel @Inject constructor(
         }
 
         connectionRecovery.pending = false
+        recoverSubmissions()
+    }
+
+    private fun observeSubmissions() {
+        viewModelScope.launch {
+            val scope = _uiState.map { state ->
+                listOf(readHostServerUrl, state.sessionName, state.windowIndex.toString(), state.isAcp.toString(),
+                    state.bindingState?.binding?.id, state.isLoading.toString(), cachedConversationKey)
+            }.distinctUntilChanged()
+            combine(submissions.records, scope, submissionScreenActive) { records, _, active -> records to active }.collect { (records, active) ->
+                val state = _uiState.value
+                val ticket = records.firstOrNull { it.serverUrl == readHostServerUrl && it.sessionName == state.sessionName &&
+                    it.windowIndex == state.windowIndex && !state.isAcp &&
+                    (state.bindingState?.binding?.id == null || state.bindingState.binding.id == it.bindingId) }
+                pendingSend = ticket?.takeIf { it.waiting }
+                activeSubmission = ticket
+                _uiState.update { it.copy(isSending = ticket?.waiting == true, submissionNotice = ticket?.notice) }
+                if (ticket != null && active && !restoringCache && ticket.widgetId == null &&
+                    state.bindingState?.binding?.id == ticket.bindingId && restoredSubmissionDrafts.add(ticket.id)) {
+                    val saved = submissions.savedDraft(ticket.draftKey)
+                    _uiState.update { current ->
+                        if (current.bindingState?.binding?.id == ticket.bindingId && current.draftMessage.isBlank() && current.attachedFile == null)
+                            current.copy(draftMessage = saved ?: if (ticket.draftEdited) "" else ticket.text,
+                                attachedFile = if (!ticket.draftEdited && (saved == null || saved == ticket.text)) ticket.file else null)
+                        else current
+                    }
+                }
+                if (ticket?.phase != "complete" || !active || restoringCache || state.bindingState?.binding?.id == null) return@collect
+                val same = ticket.bindingId == state.bindingState.binding.id
+                val success = ticket.success == true
+                if (same) {
+                    val latest = _uiState.value
+                    val matchingDraft = readHostServerUrl == ticket.serverUrl && latest.bindingState?.binding?.id == ticket.bindingId &&
+                        ticket.matchesDraft(latest.draftMessage, latest.attachedFile)
+                    _uiState.update { current ->
+                        val currentConversation = readHostServerUrl == ticket.serverUrl && current.bindingState?.binding?.id == ticket.bindingId
+                        val matching = currentConversation && ticket.matchesDraft(current.draftMessage, current.attachedFile)
+                        if (!currentConversation) current else current.copy(
+                            draftMessage = if (success && ticket.widgetId == null && matching) "" else current.draftMessage,
+                            attachedFile = if (success && ticket.widgetId == null && matching) null else current.attachedFile,
+                            isSending = false, submissionNotice = null,
+                            error = if (success) null else ticket.error ?: "Unable to send this draft",
+                        )
+                    }
+                    if (success) {
+                        if (matchingDraft) submissions.clearSavedDraft(ticket)
+                        if (ticket.widgetId == null && matchingDraft && readHostServerUrl == ticket.serverUrl && _uiState.value.bindingState?.binding?.id == ticket.bindingId) {
+                            if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = ""
+                            clearSharedAttachment()
+                        }
+                    }
+                }
+                submissions.remove(ticket.id)
+                if (same && success && readHostServerUrl == ticket.serverUrl && _uiState.value.bindingState?.binding?.id == ticket.bindingId) refreshActiveChat("message delivery confirmed")
+            }
+        }
+    }
+
+    private fun recoverSubmissions() {
+        submissionRecoveryJob?.cancel()
+        if (!screenActive || !sendReceiptsAvailable || !webSocketService.isConnected) return
+        val server = readHostServerUrl ?: return
+        val session = _uiState.value.sessionName
+        val window = _uiState.value.windowIndex
+        submissionRecoveryJob = viewModelScope.launch {
+            val queried = mutableSetOf<String>()
+            // Only read receipts while the chat is visible. Never replay the command.
+            for (pause in listOf(500L, 1_500L, 3_000L, 5_000L, 10_000L, 15_000L, 20_000L, 30_000L, 30_000L)) {
+                delay(pause)
+                if (!screenActive || !webSocketService.isConnected || readHostServerUrl != server) break
+                val url = webSocketService.currentWebSocketUrl?.takeIf { it.substringBefore('?') == server } ?: break
+                val pending = submissions.records.first().filter { it.serverUrl == server && it.sessionName == session && it.windowIndex == window && it.unresolved }
+                if (pending.isEmpty()) break
+                pending.forEach { queried += it.id; webSocketService.sendIfConnected(it.lookup, url) }
+            }
+            queried.forEach { submissions.unconfirmed(it) }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -592,6 +685,7 @@ class ChatViewModel @Inject constructor(
         }
 
         observeConnectionRecovery()
+        observeSubmissions()
         collectMessages()
         viewModelScope.launch {
             webSocketService.messages.collect { message ->
@@ -614,6 +708,8 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching a TMUX chat log. */
     fun watchChatLog(sessionName: String, windowIndex: Int) {
+        sendReceiptsAvailable = false
+        submissionRecoveryJob?.cancel()
         flushPendingAcpChunk()
         persistChat(immediate = true)
         cacheLoadJob?.cancel()
@@ -651,6 +747,8 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching an ACP chat session. */
     fun startAcpChat(sessionName: String, cwd: String) {
+        sendReceiptsAvailable = false
+        submissionRecoveryJob?.cancel()
         flushPendingAcpChunk()
         persistChat(immediate = true)
         cacheLoadJob?.cancel()
@@ -844,11 +942,17 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(error = "Wait for this chat’s server connection before sending") }
             return
         }
-        val pending = PendingSend(UUID.randomUUID().toString(), text, state.attachedFile, draftKey(state.sessionName, state.windowIndex), binding.id, widgetId)
+        val pending = ChatSubmission(UUID.randomUUID().toString(), server.substringBefore('?'), binding.conversationKey,
+            binding.id, state.sessionName, state.windowIndex, text, draftKey(state.sessionName, state.windowIndex), state.attachedFile, widgetId)
         pendingSend = pending
-        _uiState.update { it.copy(isSending = true, error = null) }
+        restoredSubmissionDrafts += pending.id
+        _uiState.update { it.copy(isSending = true, submissionNotice = pending.notice, error = null) }
         viewModelScope.launch {
             try {
+                if (!submissions.begin(pending)) {
+                    _uiState.update { it.copy(isSending = false, submissionNotice = null, error = "A previous message is still being checked") }
+                    return@launch
+                }
                 val payload = buildMap<String, Any?> {
                     put("type", if (widgetId != null) "send-bound-ui-action" else if (pending.file == null) "send-bound-chat-message" else "send-bound-file-to-chat")
                     if (widgetId != null) put("widgetId", widgetId)
@@ -860,51 +964,32 @@ class ChatViewModel @Inject constructor(
                         put("prompt", text.trim().ifBlank { null })
                     }
                 }
+                webSocketService.checkConnection()
                 if (!webSocketService.sendIfConnected(payload, server)) throw java.io.IOException("Unable to send. Your draft is still here; check the connection")
+                recoverSubmissions()
                 delay(30_000)
-                if (pendingSend?.id == pending.id) {
-                    pendingSend = null
-                    _uiState.update { it.copy(isSending = false, error = "Submission was not confirmed. Your draft is still here; check the conversation before retrying") }
+                if (submissions.records.first().any { it.id == pending.id && it.waiting }) {
+                    submissions.checking(pending.id, sendReceiptsAvailable)
+                    if (screenActive) { webSocketService.checkConnection(); recoverSubmissions() }
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                if (pendingSend?.id == pending.id) {
-                    pendingSend = null
-                    _uiState.update { it.copy(isSending = false, error = error.message ?: "Unable to send this draft") }
-                }
+                submissions.record(pending.serverUrl, mapOf("requestId" to pending.id, "bindingId" to pending.bindingId,
+                    "status" to "complete", "success" to false, "error" to (error.message ?: "Unable to send this draft")))
             }
         }
     }
 
-    private fun handleSendResult(message: Map<String, Any?>) {
-        val pending = pendingSend ?: return
-        if (message["requestId"] != pending.id) return
-        pendingSend = null
-        val success = message["success"] == true
-        if (pending.widgetId != null) {
-            _uiState.update { it.copy(isSending = false, error = if (it.bindingState?.binding?.id != pending.bindingId) it.error else if (success) null else message["error"] as? String ?: "Widget action was rejected") }
-            return
-        }
-        _uiState.update { current ->
-            val sameConversation = current.bindingState?.binding?.id == pending.bindingId
-            current.copy(isSending = false,
-                draftMessage = if (success && sameConversation && current.draftMessage == pending.text) "" else current.draftMessage,
-                attachedFile = if (success && sameConversation && current.attachedFile == pending.file) null else current.attachedFile,
-                error = if (success) null else message["error"] as? String ?: "The conversation changed. Your draft has been kept")
-        }
-        if (success) {
-            viewModelScope.launch { if (dataStore.getDraftMessage(pending.draftKey) == pending.text) dataStore.setDraftMessage(pending.draftKey, "") }
-            if (_uiState.value.bindingState?.binding?.id == pending.bindingId) {
-                if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = ""
-                clearSharedAttachment()
-            }
-        }
+    private suspend fun handleSendResult(message: Map<String, Any?>) {
+        val server = message["_sourceServerUrl"] as? String ?: readHostServerUrl ?: return
+        submissions.record(server, message)
     }
 
     private suspend fun handleBinding(message: Map<String, Any?>) {
         val current = _uiState.value
         if (message["sessionName"] != current.sessionName || (message["windowIndex"] as? Number)?.toInt() != current.windowIndex || current.isAcp) return
         val next = ChatBindingState.parse(message) ?: return
+        sendReceiptsAvailable = message["sendReceipts"] == true
         val oldKey = current.bindingState?.binding?.conversationKey ?: cachedConversationKey
         val newKey = next.binding?.conversationKey
         val changed = newKey != null && oldKey != newKey
@@ -928,6 +1013,7 @@ class ChatViewModel @Inject constructor(
             if (saved == null && draft.isNotBlank()) dataStore.setDraftMessage(key, draft)
         }
         readTarget?.let { chatActivityRepository.linkConversation(it, next) }
+        recoverSubmissions()
     }
 
     // -------------------------------------------------------------------------
@@ -1024,6 +1110,7 @@ class ChatViewModel @Inject constructor(
         _uiState.update { it.copy(draftMessage = text) }
         if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = text
         saveDraft(draftKey(state.sessionName, state.windowIndex), text)
+        markSubmissionDraftEdited(text, state.attachedFile)
     }
 
     // -------------------------------------------------------------------------
@@ -1100,11 +1187,20 @@ class ChatViewModel @Inject constructor(
         val file = AttachedFile(uri, filename, mimeType, size)
         _uiState.update { it.copy(attachedFile = file) }
         savedStateHandle["share_attachment"] = Json.encodeToString(file)
+        markSubmissionDraftEdited(_uiState.value.draftMessage, file)
     }
 
     fun removeAttachedFile() {
         _uiState.update { it.copy(attachedFile = null) }
         clearSharedAttachment()
+        markSubmissionDraftEdited(_uiState.value.draftMessage, null)
+    }
+
+    private fun markSubmissionDraftEdited(text: String, file: AttachedFile?) {
+        val ticket = (pendingSend ?: activeSubmission)?.takeIf {
+            it.serverUrl == readHostServerUrl && it.bindingId == _uiState.value.bindingState?.binding?.id
+        } ?: return
+        viewModelScope.launch { submissions.draftEdited(ticket.id, text, file) }
     }
 
     private fun clearSharedAttachment() {
@@ -1117,8 +1213,9 @@ class ChatViewModel @Inject constructor(
     } ?: "chat_draft_${sessionName}_$windowIndex"
 
     private fun saveDraft(key: String, text: String) {
+        val keepEmpty = _uiState.value.submissionNotice != null || _uiState.value.isSending
         viewModelScope.launch {
-            dataStore.setDraftMessage(key, text)
+            dataStore.setDraftMessage(key, text, keepEmpty)
         }
     }
 
@@ -1156,9 +1253,11 @@ class ChatViewModel @Inject constructor(
         messageCollectionJob = viewModelScope.launch {
             chatRepository.chatMessages.collect { message ->
                 if (readHostServerUrl != null && message["_sourceServerUrl"] != null && message["_sourceServerUrl"] != readHostServerUrl) return@collect
-                if (!chatRepository.isChatMessage(message) || restoringCache) return@collect
-                if (message["type"] == "chat-binding") { handleBinding(message); return@collect }
+                if (!chatRepository.isChatMessage(message)) return@collect
+                // Delivery acknowledgements are independent of a history/cache refresh.
                 if (message["type"] == "chat-send-result") { handleSendResult(message); return@collect }
+                if (restoringCache) return@collect
+                if (message["type"] == "chat-binding") { handleBinding(message); return@collect }
                 if (!_uiState.value.bindingState.acceptsConversationPacket(message)) return@collect
                 val beforeMessages = _uiState.value.messages.toList()
                 when (val type = message["type"] as? String) {

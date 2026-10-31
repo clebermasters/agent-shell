@@ -74,7 +74,48 @@ class MacInstaller:
 
     def run(self, command, **kwargs):
         # Never print commands/environment: downstream configuration uses private tokens.
-        return subprocess.run(command, env=kwargs.pop('env', self.environment), check=kwargs.pop('check', True), **kwargs)
+        try:
+            return subprocess.run(command, env=kwargs.pop('env', self.environment), check=kwargs.pop('check', True), **kwargs)
+        except subprocess.CalledProcessError as error:
+            tool = Path(command[0]).name
+            allowed = {'bootstrap', 'bootout', 'kickstart', 'enable', 'print', 'install', 'build', '-lint', '-m', '-c', '-p'}
+            operation = str(command[1]) if len(command)>1 and str(command[1]) in allowed else 'command'
+            self.failure_diagnostics(tool, operation, error)
+            message = f'{tool} {operation} failed with exit {error.returncode}'
+            if tool == 'launchctl':
+                detail = error.stderr.decode(errors='replace') if isinstance(error.stderr, bytes) else str(error.stderr or '')
+                try: saved = runtime_module.dotenv(self.runtime).get('AUTH_TOKEN')
+                except (OSError, ValueError): saved = None
+                for token in [self.environment.get('AUTH_TOKEN'), saved]:
+                    if token: detail = detail.replace(token, '<redacted>')
+                if detail.strip(): message += ': ' + detail.strip().replace('\n', ' ')[:512]
+            raise ValueError(message) from None
+
+    def failure_diagnostics(self, tool, operation, error):
+        # Only disposable CI fixtures opt in. Do not collect runtime.env or
+        # arbitrary command/environment contents in a diagnostics artifact.
+        destination = self.environment.get('AGENTSHELL_INSTALL_DIAGNOSTICS')
+        if not destination or self.environment.get('CI', '').lower() != 'true': return
+        try:
+            directory = Path(destination); directory.mkdir(parents=True, exist_ok=True); directory.chmod(0o700)
+            files = {}
+            for name, path in [('plist', self.plist), ('python', Path(self.python)), ('binary', self.binary),
+                               ('workingDirectory', self.binary.parent), ('logDirectory', self.logs)]:
+                metadata = path.stat() if path.exists() else None
+                files[name] = {'path': str(path), 'exists': metadata is not None,
+                    'uid': metadata.st_uid if metadata else None, 'mode': oct(metadata.st_mode & 0o777) if metadata else None}
+            definition = plistlib.loads(self.plist.read_bytes()) if self.plist.is_file() else None
+            if definition is not None:
+                definition['EnvironmentVariables'] = {key: value if key in ('HOME', 'PATH') else '<redacted>'
+                    for key, value in definition.get('EnvironmentVariables', {}).items()}
+            stderr = error.stderr.decode(errors='replace') if isinstance(error.stderr, bytes) else str(error.stderr or '')
+            report = json.dumps({'tool': tool, 'operation': operation, 'exitCode': error.returncode,
+                'uid': os.getuid(), 'domain': self.domain, 'files': files, 'plist': definition,
+                'stderr': stderr[:4096] if tool == 'launchctl' else '<not collected>'}, indent=2)
+            for token in [self.environment.get('AUTH_TOKEN'), runtime_module.dotenv(self.runtime).get('AUTH_TOKEN')]:
+                if token: report = report.replace(token, '<redacted>')
+            path = directory / 'failure.json'; path.write_text(report + '\n'); path.chmod(0o600)
+        except (OSError, ValueError, TypeError): pass
 
     def validate_options(self):
         if self.args.with_browser in ('kasmvnc', 'vm'):
@@ -285,6 +326,7 @@ class MacInstaller:
         plist = {'Label': runtime_module.LABEL, 'ProgramArguments': [self.python, str(self.prefix / 'runtime/backend-runtime.py'), 'run',
                  '--executable', str(self.binary), '--working-directory', str(self.binary.parent), '--env-file', str(self.runtime)],
                  'WorkingDirectory': str(self.binary.parent), 'EnvironmentVariables': {'HOME': str(self.home), 'PATH': self.environment['PATH']},
+                 'LimitLoadToSessionType': 'Background' if self.domain.startswith('user/') else 'Aqua',
                  'RunAtLoad': True, 'KeepAlive': True, 'ThrottleInterval': 5, 'AbandonProcessGroup': True, 'Umask': 63,
                  'StandardOutPath': str(self.logs / 'stdout.log'), 'StandardErrorPath': str(self.logs / 'stderr.log')}
         self.write(self.plist, plistlib.dumps(plist))

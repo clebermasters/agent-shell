@@ -59,6 +59,7 @@ class MacInstallerTests(unittest.TestCase):
         value = plistlib.loads(self.value.plist.read_bytes())
         self.assertTrue(value['AbandonProcessGroup'])
         self.assertTrue(value['KeepAlive'])
+        self.assertEqual('Aqua', value['LimitLoadToSessionType'])
         self.assertEqual(str(self.value.binary.parent), value['WorkingDirectory'])
         self.assertIn(str(self.value.runtime), value['ProgramArguments'])
         self.assertNotIn('synthetic-private-token', self.value.plist.read_text())
@@ -66,6 +67,22 @@ class MacInstallerTests(unittest.TestCase):
         self.assertEqual(0, self.value.runtime.stat().st_mode & 0o077)
         for path in ['/opt/homebrew/bin', '/usr/local/bin', str(self.value.home / '.cargo/bin')]:
             self.assertIn(path, value['EnvironmentVariables']['PATH'].split(':'))
+
+    def test_headless_user_domain_selects_background_instead_of_implicit_aqua(self):
+        self.value.domain = f'user/{os.getuid()}'
+        self.value.configure({'AUTH_TOKEN': 'synthetic-token'}, {})
+        self.assertEqual('Background', plistlib.loads(self.value.plist.read_bytes())['LimitLoadToSessionType'])
+
+    def test_failed_launchctl_reports_operation_and_bounded_redacted_detail_only(self):
+        self.value.environment['AUTH_TOKEN'] = 'synthetic-sensitive-token'
+        command = ['launchctl', 'bootstrap', self.value.domain, str(self.value.plist)]
+        failed = subprocess.CalledProcessError(5, command, stderr=b'Bootstrap failed: synthetic-sensitive-token\n' + b'x'*800)
+        with patch.object(installer.subprocess, 'run', side_effect=failed):
+            with self.assertRaises(ValueError) as error: installer.MacInstaller.run(self.value, command)
+        self.assertIn('launchctl bootstrap failed with exit 5', str(error.exception))
+        self.assertIn('<redacted>', str(error.exception))
+        self.assertNotIn('synthetic-sensitive-token', str(error.exception))
+        self.assertLess(len(str(error.exception)), 600)
 
     def test_payload_installs_both_identity_helpers_without_touching_chrome_profile(self):
         cookie = self.value.prefix / 'chrome/Default/Cookies'; cookie.parent.mkdir(parents=True); cookie.write_bytes(b'personal-fixture')

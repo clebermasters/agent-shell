@@ -37,8 +37,8 @@ def run(binary, output):
     if sys.platform != 'darwin' or os.environ.get('CI', '').lower() != 'true':
         raise ValueError('This service smoke requires macOS and CI=true; it never installs on a personal host')
     binary = binary.resolve(); assert binary.is_file()
-    domain = f'user/{os.getuid()}'; target = domain + '/' + LABEL
-    for scope in [domain, f'gui/{os.getuid()}']:
+    domain = f'gui/{os.getuid()}'; target = domain + '/' + LABEL
+    for scope in [f'user/{os.getuid()}', domain]:
         if subprocess.run(['launchctl', 'print', scope + '/' + LABEL], capture_output=True).returncode == 0:
             raise ValueError('An AgentShell job already exists; refusing to change it')
     assert subprocess.run(['launchctl', 'print', domain], capture_output=True).returncode == 0, 'Current user launchd domain is unavailable'
@@ -53,7 +53,8 @@ def run(binary, output):
         shim.write_text('#!/bin/sh\nexec env -u TMUX -u ENV -u BASH_ENV ' + shlex.quote(real_tmux) +
                         ' -f /dev/null -S ' + shlex.quote(socket_path) + ' "$@"\n'); shim.chmod(0o755)
         cron = commands / 'crontab'; cron.write_text('#!/bin/sh\nexit 1\n'); cron.chmod(0o755)
-        env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'), AUTH_TOKEN=token, RUST_LOG='warn')
+        env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(home / '.config'), AUTH_TOKEN=token, RUST_LOG='warn',
+                   AGENTSHELL_INSTALL_DIAGNOSTICS=str(output / 'installer-failure'))
         env.pop('TMUX', None)
         http, https = free_port(), free_port()
         while https == http: https = free_port()
@@ -91,7 +92,7 @@ def run(binary, output):
             command([sys.executable, str(PROJECT / 'scripts/install-macos.py'), '--binary', str(binary),
                 '--install-dir', str(prefix), '--launch-agent-dir', str(plist.parent), '--log-dir', str(logs),
                 '--skip-dependencies', '--agents', 'none', '--no-tls', '--http-port', str(http),
-                '--https-port', str(https), '--domain', domain], 'installer')
+                '--https-port', str(https)], 'installer')
             ready(); assert health(401); checks['real_installer_authenticated_launchd_start'] = True
             assert runtime.stat().st_mode & 0o077 == 0
             definition = plistlib.loads(plist.read_bytes())

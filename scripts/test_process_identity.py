@@ -70,7 +70,7 @@ class ProcessIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);binary=root/'bin/agentshell-backend';binary.parent.mkdir();binary.write_text('fixture');binary.chmod(0o700)
             with patch.object(identity,'__file__',str(root/'ui/process_identity.py')),patch.dict(identity.os.environ,{},clear=True):
-                self.assertEqual(identity.backend_binary(),str(binary))
+                self.assertEqual(identity.backend_binary(),str(binary.resolve()))
             with patch.dict(identity.os.environ,{'AGENTSHELL_BACKEND_BIN':'relative/backend'}):
                 with self.assertRaises(ValueError):identity.backend_binary()
             with patch.dict(identity.os.environ,{'AGENTSHELL_BACKEND_BIN':str(binary)}):
@@ -115,7 +115,7 @@ class ProcessIdentityTests(unittest.TestCase):
                 installer.main()
             command=json.loads((root/'.claude/settings.json').read_text())['hooks']['SessionStart'][-1]['hooks'][0]['command']
             import shlex
-            self.assertEqual(shlex.split(command),['/chosen Python/python3',str(script),'--tool','claude'])
+            self.assertEqual(shlex.split(command),['/chosen Python/python3',str(script.resolve()),'--tool','claude'])
 
 
 if __name__=='__main__':unittest.main()

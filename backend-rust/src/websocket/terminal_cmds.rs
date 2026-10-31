@@ -9,6 +9,15 @@ use tracing::{debug, error, info, warn};
 use super::types::{send_message, BroadcastMessage, PtySession, WsState};
 use crate::{audio, tmux, types::*};
 
+fn tmux_socket_from_context(value: &str) -> anyhow::Result<&str> {
+    // Socket paths may contain commas. Only the final two fields are metadata.
+    let (prefix, _) = value.rsplit_once(',').ok_or_else(|| anyhow::anyhow!("Invalid inherited tmux context"))?;
+    let (socket, server) = prefix.rsplit_once(',').ok_or_else(|| anyhow::anyhow!("Invalid inherited tmux context"))?;
+    anyhow::ensure!(std::path::Path::new(socket).is_absolute() && server.parse::<u32>().is_ok_and(|pid| pid > 0),
+        "Invalid inherited tmux server");
+    Ok(socket)
+}
+
 // ── Input handlers ────────────────────────────────────────────────────────
 
 pub(crate) async fn handle_input(state: &WsState, data: String) -> anyhow::Result<()> {
@@ -204,7 +213,14 @@ pub(crate) async fn attach_to_session(
     })?;
 
     let mut cmd = CommandBuilder::new("tmux");
+    if let Some(context) = std::env::var_os("TMUX") {
+        let context = context.to_str().ok_or_else(|| anyhow::anyhow!("Invalid inherited tmux encoding"))?;
+        cmd.args(["-S", tmux_socket_from_context(context)?]);
+    }
     cmd.args(&["attach-session", "-t", &target]);
+    // The new PTY is a client, not a nested terminal. Pin its original server
+    // explicitly before removing TMUX; otherwise a custom server is lost.
+    cmd.env_remove("TMUX");
     cmd.env("TERM", "xterm");
     cmd.env("COLORTERM", "truecolor");
 
@@ -593,6 +609,15 @@ mod tests {
     };
     use std::sync::Arc;
     use tokio::sync::{mpsc, Mutex};
+
+    #[test]
+    fn tmux_context_preserves_named_servers_and_comma_paths() {
+        assert_eq!(tmux_socket_from_context("/tmp/tmux-1000/default,123,0").unwrap(), "/tmp/tmux-1000/default");
+        assert_eq!(tmux_socket_from_context("/private/tmp/folder,one/socket,456,0").unwrap(), "/private/tmp/folder,one/socket");
+        for invalid in ["", "relative,123,0", "/tmp/socket,no-pid,0", "/tmp/socket,0,0"] {
+            assert!(tmux_socket_from_context(invalid).is_err());
+        }
+    }
 
     fn make_ws_state(dir: &std::path::Path) -> (WsState, mpsc::Receiver<BroadcastMessage>) {
         let (tx, rx) = mpsc::channel::<BroadcastMessage>(256);

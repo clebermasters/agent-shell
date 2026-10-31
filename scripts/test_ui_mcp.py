@@ -47,12 +47,11 @@ class PublicationTests(unittest.TestCase):
         self.patches = [
             patch.object(adapter, 'runtime_config', return_value=(self.url, self.token)),
             patch.object(adapter, 'owner', return_value=(123, 456)),
-            patch.object(adapter, 'Path'),
+            patch.object(adapter, 'process_name', return_value='codex'),
             patch.dict(adapter.os.environ, {}, clear=True),
         ]
         for item in self.patches:
             item.start()
-        adapter.Path.return_value.__truediv__.return_value.__truediv__.return_value.read_text.return_value = 'codex'
 
     def tearDown(self):
         for item in reversed(self.patches):

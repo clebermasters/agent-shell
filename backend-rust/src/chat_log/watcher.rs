@@ -123,6 +123,32 @@ pub async fn watch_log_file(
     cleared_at: Option<i64>,
     limit: Option<usize>,
 ) -> Result<LogWatcher> {
+    watch_log_file_inner(path, tool, event_tx, cleared_at, limit, true).await
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TailSignature {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    device: u64,
+    inode: u64,
+}
+
+fn tail_signature(path: &Path) -> std::io::Result<TailSignature> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path)?;
+    Ok(TailSignature { length: metadata.len(), modified: metadata.modified().ok(),
+        device: metadata.dev(), inode: metadata.ino() })
+}
+
+async fn watch_log_file_inner(
+    path: &Path,
+    tool: AiTool,
+    event_tx: mpsc::Sender<ChatLogEvent>,
+    cleared_at: Option<i64>,
+    limit: Option<usize>,
+    use_notifications: bool,
+) -> Result<LogWatcher> {
     if let AiTool::OpencodeBound { session_id } = &tool {
         return watch_opencode_session(path, session_id, event_tx, cleared_at, limit).await;
     }
@@ -171,9 +197,10 @@ pub async fn watch_log_file(
     let (notify_tx, mut notify_rx) = mpsc::channel::<()>(1);
     let continue_tx=notify_tx.clone();
 
-    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+    let watcher = if use_notifications { (|| -> notify::Result<notify::RecommendedWatcher> {
+        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         match res {
-            Ok(event) if event.kind.is_modify() => {
+            Ok(event) if event.kind.is_modify() || event.need_rescan() => {
                 let _ = notify_tx.try_send(());
             }
             Ok(_) => {} // ignore non-modify events
@@ -182,23 +209,53 @@ pub async fn watch_log_file(
                 error!("notify error: {e}");
             }
         }
-    })?;
-
-    let mut watcher = watcher;
-    watcher.watch(path, RecursiveMode::NonRecursive)?;
+        })?;
+        watcher.watch(path, RecursiveMode::NonRecursive)?;
+        Ok(watcher)
+    })().map(Some).unwrap_or_else(|error| {
+        warn!("File notifications unavailable; using bounded chat tail polling: {error}");
+        None
+    }) } else { None };
 
     // Spawn a background task that reads new lines whenever notify fires.
     let file_path = path.to_path_buf();
     let task=tokio::spawn(async move {
         let mut pos = start_pos;
+        let mut signature: Option<TailSignature> = None;
+        let mut poll = tokio::time::interval(std::time::Duration::from_millis(500));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The explicit initial wake reads appends that arrived while the
+        // platform's notification stream was being installed.
+        poll.tick().await;
         let _=continue_tx.try_send(());
-        while notify_rx.recv().await.is_some() {
+        loop {
+            let mut force = tokio::select! {
+                packet = notify_rx.recv() => match packet { Some(()) => true, None => return },
+                _ = poll.tick() => false,
+            };
+            if event_tx.is_closed() { return; }
             // Drain any extra notifications that arrived while we were
             // processing so we do a single read per burst.
-            while notify_rx.try_recv().is_ok() {}
+            while notify_rx.try_recv().is_ok() { force = true; }
+
+            let current = match tail_signature(&file_path) {
+                Ok(value) => value,
+                Err(error) => {
+                    warn!("Chat tail metadata unavailable: {error}");
+                    continue;
+                }
+            };
+            // Idle fallback ticks perform one stat only, without reading or
+            // rescanning transcript history/context. Partial lines wait for
+            // their next actual write rather than being repeatedly parsed.
+            if !force && signature.as_ref() == Some(&current) { continue; }
+            if signature.as_ref().is_some_and(|old| old.device != current.device || old.inode != current.inode) {
+                pos = 0;
+            }
 
             match read_new_lines(&file_path, &mut pos, &tool) {
                 Ok(messages) => {
+                    signature = Some(current);
                     let more=messages.len()==crate::history::LIVE_BATCH;
                     for msg in messages {
                         if event_tx
@@ -211,7 +268,9 @@ pub async fn watch_log_file(
                     }
                     if more {let _=continue_tx.try_send(());}
                     // Recalculate after draining the bounded live backlog.
-                    if !more && matches!(tool, AiTool::Claude | AiTool::Codex) {
+                    // The metadata timer repairs live message delivery only;
+                    // it must never trigger a full context/history scan.
+                    if force && !more && matches!(tool, AiTool::Claude | AiTool::Codex) {
                         let info: Option<(f64, String)> = if matches!(tool, AiTool::Claude) {
                             claude_parser::extract_context_usage(&file_path)
                                 .map(|c| (c.usage_pct, c.model))
@@ -237,7 +296,7 @@ pub async fn watch_log_file(
         }
     });
 
-    Ok(LogWatcher::File(watcher,task))
+    Ok(match watcher { Some(watcher) => LogWatcher::File(watcher,task), None => LogWatcher::Task(task) })
 }
 
 async fn watch_opencode_db(
@@ -446,49 +505,37 @@ async fn get_pane_pid(target: &str) -> Result<u32> {
     Ok(pid)
 }
 
-/// Recursively collect all descendant PIDs of `parent_pid` via procfs.
-///
-/// This avoids shelling out to `ps` on every call and works on Linux by
-/// scanning `/proc/*/stat` for processes whose PPID matches.
+/// Recursively collect descendant PIDs using the native platform inventory.
 pub(crate) fn get_descendant_pids(parent_pid: u32) -> Result<Vec<u32>> {
-    let children_by_parent = scan_proc_children_map();
+    let children_by_parent = crate::process::children_map()?;
     let mut result = vec![parent_pid];
     let mut queue = vec![parent_pid];
+    let mut seen = std::collections::HashSet::from([parent_pid]);
 
     while let Some(ppid) = queue.pop() {
         for child in children_by_parent.get(&ppid).into_iter().flatten() {
-            result.push(*child);
-            queue.push(*child);
+            if seen.insert(*child) {
+                result.push(*child);
+                queue.push(*child);
+            }
         }
     }
 
     Ok(result)
 }
 
-/// Return the immediate child PIDs of `ppid` by scanning `/proc`.
+/// Return the immediate children observable by this backend user.
 fn direct_children(ppid: u32) -> Vec<u32> {
-    scan_proc_children_map().remove(&ppid).unwrap_or_default()
+    crate::process::children_map().unwrap_or_default().remove(&ppid).unwrap_or_default()
 }
 
-/// Read the executable name for a given PID from `/proc/<pid>/comm`.
 fn process_name(pid: u32) -> Option<String> {
-    let path = format!("/proc/{pid}/comm");
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|s| s.trim().to_string())
+    crate::process::name(pid)
 }
 
 fn process_cmdline(pid: u32) -> Option<String> {
-    let path = format!("/proc/{pid}/cmdline");
-    let mut cmdline = std::fs::read_to_string(path).ok()?;
-    if cmdline.is_empty() {
-        return None;
-    }
-
-    // Convert NUL bytes in cmdline into spaces so tokenization can work with
-    // shell-like command strings and wrappers.
-    cmdline = cmdline.replace('\0', " ");
-    Some(cmdline.trim().to_string())
+    let arguments = crate::process::argv(pid).ok()?;
+    (!arguments.is_empty()).then(|| arguments.join(" "))
 }
 
 fn detect_tool_from_name(name: &str) -> Option<&'static str> {
@@ -607,6 +654,7 @@ fn detect_tool_from_cmdline(cmdline: &str) -> Option<&'static str> {
 }
 
 pub(crate) fn detect_tool_for_pid(pid: u32) -> Option<(String, u32)> {
+    if let Some(tool) = crate::process::agent_tool(pid) { return Some((tool,pid)); }
     if let Some(name) = process_name(pid) {
         if let Some(tool) = detect_tool_from_name(&name) {
             return Some((tool.to_string(), pid));
@@ -686,41 +734,8 @@ fn detect_log_file_for_pane_pid(pane_pid: u32) -> Result<(PathBuf, AiTool)> {
     bail!("no AI tool (claude/codex/opencode/kiro) found among descendants of pane PID {pane_pid}");
 }
 
-fn scan_proc_children_map() -> HashMap<u32, Vec<u32>> {
-    let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return children_by_parent;
-    };
-
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
-            continue;
-        };
-
-        let stat_path = format!("/proc/{pid}/stat");
-        let Ok(stat) = std::fs::read_to_string(&stat_path) else {
-            continue;
-        };
-
-        if let Some(parent) = parse_parent_pid_from_stat(&stat) {
-            children_by_parent.entry(parent).or_default().push(pid);
-        }
-    }
-
-    children_by_parent
-}
-
-fn parse_parent_pid_from_stat(stat: &str) -> Option<u32> {
-    let after_comm = stat.rfind(')')?;
-    let fields: Vec<&str> = stat[after_comm + 2..].split_whitespace().collect();
-    fields.get(1).and_then(|s| s.parse::<u32>().ok())
-}
-
-/// Read the current working directory of a process via its `/proc` symlink.
 fn get_process_cwd(pid: u32) -> Result<PathBuf> {
-    let link = format!("/proc/{pid}/cwd");
-    std::fs::read_link(&link).with_context(|| format!("failed to read {link}"))
+    crate::process::cwd(pid).with_context(|| format!("Process working directory unavailable for PID {pid}"))
 }
 
 /// Check if a process with given PID is still running and has the expected CWD.
@@ -746,32 +761,14 @@ fn is_process_alive_with_cwd(pid: u32, expected_cwd: &Path) -> bool {
 
 /// Find an opencode process PID that matches the given CWD.
 fn find_opencode_pid_for_cwd(cwd: &Path) -> Result<u32> {
-    // Scan /proc for all running processes
-    let entries = match std::fs::read_dir("/proc") {
-        Ok(e) => e,
-        Err(_) => bail!("Cannot read /proc"),
-    };
-
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        let name_str = match file_name.to_str() {
-            Some(n) => n,
-            None => continue,
-        };
-
-        // Must be a number (PID)
-        let pid: u32 = match name_str.parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
-        // Check if it's an opencode process with matching CWD
+    let mut found = None;
+    for pid in crate::process::all_pids()? {
         if is_process_alive_with_cwd(pid, cwd) {
-            return Ok(pid);
+            if found.is_some() { bail!("More than one opencode process shares this working directory"); }
+            found = Some(pid);
         }
     }
-
-    bail!("No opencode process found for {}", cwd.display())
+    found.with_context(|| format!("No opencode process found for {}", cwd.display()))
 }
 
 // ---------------------------------------------------------------------------
@@ -946,9 +943,71 @@ mod tests {
         writeln!(file,"{}",serde_json::json!({"type":"event_msg","payload":{"type":"agent_message","message":"hello"}})).unwrap();
         let (tx,_rx)=mpsc::channel(32);
         let watcher=watch_log_file(file.path(),AiTool::Codex,tx,None,Some(30)).await.unwrap();
-        let abort=match &watcher{LogWatcher::File(_,task)=>task.abort_handle(),_=>panic!("expected file watcher")};
+        let abort=match &watcher{LogWatcher::File(_,task)|LogWatcher::Task(task)=>task.abort_handle()};
         drop(watcher);
         tokio::time::timeout(std::time::Duration::from_secs(1),async{while !abort.is_finished(){tokio::task::yield_now().await;}}).await.unwrap();
+    }
+
+    fn tail_line(text: &str) -> String {
+        serde_json::json!({"type":"event_msg","payload":{"type":"agent_message","message":text}}).to_string()
+    }
+
+    async fn next_tail_text(rx: &mut mpsc::Receiver<ChatLogEvent>) -> String {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if let ChatLogEvent::NewMessage { message } = rx.recv().await.expect("tail channel closed") {
+                    if let Some(super::super::ContentBlock::Text { text }) = message.blocks.first() { return text.clone(); }
+                }
+            }
+        }).await.expect("Polling must recover an append without a filesystem notification")
+    }
+
+    async fn assert_no_tail_duplicate(rx: &mut mpsc::Receiver<ChatLogEvent>, duration: std::time::Duration) {
+        let deadline = tokio::time::Instant::now() + duration;
+        while let Ok(Some(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            assert!(!matches!(event, ChatLogEvent::NewMessage { .. }), "Idle/partial tail delivered a duplicate or incomplete message");
+        }
+    }
+
+    #[tokio::test]
+    async fn poll_only_tail_recovers_appends_and_partial_lines_without_duplicates() {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file,"{}",tail_line("initial")).unwrap();
+        let (tx,mut rx) = mpsc::channel(32);
+        let _watcher = watch_log_file_inner(file.path(),AiTool::Codex,tx,None,Some(30),false).await.unwrap();
+        assert!(matches!(rx.recv().await,Some(ChatLogEvent::History { .. })));
+        // Wait until the initial forced wake and first idle poll have passed.
+        // Later appends can only be discovered by the production polling path.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        writeln!(file,"{}",tail_line("notification was lost")).unwrap();file.flush().unwrap();
+        assert_eq!(next_tail_text(&mut rx).await,"notification was lost");
+        assert_no_tail_duplicate(&mut rx,std::time::Duration::from_millis(650)).await;
+        let partial=tail_line("partial ação 🌈");
+        let split=partial.find('🌈').unwrap()+1;
+        file.write_all(&partial.as_bytes()[..split]).unwrap();file.flush().unwrap();
+        assert_no_tail_duplicate(&mut rx,std::time::Duration::from_millis(650)).await;
+        file.write_all(&partial.as_bytes()[split..]).unwrap();writeln!(file).unwrap();file.flush().unwrap();
+        assert_eq!(next_tail_text(&mut rx).await,"partial ação 🌈");
+        assert_no_tail_duplicate(&mut rx,std::time::Duration::from_millis(650)).await;
+    }
+
+    #[tokio::test]
+    async fn poll_only_tail_detects_same_length_inode_replacement() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();let path = dir.path().join("conversation.jsonl");
+        std::fs::write(&path,format!("{}\n",tail_line("first"))).unwrap();
+        let (tx,mut rx) = mpsc::channel(32);
+        let _watcher = watch_log_file_inner(&path,AiTool::Codex,tx,None,Some(30),false).await.unwrap();
+        assert!(matches!(rx.recv().await,Some(ChatLogEvent::History { .. })));
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        let replacement = dir.path().join("replacement.jsonl");
+        let mut file = std::fs::File::create(&replacement).unwrap();
+        writeln!(file,"{}",tail_line("other")).unwrap();file.flush().unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(),std::fs::metadata(&replacement).unwrap().len());
+        std::fs::rename(replacement,&path).unwrap();
+        assert_eq!(next_tail_text(&mut rx).await,"other");
+        assert_no_tail_duplicate(&mut rx,std::time::Duration::from_millis(650)).await;
     }
 
     #[test]

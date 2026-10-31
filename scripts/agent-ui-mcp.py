@@ -4,6 +4,7 @@ import json,os,sys
 from pathlib import Path
 from urllib.request import Request,urlopen
 from urllib.error import HTTPError
+from process_identity import process_info, process_name
 
 class PublicationError(RuntimeError):
  """A backend rejection with its bounded, credential-free explanation."""
@@ -11,10 +12,10 @@ class PublicationError(RuntimeError):
 def owner():
  pid=int(os.environ.get('AGENTSHELL_UI_AGENT_PID',os.getppid()))
  for _ in range(40):
-  path=Path('/proc')/str(pid);raw=(path/'stat').read_text();fields=raw[raw.rfind(')')+2:].split()
-  if (path/'comm').read_text().strip() in ['codex','claude','opencode']:
-   return pid,int(fields[19])
-  pid=int(fields[1])
+  info=process_info(pid)
+  if info['name'] in ['codex','claude','opencode']:
+   return pid,info['generation']
+  pid=info['parentPid']
   if pid<=1:raise ValueError('No owning native agent')
  raise ValueError('No owning native agent')
 
@@ -38,7 +39,7 @@ def publish(title,html,metadata=None):
  payload={'agentPid':pid,'agentStart':start,'title':title,'html':html}
  if metadata is not None and not isinstance(metadata,dict):raise ValueError('Invalid MCP metadata')
  thread_id=(metadata or {}).get('threadId')
- if (Path('/proc')/str(pid)/'comm').read_text().strip()=='codex' and isinstance(thread_id,str):
+ if process_name(pid)=='codex' and isinstance(thread_id,str):
   payload['codexThreadId']=thread_id
  else:
   payload['paneId']=os.environ.get('AGENTSHELL_UI_PANE',os.environ.get('TMUX_PANE'))

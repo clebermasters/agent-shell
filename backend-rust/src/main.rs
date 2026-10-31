@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::signal;
@@ -45,6 +45,7 @@ mod monitor;
 mod notification;
 mod notification_handler;
 mod notification_store;
+mod process;
 mod tag_store;
 mod terminal_buffer;
 mod tmux;
@@ -62,6 +63,19 @@ struct Args {
     /// Enable audio streaming debug logs
     #[arg(long)]
     audio: bool,
+    #[command(subcommand)]
+    command: Option<DiagnosticCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+enum DiagnosticCommand {
+    /// Inspect a process using the same identity checks as native chat binding.
+    ProcessInfo {
+        #[arg(long)]
+        pid: u32,
+        #[arg(long)]
+        open_files: bool,
+    },
 }
 
 use crate::types::ServerMessage;
@@ -87,16 +101,29 @@ pub struct AppState {
 }
 
 fn main() -> Result<()> {
+    let args = Args::parse();
+    if let Some(DiagnosticCommand::ProcessInfo { pid, open_files }) = args.command {
+        let info = process::snapshot(pid)?;
+        let mut value = serde_json::to_value(&info)?;
+        if let Some(tool) = process::agent_tool(pid) {
+            value["agentTool"] = tool.into();
+        }
+        if open_files {
+            value["openFiles"] = serde_json::to_value(process::open_files(pid)?)?;
+        }
+        anyhow::ensure!(process::generation(pid)? == info.generation, "Process changed during inspection");
+        println!("{}", serde_json::to_string(&value)?);
+        return Ok(());
+    }
     // Apply allocator limits before Tokio starts worker threads and their heaps.
     history::configure_allocator();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(run_backend())
+        .block_on(run_backend(args))
 }
 
-async fn run_backend() -> Result<()> {
-    let args = Args::parse();
+async fn run_backend(args: Args) -> Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
         .with(

@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::{TimeZone, Utc};
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -64,7 +64,7 @@ pub fn init_opencode_state(
     // Get process start time to help match the right session
     let process_start_time = get_process_start_time(pid)?;
     debug!(
-        "Process {} started at boot tick {}",
+        "Process {} generation {}",
         pid, process_start_time
     );
 
@@ -140,64 +140,15 @@ pub fn init_opencode_state(
     })
 }
 
-/// Get process start time in clock ticks since boot
+/// Native generation: Linux boot ticks or Darwin's microsecond birth time.
 fn get_process_start_time(pid: u32) -> Result<i64> {
-    use std::fs;
-
-    let stat_path = format!("/proc/{}/stat", pid);
-    let stat =
-        fs::read_to_string(&stat_path).with_context(|| format!("failed to read {}", stat_path))?;
-
-    let parts: Vec<&str> = stat.split_whitespace().collect();
-    if parts.len() < 22 {
-        bail!("invalid stat format for PID {}", pid);
-    }
-
-    let start_ticks: i64 = parts[21]
-        .parse()
-        .with_context(|| format!("failed to parse start time from {}", stat_path))?;
-
-    Ok(start_ticks)
+    Ok(i64::try_from(crate::process::generation(pid)?)?)
 }
 
 /// Get process uptime in milliseconds
 fn get_process_uptime_ms(pid: u32) -> Result<i64> {
-    use std::fs;
-
-    // Read /proc/<pid>/stat to get start time
-    let stat_path = format!("/proc/{}/stat", pid);
-    let stat =
-        fs::read_to_string(&stat_path).with_context(|| format!("failed to read {}", stat_path))?;
-
-    let parts: Vec<&str> = stat.split_whitespace().collect();
-    if parts.len() < 22 {
-        bail!("invalid stat format for PID {}", pid);
-    }
-
-    let start_ticks: u64 = parts[21]
-        .parse()
-        .with_context(|| format!("failed to parse start time from {}", stat_path))?;
-
-    // Read /proc/uptime to get system uptime
-    let uptime_path = "/proc/uptime";
-    let uptime_str = fs::read_to_string(uptime_path)
-        .with_context(|| format!("failed to read {}", uptime_path))?;
-
-    let uptime_seconds: f64 = uptime_str
-        .split_whitespace()
-        .next()
-        .unwrap_or("0")
-        .parse()
-        .unwrap_or(0.0);
-
-    // Get clock ticks per second
-    let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-
-    // Calculate process uptime = system_uptime - (start_time_in_clock_ticks / clk_tck)
-    let start_seconds = start_ticks as f64 / clk_tck as f64;
-    let uptime = uptime_seconds - start_seconds;
-
-    Ok((uptime * 1000.0) as i64)
+    let started = crate::process::snapshot(pid)?.started_at_epoch_ms.context("Process start time unavailable")?;
+    Ok(chrono::Utc::now().timestamp_millis().saturating_sub(started).max(0))
 }
 
 /// Fetch all new messages since the last fetch

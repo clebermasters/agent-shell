@@ -82,6 +82,10 @@ jobs:
           .ci-python/bin/python -m pip install 'websockets>=13,<16'
           .ci-python/bin/python scripts/test_native_backend_smoke.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-smoke"
           .ci-python/bin/python scripts/test_native_chat_platform.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-chat"
+
+      - name: Real macOS LaunchAgent installation and lifecycle
+        if: runner.os == 'macOS'
+        run: .ci-python/bin/python scripts/test_macos_service_smoke.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/macos-service"
           AGENTSHELL_BACKEND_BIN="$PWD/backend-rust/target/release/agentshell-backend" .ci-python/bin/python scripts/test_browser_runtime_macos.py
           .ci-python/bin/python scripts/test_native_browser_gateway.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-browser-gateway"
           node scripts/test_macos_viewer.js
@@ -113,6 +117,7 @@ jobs:
           path: |
             ${{ runner.temp }}/native-smoke
             ${{ runner.temp }}/native-chat
+            ${{ runner.temp }}/macos-service
             ${{ runner.temp }}/native-browser-gateway
             ${{ runner.temp }}/browser-permissions.json
           if-no-files-found: ignore

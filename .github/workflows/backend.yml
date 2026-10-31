@@ -86,6 +86,9 @@ jobs:
       - name: Real macOS LaunchAgent installation and lifecycle
         if: runner.os == 'macOS'
         run: .ci-python/bin/python scripts/test_macos_service_smoke.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/macos-service"
+
+      - name: Native browser protocol and viewer checks
+        run: |
           AGENTSHELL_BACKEND_BIN="$PWD/backend-rust/target/release/agentshell-backend" .ci-python/bin/python scripts/test_browser_runtime_macos.py
           .ci-python/bin/python scripts/test_native_browser_gateway.py --binary backend-rust/target/release/agentshell-backend --output "$RUNNER_TEMP/native-browser-gateway"
           node scripts/test_macos_viewer.js

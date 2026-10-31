@@ -1,0 +1,48 @@
+name: Verify macOS service installer
+on:
+  push:
+    paths: [.github/workflows/macos-service-verify.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  service:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            artifact: agentshell-backend-macos-arm64
+            binary: agentshell-backend-macos-arm64
+          - runner: macos-15-intel
+            artifact: agentshell-backend-macos-x86_64
+            binary: agentshell-backend-macos-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify reused binary source
+        run: |
+          for path in backend-rust deployment/browser; do
+            test "$(git rev-parse HEAD:$path)" = "$(git rev-parse cdbee53bc353c165ad3ca12f3ff27b8f93ef20ec:$path)"
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 41223050951
+          name: ${{ matrix.artifact }}
+          path: verified-backend
+      - name: Check real launchd installation
+        run: |
+          brew install tmux
+          chmod 755 verified-backend/${{ matrix.binary }}
+          python3 -m venv .ci-service
+          .ci-service/bin/python -m pip install 'websockets>=13,<16'
+          .ci-service/bin/python scripts/test_macos_service_smoke.py --binary verified-backend/${{ matrix.binary }} --output "$RUNNER_TEMP/macos-service"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: service-diagnostics-${{ matrix.runner }}
+          path: ${{ runner.temp }}/macos-service
+          if-no-files-found: ignore

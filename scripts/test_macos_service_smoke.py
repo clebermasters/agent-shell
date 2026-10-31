@@ -46,7 +46,7 @@ def run(binary, output):
     output = output.resolve(); output.mkdir(parents=True, exist_ok=True); output.chmod(0o700)
     checks = {}; token = secrets.token_urlsafe(32); touched = False
     with tempfile.TemporaryDirectory(prefix='as-svc-', dir='/tmp') as temporary:
-        root = Path(temporary); home = root / 'home'; home.mkdir()
+        root = Path(temporary).resolve(); home = root / 'home'; home.mkdir()
         prefix = home / 'Library/Application Support/AgentShell'; commands = prefix / 'bin'; commands.mkdir(parents=True)
         socket_path = str(root / 'tmux.sock')
         shim = commands / 'tmux'

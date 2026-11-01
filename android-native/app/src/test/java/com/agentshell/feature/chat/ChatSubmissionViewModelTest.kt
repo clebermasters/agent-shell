@@ -117,16 +117,19 @@ class ChatSubmissionViewModelTest {
         messages.emit(mapOf("type" to "chat-send-result","_sourceServerUrl" to server,
             "requestId" to ticket.id,"bindingId" to ticket.bindingId,"status" to "complete","success" to true))
     }
-    private suspend fun await(condition:()->Boolean)=withTimeout(10_000) { while(!condition())delay(10) }
+    private suspend fun await(condition:suspend ()->Boolean)=withTimeout(10_000) { while(!condition())delay(10) }
 
     @Test fun acknowledgementDuringCacheRestorationIsRetainedAndSettledAfterTheCacheFinishes()=runBlocking<Unit> {
         preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket)
         val model=model(restoring=true);await { model.uiState.value.isSending }
-        receipt();withTimeout(10_000) { submissions.records.first { it.single().phase=="complete" } }
+        receipt()
+        val completed=withTimeoutOrNull(10_000) { submissions.records.first { it.single().phase=="complete" } }
+        val logs=org.robolectric.shadows.ShadowLog.getLogsForTag("ChatViewModel").takeLast(6).map { it.msg }
+        assertNotNull("Receipt was not stored: records=${submissions.records.first()}, logs=$logs",completed)
         assertEquals(ticket.text,model.uiState.value.draftMessage)
         withContext(main) { field(model,"restoringCache",false);state(model).value=state(model).value.copy(isLoading=false) }
         await { model.uiState.value.draftMessage.isEmpty() }
-        withTimeout(10_000) { submissions.records.first { it.isEmpty() } }
+        await { preferences.getDraftMessage(ticket.draftKey) == null }
         assertNull(preferences.getDraftMessage(ticket.draftKey))
     }
 
@@ -137,7 +140,7 @@ class ChatSubmissionViewModelTest {
         val restored=model(draft="");await { restored.uiState.value.draftMessage==ticket.text }
         receipt();await { restored.uiState.value.draftMessage.isEmpty() }
         assertFalse(restored.uiState.value.isSending)
-        withTimeout(10_000) { submissions.records.first { it.isEmpty() } }
+        await { preferences.getDraftMessage(ticket.draftKey) == null }
     }
 
     @Test fun changedAttachmentWithTheSameCaptionKeepsBothTheLiveAndSavedNewDraft()=runBlocking<Unit> {
@@ -145,7 +148,7 @@ class ChatSubmissionViewModelTest {
         val replacement=original.copy(uri="content://test/two")
         preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket.copy(file=original))
         val model=model(file=replacement);await { model.uiState.value.isSending }
-        receipt();withTimeout(10_000) { submissions.records.first { it.isEmpty() } }
+        receipt();await { !model.uiState.value.isSending }
         assertEquals(ticket.text,model.uiState.value.draftMessage);assertEquals(replacement,model.uiState.value.attachedFile)
         assertEquals(ticket.text,preferences.getDraftMessage(ticket.draftKey))
     }
@@ -171,8 +174,47 @@ class ChatSubmissionViewModelTest {
         withContext(main) { models.first().clear() }
         val restored=model(draft="")
         await { restored.uiState.value.isSending }
-        receipt();withTimeout(10_000) { submissions.records.first { it.isEmpty() } }
+        receipt();await { !restored.uiState.value.isSending }
         assertEquals("",restored.uiState.value.draftMessage)
         assertEquals("",preferences.getDraftMessage(ticket.draftKey))
+    }
+
+    @Test fun anotherViewCannotConsumeTheReceiptWhileTheVisibleChatRestoresItsCache()=runBlocking<Unit> {
+        preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket)
+        val previous=model(draft="A newer draft in another view")
+        val visible=model(restoring=true)
+        await { previous.uiState.value.isSending && visible.uiState.value.isSending }
+        receipt();await { !previous.uiState.value.isSending }
+        delay(100) // Let the other view finish processing its acknowledgement.
+        withContext(main) { field(visible,"restoringCache",false);state(visible).value=state(visible).value.copy(isLoading=false) }
+        val cleared=withTimeoutOrNull(2_000) { while(visible.uiState.value.draftMessage.isNotEmpty())delay(10);true }
+        assertEquals("The completed receipt must survive until the visible view can settle it",true,cleared)
+        assertEquals("A newer draft in another view",previous.uiState.value.draftMessage)
+    }
+
+    @Test fun pastingTheSamePromptAfterSuccessIsANewDraftAndSurvivesRecreation()=runBlocking<Unit> {
+        preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket)
+        val first=model();await { first.uiState.value.isSending }
+        receipt();await { first.uiState.value.draftMessage.isEmpty() }
+        withTimeout(10_000) { while(preferences.getDraftMessage(ticket.draftKey)!=null)delay(10) }
+        withContext(main) { first.updateDraft(ticket.text) }
+        withTimeout(10_000) { submissions.records.first { it.single().draftEdited } }
+        withContext(main) { models.first().clear() }
+        val restored=model(draft=ticket.text)
+        delay(100)
+        assertEquals(ticket.text,restored.uiState.value.draftMessage)
+        assertEquals(ticket.text,preferences.getDraftMessage(ticket.draftKey))
+    }
+
+    @Test fun aSuccessfulReceiptDoesNotRestoreTheSentTextInARecreatedEmptyComposer()=runBlocking<Unit> {
+        preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket)
+        val first=model();await { first.uiState.value.isSending }
+        receipt();await { first.uiState.value.draftMessage.isEmpty() }
+        withTimeout(10_000) { while(preferences.getDraftMessage(ticket.draftKey)!=null)delay(10) }
+        withContext(main) { models.first().clear() }
+        val restored=model(draft="")
+        delay(100)
+        assertEquals("",restored.uiState.value.draftMessage)
+        assertFalse(restored.uiState.value.isSending)
     }
 }

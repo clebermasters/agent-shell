@@ -2,6 +2,7 @@ package com.agentshell.data.local
 
 import androidx.room.Dao
 import androidx.room.Entity
+import androidx.room.Embedded
 import androidx.room.Insert
 import androidx.room.Index
 import androidx.room.OnConflictStrategy
@@ -53,8 +54,35 @@ data class CachedServerMessage(val messageId: String, val serverKey: String)
 
 data class CachedMessageBounds(val firstPosition: Int?, val lastPosition: Int?)
 
+/** One read snapshot, including metadata when the saved chat is empty. */
+data class CachedHistoryWindowRow(
+    @Embedded val conversation: CachedConversation,
+    val messageId: String?,
+    val position: Int?,
+    val payload: String?,
+    val totalMessageCount: Int,
+)
+
 @Dao
 abstract class OfflineCacheDao {
+    // A single SELECT gets a consistent WAL snapshot without entering Room's
+    // serialized write-transaction queue. Only the requested page is decoded.
+    // Keep SELECT first: Android can route a leading WITH to the write connection.
+    @Query("""
+        SELECT c.*, page.messageId, page.position, page.payload,
+            (SELECT COUNT(*) FROM cached_chat_messages WHERE targetKey = :key) AS totalMessageCount
+        FROM cached_conversations AS c LEFT JOIN (
+            SELECT messageId, position, payload FROM cached_chat_messages
+            WHERE targetKey = :key AND (
+                COALESCE((SELECT position FROM cached_chat_messages WHERE targetKey = :key AND messageId = :beforeMessageId), :beforePosition) IS NULL
+                OR position < COALESCE((SELECT position FROM cached_chat_messages WHERE targetKey = :key AND messageId = :beforeMessageId), :beforePosition)
+            )
+            ORDER BY position DESC LIMIT :limit
+        ) AS page ON 1
+        WHERE c.targetKey = :key ORDER BY page.position DESC
+    """)
+    abstract suspend fun historyWindow(key: String, beforePosition: Int?, beforeMessageId: String?, limit: Int): List<CachedHistoryWindowRow>
+
     @Query("SELECT * FROM cached_history_sync WHERE targetKey = :key")
     abstract suspend fun historySync(key: String): CachedHistorySync?
 

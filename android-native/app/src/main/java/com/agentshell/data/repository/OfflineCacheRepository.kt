@@ -57,6 +57,7 @@ class OfflineCacheRepository @Inject constructor(
     // Cache serialization/backfill must not occupy the whole shared IO pool while
     // Compose is trying to draw a navigation transition.
     private val cacheDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val foregroundReads = Dispatchers.IO.limitedParallelism(2)
     private val scope = CoroutineScope(SupervisorJob() + cacheDispatcher)
     private val syncRequests = Channel<Unit>(Channel.CONFLATED)
     private data class HistoryWrite(val target: ChatTarget, val messages: List<ChatMessage>, val complete: Boolean, val conversationKey: String?, val tool: String?)
@@ -182,18 +183,14 @@ class OfflineCacheRepository @Inject constructor(
         beforePosition: Int? = null,
         limit: Int = 100,
         beforeMessageId: String? = null,
-    ): CachedHistoryPage? = withContext(cacheDispatcher) {
+    ): CachedHistoryPage? = withContext(foregroundReads) {
         require(limit > 0)
-        database.withTransaction {
-            val meta = dao.conversation(target.key) ?: return@withTransaction null
-            // A backfill may insert rows before an existing row. Resolve its ID
-            // again rather than treating an old numeric position as permanent.
-            val before = beforeMessageId?.let { dao.messagePosition(target.key, it) } ?: beforePosition
-            val descending = dao.messagePage(target.key, before, limit + 1)
-            val rows = descending.take(limit).asReversed()
-            CachedHistoryPage(meta, rows.mapNotNull { decode<ChatMessage>(it.payload) },
-                rows.firstOrNull()?.position, dao.messageCount(target.key), descending.size > limit)
-        }
+        val snapshot = dao.historyWindow(target.key, beforePosition, beforeMessageId, limit + 1)
+        val first = snapshot.firstOrNull() ?: return@withContext null
+        val descending = snapshot.filter { it.messageId != null }
+        val rows = descending.take(limit).asReversed()
+        CachedHistoryPage(first.conversation, rows.mapNotNull { it.payload?.let { payload -> decode<ChatMessage>(payload) } },
+            rows.firstOrNull()?.position, first.totalMessageCount, descending.size > limit)
     }
 
     /** Partial refreshes retain older saved pages. Full refreshes are authoritative. */

@@ -3,6 +3,7 @@ package com.agentshell.data.repository
 import android.app.Application
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import com.agentshell.data.local.AppDatabase
 import com.agentshell.data.local.CachedSession
@@ -40,6 +41,7 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.SQLiteMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [35])
@@ -117,6 +119,9 @@ class OfflineCacheRepositoryTest {
         repo.saveHistory(other, listOf(message("b", 2)), true)
         repo.saveHistory(target, emptyList(), true)
         assertEquals(emptyList<ChatMessage>(), repo.history(target)?.messages)
+        assertEquals(emptyList<ChatMessage>(), repo.historyPage(target)?.messages)
+        assertEquals(0, repo.historyPage(target)?.totalMessageCount)
+        assertNull(repo.historyPage(target.copy(hostId = "missing-host")))
         assertEquals(listOf(message("b", 2)), repo.history(other)?.messages)
         db.offlineCacheDao().replaceSessions("server-a", "tmux", listOf(CachedSession("server-a", "tmux", "old", 0, "{}")))
         db.offlineCacheDao().replaceSessions("server-b", "tmux", listOf(CachedSession("server-b", "tmux", "other", 0, "{}")))
@@ -168,6 +173,29 @@ class OfflineCacheRepositoryTest {
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(3)) } }
         assertTrue(plan.any { it.contains("index_cached_chat_messages_targetKey_position") })
         assertFalse(plan.any { it.contains("TEMP B-TREE") })
+    }
+
+    @Test @SQLiteMode(SQLiteMode.Mode.NATIVE)
+    fun foregroundHistoryPageDoesNotWaitForAnArchiveWriteTransaction() = runBlocking {
+        val db = database()
+        assertTrue(db.openHelper.writableDatabase.isWriteAheadLoggingEnabled)
+        val repo = repository(db)
+        repo.saveHistory(target, listOf(message("saved", 1)), true, "same")
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writer = launch(Dispatchers.IO) {
+            db.withTransaction {
+                db.offlineCacheDao().insertSessions(listOf(CachedSession("other", "tmux", "busy", 0, "{}")))
+                started.complete(Unit)
+                release.await()
+            }
+        }
+        try {
+            started.await()
+            val page = withTimeoutOrNull(1_000) { repo.historyPage(target) }
+            assertNotNull("Opening a chat must not queue behind offline backfill writes", page)
+            assertEquals(listOf("saved"), page!!.messages.map { it.id })
+        } finally { release.complete(Unit); writer.join() }
     }
 
     @Test fun aFarAheadHeadInvalidatesCompletenessAndStableIdCursorFollowsInsertedGap() = runBlocking {

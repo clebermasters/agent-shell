@@ -65,7 +65,7 @@ class ChatSubmissionStore @Inject constructor(private val preferences: Preferenc
     private val mutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private fun decode(raw: String) = runCatching { json.decodeFromString<List<ChatSubmission>>(raw) }.getOrDefault(emptyList())
-    val records = preferences.chatSubmissions.map(::decode).distinctUntilChanged()
+    val records = preferences.chatSubmissions.distinctUntilChanged().map(::decode).distinctUntilChanged()
 
     suspend fun begin(ticket: ChatSubmission): Boolean = mutex.withLock {
         val now = System.currentTimeMillis()
@@ -113,7 +113,7 @@ class ChatSubmissionStore @Inject constructor(private val preferences: Preferenc
     suspend fun draftEdited(id: String, text: String, file: AttachedFile?) = mutex.withLock {
         val old = decode(preferences.chatSubmissions.first())
         val next = old.map {
-            if (it.id == id && it.widgetId == null && !it.draftEdited && (it.text != text || it.file != file)) it.copy(draftEdited = true) else it
+            if (it.id == id && it.widgetId == null && !it.draftEdited && (it.phase == "complete" || it.text != text || it.file != file)) it.copy(draftEdited = true) else it
         }
         if (next != old) preferences.setChatSubmissions(json.encodeToString(next))
     }

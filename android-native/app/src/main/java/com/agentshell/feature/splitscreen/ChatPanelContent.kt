@@ -107,6 +107,7 @@ fun ChatPanelContent(
     val pendingSend = activeSubmission?.takeIf { it.waiting }
     val awaitingSend = startingSend || pendingSend != null
     var submissionError by remember(target?.key) { mutableStateOf<String?>(null) }
+    val settledSubmissions = remember(target?.key) { linkedSetOf<String>() }
     val conversationDrafts = remember { mutableMapOf<String, String>() }
     val listState = rememberLazyListState()
     val isDragging by listState.interactionSource.collectIsDraggedAsState()
@@ -151,18 +152,21 @@ fun ChatPanelContent(
     LaunchedEffect(target?.key, bindingState?.binding?.conversationKey, activeSubmission?.id) {
         val before = inputText
         val saved = submissions.savedDraft(draftKey())
-        if (before.isBlank() && inputText == before) inputText = saved ?: activeSubmission?.takeIf { it.widgetId == null && !it.draftEdited }?.text.orEmpty()
+        if (before.isBlank() && inputText == before) inputText = saved ?: activeSubmission?.takeIf {
+            it.widgetId == null && !it.draftEdited && !(it.phase == "complete" && it.success == true)
+        }?.text.orEmpty()
     }
 
     LaunchedEffect(activeSubmission, screenActive, history.cacheReady, bindingState?.binding?.id) {
         val ticket = activeSubmission ?: return@LaunchedEffect
-        if (ticket.phase != "complete" || !screenActive || !history.cacheReady || bindingState?.binding?.id != ticket.bindingId) return@LaunchedEffect
+        if (ticket.phase != "complete" || !screenActive || !history.cacheReady || bindingState?.binding?.id != ticket.bindingId || ticket.id in settledSubmissions) return@LaunchedEffect
         if (ticket.success == true) {
             if (ticket.widgetId == null && ticket.matchesDraft(inputText, null)) inputText = ""
             submissions.clearSavedDraft(ticket)
             submissionError = null
         } else submissionError = ticket.error ?: "Unable to send this draft"
-        submissions.remove(ticket.id)
+        settledSubmissions.add(ticket.id)
+        if (settledSubmissions.size > 64) settledSubmissions.remove(settledSubmissions.first())
         if (ticket.success == true && isSocketConnected) refreshWatch()
     }
 

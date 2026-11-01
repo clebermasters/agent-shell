@@ -37,6 +37,7 @@ object AppModule {
             AppDatabase::class.java,
             "agentshell_db"
         )
+            .setJournalMode(androidx.room.RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .addMigrations(
                 AppDatabase.MIGRATION_1_2,
                 AppDatabase.MIGRATION_2_3,

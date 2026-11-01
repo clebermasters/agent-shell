@@ -50,6 +50,7 @@ import com.agentshell.data.services.TranscriptionReceipt
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -212,6 +213,7 @@ class ChatViewModel @Inject constructor(
     private var sendReceiptsAvailable = false
     private var lastConnectionGeneration = -1L
     private val restoredSubmissionDrafts = mutableSetOf<String>()
+    private val settledSubmissions = linkedSetOf<String>()
     private var cacheLoadJob: Job? = null
     private var cacheSaveJob: Job? = null
     private var restoringCache = false
@@ -254,6 +256,7 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun restoreCachedChat(generation: Int) {
         val target = readTarget
+        val started = android.os.SystemClock.elapsedRealtime()
         try {
             val cached = target?.let { offlineCache.historyPage(it) }
             if (generation != cacheLoadGeneration) return
@@ -275,6 +278,7 @@ class ChatViewModel @Inject constructor(
             if (error is CancellationException) throw error
             Log.w("ChatViewModel", "Could not restore cached history", error)
         } finally {
+            logDebug("Cached chat page restored session=${target?.sessionName} elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}")
             if (generation == cacheLoadGeneration) {
                 restoringCache = false
                 _uiState.update { it.copy(isLoading = false) }
@@ -323,6 +327,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun prepareReadTracking(sessionName: String, windowIndex: Int, isAcp: Boolean, cwd: String = "") {
+        val started = android.os.SystemClock.elapsedRealtime()
         val host = hostRepository.getSelectedHostOnce()
         if (host == null) {
             _uiState.update { it.copy(readTrackingReady = true) }
@@ -337,6 +342,7 @@ class ChatViewModel @Inject constructor(
         readTarget = target
         visitUnreadCursor = null
         readState = chatActivityRepository.register(target)
+        logDebug("Chat read tracking ready session=$sessionName elapsedMs=${android.os.SystemClock.elapsedRealtime() - started}")
         _uiState.update { it.copy(firstUnreadMessageId = null, readTrackingReady = true, isLocatingUnread = false) }
         readStateJob = viewModelScope.launch {
             chatActivityRepository.states.map { it[target.key] }.distinctUntilChanged().collect { state ->
@@ -574,6 +580,7 @@ class ChatViewModel @Inject constructor(
                 activeSubmission = ticket
                 _uiState.update { it.copy(isSending = ticket?.waiting == true, submissionNotice = ticket?.notice) }
                 if (ticket != null && active && !restoringCache && ticket.widgetId == null &&
+                    !(ticket.phase == "complete" && ticket.success == true) &&
                     state.bindingState?.binding?.id == ticket.bindingId && restoredSubmissionDrafts.add(ticket.id)) {
                     val saved = submissions.savedDraft(ticket.draftKey)
                     _uiState.update { current ->
@@ -583,7 +590,7 @@ class ChatViewModel @Inject constructor(
                         else current
                     }
                 }
-                if (ticket?.phase != "complete" || !active || restoringCache || state.bindingState?.binding?.id == null) return@collect
+                if (ticket?.phase != "complete" || !active || restoringCache || state.bindingState?.binding?.id == null || ticket.id in settledSubmissions) return@collect
                 val same = ticket.bindingId == state.bindingState.binding.id
                 val success = ticket.success == true
                 if (same) {
@@ -608,7 +615,10 @@ class ChatViewModel @Inject constructor(
                         }
                     }
                 }
-                submissions.remove(ticket.id)
+                // Other chat views may still be restoring their cache. Keep the
+                // bounded durable receipt so each view can settle its own draft.
+                settledSubmissions.add(ticket.id)
+                if (settledSubmissions.size > 64) settledSubmissions.remove(settledSubmissions.first())
                 if (same && success && readHostServerUrl == ticket.serverUrl && _uiState.value.bindingState?.binding?.id == ticket.bindingId) refreshActiveChat("message delivery confirmed")
             }
         }
@@ -982,6 +992,7 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun handleSendResult(message: Map<String, Any?>) {
         val server = message["_sourceServerUrl"] as? String ?: readHostServerUrl ?: return
+        logDebug("Received chat send result request=${message["requestId"]} status=${message["status"]}")
         submissions.record(server, message)
     }
 
@@ -1250,7 +1261,9 @@ class ChatViewModel @Inject constructor(
 
     private fun collectMessages() {
         messageCollectionJob?.cancel()
-        messageCollectionJob = viewModelScope.launch {
+        // Subscribe before constructor work returns; SharedFlow does not replay
+        // an acknowledgement that arrives before this collector starts.
+        messageCollectionJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             chatRepository.chatMessages.collect { message ->
                 if (readHostServerUrl != null && message["_sourceServerUrl"] != null && message["_sourceServerUrl"] != readHostServerUrl) return@collect
                 if (!chatRepository.isChatMessage(message)) return@collect

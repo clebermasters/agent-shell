@@ -23,7 +23,7 @@ import uuid
 
 import websockets
 from process_identity import process_info
-from test_chat_bindings import watch, send
+from test_chat_bindings import watch, send, receive
 
 C_WRAPPER = r'''#include <stdio.h>
 #include <unistd.h>
@@ -177,6 +177,31 @@ def main():
                         assert count==1,'Input must reach exactly one native conversation once'
                         checks[label+'_bound_history_and_terminal_send']=True
                         print(label+' native chat submitted once and reply received',flush=True)
+                        def matching_users(messages):
+                            return [message for message in messages if message.get('role')=='user'
+                                and message.get('blocks')==[{'type':'text','text':text}]]
+                        _,history=await watch(connection,label)
+                        assert len(matching_users(history['messages']))==1,'History reload duplicated the native user echo'
+                        # Identical prompts intentionally sent twice must remain
+                        # two turns after both history reload and offline sync.
+                        await send(connection,label,binding,text)
+                        _,history=await watch(connection,label)
+                        assert len(matching_users(history['messages']))==2,'Repeated prompts were lost or duplicated'
+                        request=uuid.uuid4().hex
+                        await connection.send(json.dumps({'type':'get-history-state','requestId':request,
+                            'sessionName':label,'windowIndex':0}))
+                        state=await receive(connection,lambda m:m.get('type')=='history-state' and m.get('requestId')==request)
+                        assert state['available'] and state['revision'].startswith('sync-v2:')
+                        request=uuid.uuid4().hex
+                        await connection.send(json.dumps({'type':'get-history-page','requestId':request,
+                            'sessionName':label,'windowIndex':0,'revision':state['revision'],'offset':0,'limit':200}))
+                        page=await receive(connection,lambda m:m.get('type')=='history-page' and m.get('requestId')==request)
+                        assert 'error' not in page,page.get('error')
+                        assert not page['hasMore']
+                        assert len(matching_users([entry['message'] for entry in page['entries']]))==2
+                        assert [entry['position'] for entry in page['entries']]==list(range(len(page['entries'])))
+                        checks[label+'_user_echo_reconciled_and_intentional_repeats_preserved']=True
+                        print(label+' reload and offline sync retain exactly two intentional sends',flush=True)
                     assert len({value['bindingId'] for value in bindings.values()})==len(cases)
                     checks['shared_working_directory_does_not_mix_conversations']=True
             asyncio.run(verify())

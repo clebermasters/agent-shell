@@ -56,7 +56,7 @@ async fn load_codex_page_at(
         (
             session_key.clone(),
             format!(
-                "rpc-v1:{}:{overlay_revision}",
+                "rpc-v2:{}:{overlay_revision}",
                 source_revision.as_deref().unwrap_or("unknown")
             ),
         )
@@ -86,10 +86,9 @@ async fn load_codex_page_at(
     let events = app.chat_event_store.clone();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        index.replace(&cache_key, &revision, |sink| {
-            crate::codex_app::client::index_thread_snapshot(file.path(), sink)?;
-            events.visit_history(&session_key, 0, true, sink)
-        })?;
+        index.replace_with_overlay(&cache_key, &revision,
+            |sink| crate::codex_app::client::index_thread_snapshot(file.path(), sink),
+            |sink| events.visit_history_with_source(&session_key, 0, true, sink))?;
         index.page(&cache_key, cleared, offset, limit, true)
     })
     .await
@@ -119,21 +118,21 @@ async fn opencode_page_at(
     let permit = crate::history::permit().await?;
     let db = crate::chat_log::watcher::find_opencode_db()?;
     let source_revision = format!(
-        "opencode-v1:{}:{}",
+        "opencode-v2:{}:{}",
         opencode_revision(&db, external_id)?,
         app.chat_event_store.history_revision(session_key, 0)?
     );
     let (key, revision) = snapshot.unwrap_or_else(|| (session_key.to_owned(), source_revision));
     let id = external_id.to_owned();
+    let overlay_key = session_key.to_owned();
     let events = app.chat_event_store.clone();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let mut index = crate::history::Index::open(&events.history_index_path())?;
         if !index.current(&key, &revision)? {
-            index.replace(&key, &revision, |sink| {
-                crate::chat_log::opencode_parser::visit_all_messages(&db, &id, None, sink)?;
-                events.visit_history(&key, 0, true, sink)
-            })?;
+            index.replace_with_overlay(&key, &revision,
+                |sink| crate::chat_log::opencode_parser::visit_all_messages(&db, &id, None, sink).map(|_| ()),
+                |sink| events.visit_history_with_source(&overlay_key, 0, true, sink))?;
         }
         index.page(&key, cleared, offset, limit, true)
     })
@@ -176,7 +175,7 @@ async fn history_source(
         };
         let cleared = app.chat_clear_store.get_cleared_at(session, window).await;
         let revision = format!(
-            "sync-v1:{source}:{}:{cleared:?}",
+            "sync-v2:{source}:{}:{cleared:?}",
             app.chat_event_store.history_revision(session, 0)?
         );
         Ok(HistorySource {
@@ -206,7 +205,7 @@ async fn history_source(
             .get_cleared_at(binding.storage_key(), 0)
             .await;
         let revision = format!(
-            "sync-v1:{}:{source}:{}:{cleared:?}",
+            "sync-v2:{}:{source}:{}:{cleared:?}",
             binding.conversation_key,
             app.chat_event_store
                 .history_revision(binding.storage_key(), 0)?
@@ -328,9 +327,10 @@ pub(crate) async fn handle(
                 let key = format!("{prefix}{revision}");
                 let mut index =
                     crate::history::Index::open(&app_state.chat_event_store.history_index_path())?;
-                let valid_scope = revision.ends_with(&format!(":{:?}", source.cleared))
+                let valid_scope = revision.starts_with("sync-v2:")
+                    && revision.ends_with(&format!(":{:?}", source.cleared))
                     && source.binding.as_ref().is_none_or(|b| {
-                        revision.starts_with(&format!("sync-v1:{}:", b.conversation_key))
+                        revision.starts_with(&format!("sync-v2:{}:", b.conversation_key))
                     });
                 let page = if valid_scope && index.current(&key, revision)? {
                     index.page(&key, source.cleared, *offset, *limit, true)?

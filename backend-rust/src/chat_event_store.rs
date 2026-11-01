@@ -82,15 +82,20 @@ impl ChatEventStore {
     }
 
     pub fn visit_history(&self, session: &str, window: u32, acp_overlay: bool, sink: &mut dyn FnMut(ChatMessage)->Result<()>) -> Result<()> {
+        self.visit_history_with_source(session, window, acp_overlay, &mut |_, message| sink(message))
+    }
+
+    pub fn visit_history_with_source(&self, session: &str, window: u32, acp_overlay: bool, sink: &mut dyn FnMut(&str, ChatMessage)->Result<()>) -> Result<()> {
         let conn=self.open_connection()?;
-        let mut stmt=conn.prepare("SELECT message_json,length(CAST(message_json AS BLOB)),rowid,timestamp_millis FROM chat_events WHERE session_name=? AND window_index=? AND (?=0 OR source IN ('webhook','webhook-file')) ORDER BY timestamp_millis,rowid")?;
+        let mut stmt=conn.prepare("SELECT message_json,length(CAST(message_json AS BLOB)),rowid,timestamp_millis,source FROM chat_events WHERE session_name=? AND window_index=? AND (?=0 OR source IN ('webhook','webhook-file')) ORDER BY timestamp_millis,rowid")?;
         let mut rows=stmt.query(params![session,window,acp_overlay])?;
         while let Some(row)=rows.next()? {
+            let source: String = row.get(4)?;
             let size:i64=row.get(1)?;
             if size>crate::history::INLINE_RECORD_BYTES as i64 {
                 let blob=conn.blob_open("main","chat_events","message_json",row.get(2)?,true)?;
-                sink(crate::history::archive_large(blob,&self.db_path.parent().unwrap_or(std::path::Path::new(".")).join("chat_files"),"assistant",Utc.timestamp_millis_opt(row.get(3)?).single())?)?;
-            }else{let body:String=row.get(0)?;sink(serde_json::from_str(&body)?)?;}
+                sink(&source,crate::history::archive_large(blob,&self.db_path.parent().unwrap_or(std::path::Path::new(".")).join("chat_files"),"assistant",Utc.timestamp_millis_opt(row.get(3)?).single())?)?;
+            }else{let body:String=row.get(0)?;sink(&source,serde_json::from_str(&body)?)?;}
         }
         Ok(())
     }

@@ -477,6 +477,26 @@ class OfflineCacheRepositoryTest {
             val completeBodies = bodies.get()
             repo.syncHistoryIncremental(socket, target)
             assertEquals(completeBodies, bodies.get())
+
+            // An existing offline archive contains the phone send and its native
+            // echo outside the newest page. A backend merge-version change must
+            // remove only the echo while retaining the unlimited older archive.
+            val phone = message("phone-send", 5_000, "same user prompt")
+            val echo = message("native-echo", 5_047, "same user prompt")
+            source.set(source.get().toMutableList().apply { addAll(5, listOf(phone, echo)) })
+            revision.set("sync-v1:echo-fixture")
+            repo.syncHistoryIncremental(socket, target)
+            repo.syncHistoryIncremental(socket, target)
+            assertTrue(repo.history(target)!!.messages.any { it.id == echo.id })
+            source.set(source.get().filterNot { it.id == echo.id })
+            revision.set("sync-v2:echo-fixture")
+            val beforeReconciliation = bodies.get()
+            repo.syncHistoryIncremental(socket, target)
+            repo.syncHistoryIncremental(socket, target)
+            assertEquals(source.get().map { it.id }, repo.history(target)!!.messages.map { it.id })
+            assertEquals(1, repo.history(target)!!.messages.count { it.content == "same user prompt" })
+            assertEquals("canonical send and older bodies are reused", beforeReconciliation, bodies.get())
+            assertTrue(db.offlineCacheDao().historySync(target.key)!!.complete)
         } finally { socket.dispose(); server.shutdown() }
     }
 

@@ -16,6 +16,21 @@ pub const INLINE_RECORD_BYTES: usize = 256 * 1024;
 pub const PAGE_BYTES: usize = 1024 * 1024;
 pub const MAX_PAGE_MESSAGES: usize = 200;
 
+// Submission timestamps are recorded after tmux input, so an agent's echo can
+// precede or follow them. Never reconcile equal text across distant turns.
+const USER_ECHO_WINDOW_MS: i64 = 30_000;
+
+fn user_echo_key(message: &ChatMessage) -> Result<Option<String>> {
+    if message.role == "user" && message.timestamp.is_some() {
+        if let [crate::chat_log::ContentBlock::Text { text }] = message.blocks.as_slice() {
+            if !text.trim().is_empty() {
+                return Ok(Some(body_key(&serde_json::to_string(&message.blocks)?)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Tune this process only; unlike MALLOC_ARENA_MAX, this is not inherited by agents.
 pub fn configure_allocator() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -141,6 +156,78 @@ impl Index {
         tx.commit()?;
         Ok(())
     }
+    /// Reconcile sent user messages with native transcript echoes one-to-one.
+    /// Only derived rows change; both original archives remain intact. Candidates
+    /// live in SQLite's file-backed temp store, not an unbounded in-memory map.
+    pub fn replace_with_overlay(
+        &mut self,
+        key: &str,
+        revision: &str,
+        native: impl FnOnce(&mut dyn FnMut(ChatMessage) -> Result<()>) -> Result<()>,
+        overlay: impl FnOnce(&mut dyn FnMut(&str, ChatMessage) -> Result<()>) -> Result<()>,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM history_messages WHERE key=?", [key])?;
+        tx.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS history_user_echoes (
+                seq INTEGER PRIMARY KEY, time INTEGER NOT NULL, content_key TEXT NOT NULL);
+             CREATE INDEX IF NOT EXISTS temp.history_user_echo_time
+                ON history_user_echoes(content_key,time,seq);
+             DELETE FROM history_user_echoes;",
+        )?;
+        let mut seq = 0i64;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT INTO history_messages(key,seq,time,body,body_key) VALUES (?,?,?,?,?)",
+            )?;
+            let mut candidate = tx.prepare_cached(
+                "INSERT INTO history_user_echoes(seq,time,content_key) VALUES (?,?,?)",
+            )?;
+            native(&mut |message| {
+                let time = message.timestamp.map(|v| v.timestamp_millis()).unwrap_or(0);
+                if let Some(content_key) = user_echo_key(&message)? {
+                    candidate.execute(params![seq, time, content_key])?;
+                }
+                let body = serde_json::to_string(&message)?;
+                insert.execute(params![key, seq, time, body, body_key(&body)])?;
+                seq += 1;
+                Ok(())
+            })?;
+            overlay(&mut |source, message| {
+                let time = message.timestamp.map(|v| v.timestamp_millis()).unwrap_or(0);
+                if source == "webhook" {
+                    if let Some(content_key) = user_echo_key(&message)? {
+                        let matched = tx.query_row(
+                            "SELECT seq FROM history_user_echoes
+                             WHERE content_key=? AND time BETWEEN ? AND ?
+                             ORDER BY abs(time-?),seq LIMIT 1",
+                            params![content_key, time.saturating_sub(USER_ECHO_WINDOW_MS),
+                                time.saturating_add(USER_ECHO_WINDOW_MS), time],
+                            |row| row.get::<_, i64>(0),
+                        ).optional()?;
+                        if let Some(matched) = matched {
+                            tx.execute("DELETE FROM history_messages WHERE key=? AND seq=?", params![key, matched])?;
+                            tx.execute("DELETE FROM history_user_echoes WHERE seq=?", [matched])?;
+                        }
+                    }
+                }
+                // Retain the original send timestamp/body so Android's existing
+                // live message ID and offline read position remain stable.
+                let body = serde_json::to_string(&message)?;
+                insert.execute(params![key, seq, time, body, body_key(&body)])?;
+                seq += 1;
+                Ok(())
+            })?;
+        }
+        tx.execute("DELETE FROM history_user_echoes", [])?;
+        tx.execute(
+            "INSERT OR REPLACE INTO history_snapshots(key,revision) VALUES (?,?)",
+            params![key, revision],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn conditional_page(
         &self,
         key: &str,
@@ -887,7 +974,7 @@ fn bound_revision(
     binding: &crate::chat_binding::ChatBinding,
 ) -> Result<String> {
     Ok(format!(
-        "bound-v1:{}:{}",
+        "bound-v2:{}:{}",
         if binding.transcript_path.as_os_str().is_empty() || binding.pane.tool == "kiro" {
             "overlay".into()
         } else {
@@ -919,7 +1006,7 @@ pub fn bound_page_at(
         snapshot.unwrap_or_else(|| (format!("bound:{}", binding.storage_key()), source_revision));
     let mut index = Index::open(&events.history_index_path())?;
     if !index.current(&key, &revision)? {
-        index.replace(&key, &revision, |sink| {
+        index.replace_with_overlay(&key, &revision, |sink| {
             if !binding.transcript_path.as_os_str().is_empty() {
                 match binding.pane.tool.as_str() {
                     "claude" | "codex" => {
@@ -943,8 +1030,8 @@ pub fn bound_page_at(
                     _ => bail!("Unsupported history provider"),
                 }
             }
-            events.visit_history(binding.storage_key(), 0, false, sink)
-        })?;
+            Ok(())
+        }, |sink| events.visit_history_with_source(binding.storage_key(), 0, false, sink))?;
     }
     index.page(&key, cleared, offset, limit, true)
 }
@@ -964,6 +1051,144 @@ fn transcript_cache_path() -> Result<PathBuf> {
 mod tests {
     use super::*;
     use crate::chat_log::ContentBlock;
+
+    #[test]
+    fn bound_history_reconciles_sent_user_message_with_native_echo() {
+        use crate::chat_binding::{ChatBinding, PaneIdentity};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("transcript.jsonl");
+        // The same 47 ms timestamp difference as the reported phone message.
+        let sent: chrono::DateTime<chrono::Utc> = "2026-11-01T20:17:21.054255513Z".parse().unwrap();
+        let received = sent + chrono::Duration::milliseconds(47);
+        let line = serde_json::json!({"timestamp":received,"type":"event_msg",
+            "payload":{"type":"item_completed","item":{"type":"UserMessage",
+                "id":"user-1","content":[{"type":"text","text":"check the hours"}]}}});
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let binding = ChatBinding {
+            binding_id: "fixture".into(), conversation_id: "fixture".into(),
+            conversation_key: "conversation:codex:fixture".into(), source: "fixture".into(),
+            registered_at: 0, transcript_path: path,
+            pane: PaneIdentity { pane_id: "%0".into(), server_pid: 1, server_start: 1,
+                root_pid: 1, root_start: 1, agent_pid: 1, agent_start: 1,
+                tool: "codex".into(), cwd: directory.path().display().to_string() },
+        };
+        let events = crate::chat_event_store::ChatEventStore::new(directory.path().into()).unwrap();
+        let submission = ChatMessage { role: "user".into(), timestamp: Some(sent),
+            blocks: vec![ContentBlock::Text { text: "check the hours".into() }] };
+        events.append_message(binding.storage_key(), 0, "webhook", &submission).unwrap();
+        let key = format!("bound:{}", binding.storage_key());
+        let old_revision = bound_revision(&events, &binding).unwrap().replacen("bound-v2:", "bound-v1:", 1);
+        Index::open(&events.history_index_path()).unwrap().replace(&key, &old_revision, |sink| {
+            sink(ChatMessage { timestamp: Some(received), ..submission.clone() })?;
+            sink(submission.clone())
+        }).unwrap();
+        assert!(cached_bound_page(&events, &binding, None, 0, 30).unwrap().is_none());
+        let page = bound_page(&events, &binding, None, 0, 30).unwrap();
+        assert_eq!(page.total, 1, "one submission plus its echo must display once");
+        assert_eq!(serde_json::to_string(&page.messages[0]).unwrap(), serde_json::to_string(&submission).unwrap());
+        assert_eq!(events.list_messages(binding.storage_key(), 0).unwrap().len(), 1);
+        assert_eq!(std::fs::read(&binding.transcript_path).unwrap(), original);
+        assert_eq!(cached_bound_page(&events, &binding, None, 0, 30).unwrap().unwrap().total, 1);
+    }
+
+    fn user_at(time: i64, text: &str) -> ChatMessage {
+        ChatMessage { role: "user".into(),
+            timestamp: chrono::DateTime::from_timestamp_millis(time),
+            blocks: vec![ContentBlock::Text { text: text.into() }] }
+    }
+
+    fn merged_fixture(index: &mut Index, key: &str, native: Vec<ChatMessage>, overlay: Vec<(&str, ChatMessage)>) -> Page {
+        index.replace_with_overlay(key, "v2", |sink| {
+            for message in native { sink(message)?; }
+            Ok(())
+        }, |sink| {
+            for (source, message) in overlay { sink(source, message)?; }
+            Ok(())
+        }).unwrap();
+        index.page(key, None, 0, 200, true).unwrap()
+    }
+
+    #[test]
+    fn user_echo_matching_is_one_to_one_and_keeps_intentional_repeats() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = Index::open(&directory.path().join("history.db")).unwrap();
+        let page = merged_fixture(&mut index, "chat",
+            vec![user_at(10_047, "yes"), user_at(10_147, "yes"), user_at(10_247, "yes")],
+            vec![("webhook", user_at(10_000, "yes")), ("webhook", user_at(10_100, "yes"))]);
+        assert_eq!(page.total, 3, "two phone sends plus one terminal-only send");
+        assert_eq!(page.messages.iter().map(|m| m.timestamp.unwrap().timestamp_millis()).collect::<Vec<_>>(), vec![10_000, 10_100, 10_247]);
+        let page = merged_fixture(&mut index, "second-chat", vec![user_at(20_000, "yes")],
+            vec![("webhook", user_at(20_100, "yes")), ("webhook", user_at(20_200, "yes"))]);
+        assert_eq!(page.total, 2, "one echo cannot consume two sends");
+        assert_eq!(index.page("chat", None, 0, 200, true).unwrap().total, 3);
+    }
+
+    #[test]
+    fn echo_matching_requires_sent_user_text_and_nearby_timestamps() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = Index::open(&directory.path().join("history.db")).unwrap();
+        let sent = user_at(60_000, "same");
+        let mut assistant = sent.clone(); assistant.role = "assistant".into();
+        let mut no_time = sent.clone(); no_time.timestamp = None;
+        let mut attachment = sent.clone(); attachment.blocks.push(ContentBlock::File {
+            id: "file".into(), filename: "notes.txt".into(), mime_type: "text/plain".into(), size_bytes: Some(123),
+        });
+        let mut widget = assistant.clone(); widget.blocks = vec![ContentBlock::UiWidget {
+            id: "widget".into(), title: "choose".into(), html: "<button>same</button>".into(),
+        }];
+        for (source, native, overlay) in [
+            ("interactive-ui", sent.clone(), sent.clone()),
+            ("webhook-file", sent.clone(), sent.clone()),
+            ("webhook", assistant.clone(), assistant),
+            ("webhook", no_time.clone(), no_time),
+            ("webhook", attachment.clone(), attachment),
+            ("interactive-ui", widget.clone(), widget),
+            ("webhook", sent.clone(), user_at(60_047, "same ")),
+            ("webhook", sent.clone(), user_at(60_000 + USER_ECHO_WINDOW_MS + 1, "same")),
+            ("webhook", sent.clone(), user_at(60_000 - USER_ECHO_WINDOW_MS - 1, "same")),
+        ] {
+            let expected = vec![serde_json::to_string(&native).unwrap(), serde_json::to_string(&overlay).unwrap()];
+            let page = merged_fixture(&mut index, "chat", vec![native], vec![(source, overlay)]);
+            assert_eq!(page.total, 2, "non-echo content must survive ({source})");
+            for body in expected { assert!(page.messages.iter().any(|m| serde_json::to_string(m).unwrap() == body)); }
+        }
+    }
+
+    #[test]
+    fn corrected_snapshot_reuses_canonical_body_and_has_contiguous_sync_positions() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = Index::open(&directory.path().join("history.db")).unwrap();
+        let sent = user_at(60_000, "same");
+        let echo = user_at(60_047, "same");
+        index.replace("old", "v1", |sink| { sink(sent.clone())?; sink(echo.clone()) }).unwrap();
+        let page = merged_fixture(&mut index, "new", vec![echo], vec![("webhook", sent)]);
+        assert_eq!(page.total, 1);
+        let sync = index.conditional_page("new", Some("old"), None, 0, 30).unwrap();
+        assert_eq!(sync.total, 1);
+        assert_eq!(sync.entries.len(), 1);
+        assert_eq!(sync.entries[0].position, 0);
+        assert!(sync.entries[0].message.is_none(), "existing canonical body should retain its server key");
+        assert!(!sync.has_more);
+        assert_eq!(index.page("old", None, 0, 30, true).unwrap().total, 2, "pinned old snapshot is intact");
+    }
+
+    #[test]
+    fn failed_echo_rebuild_preserves_the_previous_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut index = Index::open(&directory.path().join("history.db")).unwrap();
+        index.replace("chat", "v1", |sink| sink(user_at(60_000, "original"))).unwrap();
+        let result = index.replace_with_overlay("chat", "v2", |sink| sink(user_at(60_047, "echo")), |sink| {
+            sink("webhook", user_at(60_000, "echo"))?;
+            bail!("fixture IO error")
+        });
+        assert!(result.is_err());
+        assert!(index.current("chat", "v1").unwrap());
+        let page = index.page("chat", None, 0, 30, true).unwrap();
+        assert_eq!(page.total, 1);
+        assert!(serde_json::to_string(&page.messages[0]).unwrap().contains("original"));
+    }
+
     fn message(i: usize) -> ChatMessage {
         ChatMessage {
             role: "assistant".into(),

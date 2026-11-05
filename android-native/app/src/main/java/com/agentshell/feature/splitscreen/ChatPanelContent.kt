@@ -30,6 +30,7 @@ import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.feature.chat.ChatListAnchor
 import com.agentshell.feature.chat.ChatSubmission
+import com.agentshell.feature.chat.ChatDraftWriter
 import com.agentshell.feature.chat.AgentActivityBar
 import com.agentshell.feature.chat.preferRemoteChatHistory
 import com.agentshell.feature.chat.remoteChatHistoryOffset
@@ -96,14 +97,15 @@ fun ChatPanelContent(
 
     val messages = remember(target?.key) { mutableStateListOf<ChatMessage>() }
     val history = remember(target?.key) { PanelChatHistoryState() }
-    var inputText by remember(target?.key) { mutableStateOf("") }
+    val draftState = remember(target?.key) { PanelChatDraftState() }
+    val draftWriter = remember(panelId, target?.key, submissions) { ChatDraftWriter({ key, text -> submissions.saveDraft(key, text) },
+        onError = { android.util.Log.w("ChatDraft", "draft_save_failed") }) }
     var bindingState by remember(target?.key) { mutableStateOf<ChatBindingState?>(if (isAcp) null else ChatBindingState("checking", "", "", null, emptyList(), "Linking this terminal…")) }
     var startingSend by remember(target?.key) { mutableStateOf(false) }
     var sendReceiptsAvailable by remember(target?.key) { mutableStateOf(false) }
     var receiptCheckVersion by remember(target?.key) { mutableIntStateOf(0) }
     val serverUrl = selectedHost?.let { "${it.wsUrl}/ws" }
-    val activeSubmission = submissionRecords.firstOrNull { it.serverUrl == serverUrl && it.sessionName == sessionName &&
-        it.windowIndex == windowIndex && !isAcp && (bindingState?.binding?.id == null || bindingState?.binding?.id == it.bindingId) }
+    val activeSubmission = panelSubmission(submissionRecords, serverUrl, sessionName, windowIndex, isAcp, bindingState?.binding?.id)
     val pendingSend = activeSubmission?.takeIf { it.waiting }
     val awaitingSend = startingSend || pendingSend != null
     var submissionError by remember(target?.key) { mutableStateOf<String?>(null) }
@@ -115,8 +117,9 @@ fun ChatPanelContent(
     val focusRequester = remember { FocusRequester() }
     val showOlderHistory = history.hasOlderCachedMessages || (isSocketConnected && history.remoteHasMore)
 
-    fun draftKey(): String = bindingState?.binding?.conversationKey?.let { "chat_draft_native_${serverUrl.orEmpty()}:$it" }
-        ?: "split_chat_draft_${serverUrl.orEmpty()}:${sessionName}_$windowIndex"
+    fun fallbackDraftKey() = "split_chat_draft_${serverUrl.orEmpty()}:${sessionName}_$windowIndex"
+    fun draftKey(): String = (bindingState?.binding?.conversationKey ?: history.cachedConversationKey.takeIf { !isAcp })?.let { "chat_draft_native_${serverUrl.orEmpty()}:$it" }
+        ?: fallbackDraftKey()
 
     fun refreshWatch() = panelSocket.send(mapOf("type" to if (isAcp) "watch-acp-chat-log" else "watch-chat-log",
         "sessionName" to sessionName, "sessionId" to sessionName, "windowIndex" to windowIndex))
@@ -125,7 +128,7 @@ fun ChatPanelContent(
         val binding = bindingState?.binding ?: return
         val url = webSocketUrl ?: return
         val server = serverUrl ?: return
-        if (awaitingSend || !isSocketConnected || bindingState?.canSend != true) return
+        if (awaitingSend || draftState.restoring || !isSocketConnected || bindingState?.canSend != true) return
         val ticket = ChatSubmission(UUID.randomUUID().toString(), server, binding.conversationKey, binding.id,
             sessionName, windowIndex, text, draftKey(), widgetId = widgetId)
         startingSend = true
@@ -149,20 +152,35 @@ fun ChatPanelContent(
         }
     }
 
-    LaunchedEffect(target?.key, bindingState?.binding?.conversationKey, activeSubmission?.id) {
-        val before = inputText
-        val saved = submissions.savedDraft(draftKey())
-        if (before.isBlank() && inputText == before) inputText = saved ?: activeSubmission?.takeIf {
-            it.widgetId == null && !it.draftEdited && !(it.phase == "complete" && it.success == true)
-        }?.text.orEmpty()
+    LaunchedEffect(target?.key, draftKey(), activeSubmission?.id) {
+        val key = draftKey()
+        val previousKey = draftState.activeKey
+        val before = draftState.text
+        val revision = draftState.revision
+        val generation = ++draftState.restoreGeneration
+        draftState.restoring = true
+        try {
+            val saved = restorePanelDraft(key, fallbackDraftKey(), previousKey, draftState.cachedNativeIdentity,
+                submissionRecords, draftWriter, submissions)
+            if (generation == draftState.restoreGeneration && revision == draftState.revision && draftKey() == key &&
+                (previousKey != key || before.isBlank()) && draftState.text == before) {
+                draftState.activeKey = key
+                draftState.text = saved ?: recoverablePanelDraft(activeSubmission)
+            }
+        } finally { if (generation == draftState.restoreGeneration) draftState.restoring = false }
     }
 
-    LaunchedEffect(activeSubmission, screenActive, history.cacheReady, bindingState?.binding?.id) {
+    LaunchedEffect(activeSubmission, screenActive, history.cacheReady, bindingState?.binding?.id, draftState.restoring) {
         val ticket = activeSubmission ?: return@LaunchedEffect
-        if (ticket.phase != "complete" || !screenActive || !history.cacheReady || bindingState?.binding?.id != ticket.bindingId || ticket.id in settledSubmissions) return@LaunchedEffect
+        if (ticket.phase != "complete" || draftState.restoring || !screenActive || !history.cacheReady || bindingState?.binding?.id != ticket.bindingId || ticket.id in settledSubmissions) return@LaunchedEffect
+        val revision = draftState.revision
+        val savedSerial = draftWriter.snapshot(ticket.draftKey)?.serial
+        draftWriter.flush()
+        if (revision != draftState.revision || bindingState?.binding?.id != ticket.bindingId) return@LaunchedEffect
         if (ticket.success == true) {
-            if (ticket.widgetId == null && ticket.matchesDraft(inputText, null)) inputText = ""
+            if (ticket.widgetId == null && ticket.matchesDraft(draftState.text, null)) { draftState.text = ""; draftState.revision++ }
             submissions.clearSavedDraft(ticket)
+            if (ticket.widgetId == null && !ticket.draftEdited) draftWriter.forget(ticket.draftKey, savedSerial ?: 0L)
             submissionError = null
         } else submissionError = ticket.error ?: "Unable to send this draft"
         settledSubmissions.add(ticket.id)
@@ -230,6 +248,7 @@ fun ChatPanelContent(
         try {
             offlineCache.historyPage(chat)?.let { cached ->
                 history.cachedConversationKey = cached.conversation.conversationKey.takeIf { it.isNotBlank() }
+                draftState.cachedNativeIdentity = !isAcp && history.cachedConversationKey != null
                 history.oldestCachedPosition = cached.oldestPosition
                 history.hasOlderCachedMessages = cached.hasMore
                 history.cacheComplete = cached.conversation.complete
@@ -274,6 +293,7 @@ fun ChatPanelContent(
             panelSocket.dispose()
         }
     }
+    DisposableEffect(draftWriter) { onDispose { draftWriter.close() } }
 
     LaunchedEffect(isSocketConnected, socketGeneration, history.cacheReady, sessionName, windowIndex, isAcp) {
         if (!history.cacheReady) return@LaunchedEffect
@@ -326,8 +346,8 @@ fun ChatPanelContent(
                     history.remoteOffset = 0
                     history.remoteGapIds = emptySet()
                     history.loadingOlder = false
-                    if (oldKey != null) conversationDrafts[oldKey] = inputText
-                    if (oldKey != null) inputText = conversationDrafts[newKey].orEmpty()
+                    if (oldKey != null) conversationDrafts[oldKey] = draftState.text
+                    if (oldKey != null) draftState.text = conversationDrafts[newKey].orEmpty()
                     messages.clear(); historyReady = false; initialScrollComplete = false; firstUnreadId = null; visitUnreadCursor = null
                 }
                 if (newKey != null) history.cachedConversationKey = newKey
@@ -638,9 +658,11 @@ fun ChatPanelContent(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedTextField(
-                value = inputText,
-                onValueChange = { text -> inputText = text; val key = draftKey(); val ticket = activeSubmission
-                    coroutineScope.launch { submissions.saveDraft(key, text); ticket?.let { submissions.draftEdited(it.id, text, null) } } },
+                value = draftState.text,
+                onValueChange = { text -> draftState.text = text; draftState.revision++; val key = draftKey(); val ticket = activeSubmission
+                    draftState.activeKey = key
+                    draftWriter.save(key, text)
+                    draftWriter.afterWrites { ticket?.let { submissions.draftEdited(it.id, text, null) } } },
                 placeholder = { Text("Message…", fontSize = 13.sp) },
                 modifier = Modifier.weight(1f).focusRequester(focusRequester),
                 singleLine = true,
@@ -649,31 +671,28 @@ fun ChatPanelContent(
             Spacer(Modifier.width(4.dp))
             IconButton(
                 onClick = {
-                    val text = inputText.trim()
+                    val text = draftState.text.trim()
                     if (text.isEmpty()) return@IconButton
                     val binding = bindingState?.binding
                     if (!isAcp && binding != null) {
-                        submitBound(inputText)
+                        submitBound(draftState.text)
                         return@IconButton
                     }
-                    if (isAcp) {
-                        panelSocket.send(
-                            mapOf(
-                                "type" to "acp-send-prompt",
-                                "sessionId" to sessionName,
-                                "message" to text,
-                            ),
-                        )
-                    } else {
-                        panelSocket.send(
-                            mapOf(
-                                "type" to "send-chat-message",
-                                "sessionName" to sessionName,
-                                "windowIndex" to windowIndex,
-                                "message" to text,
-                                "notify" to false,
-                            ),
-                        )
+                    val url = webSocketUrl ?: return@IconButton
+                    val payload = if (isAcp) mapOf(
+                        "type" to "acp-send-prompt",
+                        "sessionId" to sessionName,
+                        "message" to text,
+                    ) else mapOf(
+                        "type" to "send-chat-message",
+                        "sessionName" to sessionName,
+                        "windowIndex" to windowIndex,
+                        "message" to text,
+                        "notify" to false,
+                    )
+                    if (!sendPanelDraft(draftKey(), draftWriter) { panelSocket.sendIfConnected(payload, url) }) {
+                        submissionError = "Unable to send. Your draft is still here"
+                        return@IconButton
                     }
                     messages.add(ChatMessage(
                         id = "user-${System.currentTimeMillis()}",
@@ -683,12 +702,13 @@ fun ChatPanelContent(
                     ))
                     history.cacheDirty = true
                     history.cacheRevision += 1
-                    inputText = ""
+                    draftState.text = ""
+                    draftState.revision++
                     coroutineScope.launch {
                         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1 + if (showOlderHistory) 1 else 0)
                     }
                 },
-                enabled = inputText.isNotBlank() && !awaitingSend && isSocketConnected && (isAcp || bindingState?.canSend != false),
+                enabled = draftState.text.isNotBlank() && !awaitingSend && !draftState.restoring && isSocketConnected && (isAcp || bindingState?.canSend != false),
                 modifier = Modifier.size(36.dp),
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))

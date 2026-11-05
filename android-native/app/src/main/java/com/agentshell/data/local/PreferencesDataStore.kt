@@ -342,6 +342,37 @@ class PreferencesDataStore @Inject constructor(
         }
     }
 
+    /**
+     * Consume a legacy session draft when its native identity first becomes
+     * known. Callers must not use this to move one native conversation's draft
+     * into another. An existing native value, including an explicit empty value,
+     * wins. Uncopied legacy text is removed only if the caller actually observed
+     * that exact value; another view's newer text must remain intact.
+     */
+    suspend fun migrateDraftMessage(
+        fromKey: String,
+        toKey: String,
+        allowLegacy: Boolean,
+        expectedLegacyText: String? = null,
+    ): String? {
+        var selected: String? = null
+        dataStore.edit { prefs ->
+            val source = stringPreferencesKey(fromKey)
+            val target = stringPreferencesKey(toKey)
+            val canonical = prefs[target]
+            if (fromKey == toKey) {
+                selected = canonical
+                return@edit
+            }
+            val legacy = prefs[source]
+            val copyLegacy = canonical == null && allowLegacy && legacy != null
+            selected = canonical ?: legacy.takeIf { copyLegacy }
+            if (copyLegacy) prefs[target] = legacy!!
+            if (copyLegacy || (expectedLegacyText != null && legacy == expectedLegacyText)) prefs.remove(source)
+        }
+        return selected
+    }
+
     suspend fun clearDraftMessageIfMatches(key: String, text: String) {
         dataStore.edit { prefs ->
             val draft = stringPreferencesKey(key)

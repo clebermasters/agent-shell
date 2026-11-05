@@ -119,5 +119,7 @@ class ChatSubmissionStore @Inject constructor(private val preferences: Preferenc
     }
 
     suspend fun savedDraft(key: String) = preferences.getDraftMessage(key)
+    suspend fun migrateSavedDraft(fromKey: String, toKey: String, allowLegacy: Boolean, expectedLegacyText: String? = null): String? =
+        preferences.migrateDraftMessage(fromKey, toKey, allowLegacy, expectedLegacyText)
     suspend fun saveDraft(key: String, text: String) = preferences.setDraftMessage(key, text, keepEmpty = true)
 }

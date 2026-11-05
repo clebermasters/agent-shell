@@ -214,6 +214,18 @@ class ChatViewModel @Inject constructor(
     private var lastConnectionGeneration = -1L
     private val restoredSubmissionDrafts = mutableSetOf<String>()
     private val settledSubmissions = linkedSetOf<String>()
+    private val draftWriter = ChatDraftWriter(
+        persist = { key, text -> dataStore.setDraftMessage(key, text, keepEmpty = true) },
+        onError = { Log.w("ChatDraft", "draft_save_failed") },
+    )
+    private var activeDraftKey: String? = null
+    private var draftRestoreJob: Job? = null
+    private var draftRestoreGeneration = 0L
+    private var draftEditRevision = 0L
+    private var draftVisitRevision = 0L
+    private val restoringDraft = MutableStateFlow(false)
+    private val draftKeyRedirects = mutableMapOf<String, String>()
+    private var sharedDraftKey: String? = null
     private var cacheLoadJob: Job? = null
     private var cacheSaveJob: Job? = null
     private var restoringCache = false
@@ -262,6 +274,7 @@ class ChatViewModel @Inject constructor(
             if (generation != cacheLoadGeneration) return
             if (cached != null) {
                 cachedConversationKey = cached.conversation.conversationKey.takeIf { it.isNotBlank() }
+                cachedConversationKey?.let { reconcileConversationDraft(it, allowLegacy = false) }
                 replaceMessages(cached.messages)
                 oldestCachedPosition = cached.oldestPosition
                 hasOlderCachedMessages = cached.hasMore
@@ -571,7 +584,7 @@ class ChatViewModel @Inject constructor(
                 listOf(readHostServerUrl, state.sessionName, state.windowIndex.toString(), state.isAcp.toString(),
                     state.bindingState?.binding?.id, state.isLoading.toString(), cachedConversationKey)
             }.distinctUntilChanged()
-            combine(submissions.records, scope, submissionScreenActive) { records, _, active -> records to active }.collect { (records, active) ->
+            combine(submissions.records, scope, submissionScreenActive, restoringDraft) { records, _, active, _ -> records to active }.collect { (records, active) ->
                 val state = _uiState.value
                 val ticket = records.firstOrNull { it.serverUrl == readHostServerUrl && it.sessionName == state.sessionName &&
                     it.windowIndex == state.windowIndex && !state.isAcp &&
@@ -579,24 +592,27 @@ class ChatViewModel @Inject constructor(
                 pendingSend = ticket?.takeIf { it.waiting }
                 activeSubmission = ticket
                 _uiState.update { it.copy(isSending = ticket?.waiting == true, submissionNotice = ticket?.notice) }
-                if (ticket != null && active && !restoringCache && ticket.widgetId == null &&
+                if (ticket != null && active && !restoringCache && !restoringDraft.value && ticket.widgetId == null &&
                     !(ticket.phase == "complete" && ticket.success == true) &&
                     state.bindingState?.binding?.id == ticket.bindingId && restoredSubmissionDrafts.add(ticket.id)) {
+                    val revision = draftEditRevision
                     val saved = submissions.savedDraft(ticket.draftKey)
                     _uiState.update { current ->
-                        if (current.bindingState?.binding?.id == ticket.bindingId && current.draftMessage.isBlank() && current.attachedFile == null)
+                        if (canRestoreSubmissionDraft(ticket, current, revision))
                             current.copy(draftMessage = saved ?: if (ticket.draftEdited) "" else ticket.text,
                                 attachedFile = if (!ticket.draftEdited && (saved == null || saved == ticket.text)) ticket.file else null)
                         else current
                     }
                 }
-                if (ticket?.phase != "complete" || !active || restoringCache || state.bindingState?.binding?.id == null || ticket.id in settledSubmissions) return@collect
+                if (ticket?.phase != "complete" || !active || restoringCache || restoringDraft.value || state.bindingState?.binding?.id == null || ticket.id in settledSubmissions) return@collect
                 val same = ticket.bindingId == state.bindingState.binding.id
                 val success = ticket.success == true
                 if (same) {
                     val latest = _uiState.value
                     val matchingDraft = readHostServerUrl == ticket.serverUrl && latest.bindingState?.binding?.id == ticket.bindingId &&
                         ticket.matchesDraft(latest.draftMessage, latest.attachedFile)
+                    if (success && ticket.widgetId == null && matchingDraft) draftEditRevision += 1
+                    val settledDraftRevision = draftEditRevision
                     _uiState.update { current ->
                         val currentConversation = readHostServerUrl == ticket.serverUrl && current.bindingState?.binding?.id == ticket.bindingId
                         val matching = currentConversation && ticket.matchesDraft(current.draftMessage, current.attachedFile)
@@ -608,8 +624,12 @@ class ChatViewModel @Inject constructor(
                         )
                     }
                     if (success) {
-                        if (matchingDraft) submissions.clearSavedDraft(ticket)
-                        if (ticket.widgetId == null && matchingDraft && readHostServerUrl == ticket.serverUrl && _uiState.value.bindingState?.binding?.id == ticket.bindingId) {
+                        if (matchingDraft) {
+                            val revision = draftEditRevision
+                            draftWriter.flush()
+                            if (revision == draftEditRevision) submissions.clearSavedDraft(ticket)
+                        }
+                        if (ticket.widgetId == null && matchingDraft && settledDraftRevision == draftEditRevision && readHostServerUrl == ticket.serverUrl && _uiState.value.bindingState?.binding?.id == ticket.bindingId) {
                             if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = ""
                             clearSharedAttachment()
                         }
@@ -622,6 +642,13 @@ class ChatViewModel @Inject constructor(
                 if (same && success && readHostServerUrl == ticket.serverUrl && _uiState.value.bindingState?.binding?.id == ticket.bindingId) refreshActiveChat("message delivery confirmed")
             }
         }
+    }
+
+    private fun canRestoreSubmissionDraft(ticket: ChatSubmission, current: ChatUiState, revision: Long): Boolean {
+        if (revision != draftEditRevision || readHostServerUrl != ticket.serverUrl) return false
+        if (draftKey(current.sessionName, current.windowIndex) != ticket.draftKey) return false
+        if (current.bindingState?.binding?.id != ticket.bindingId) return false
+        return current.draftMessage.isBlank() && current.attachedFile == null
     }
 
     private fun recoverSubmissions() {
@@ -718,6 +745,10 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching a TMUX chat log. */
     fun watchChatLog(sessionName: String, windowIndex: Int) {
+        activeDraftKey = null
+        draftKeyRedirects.clear()
+        draftEditRevision += 1
+        draftVisitRevision = draftEditRevision
         sendReceiptsAvailable = false
         submissionRecoveryJob?.cancel()
         flushPendingAcpChunk()
@@ -735,6 +766,7 @@ class ChatViewModel @Inject constructor(
                 sessionName = sessionName,
                 windowIndex = windowIndex,
                 isAcp = false,
+                draftMessage = "",
                 agentActivity = AgentActivity(),
                 isLoading = true,
                 isLoadingMore = false,
@@ -757,6 +789,10 @@ class ChatViewModel @Inject constructor(
 
     /** Begin watching an ACP chat session. */
     fun startAcpChat(sessionName: String, cwd: String) {
+        activeDraftKey = null
+        draftKeyRedirects.clear()
+        draftEditRevision += 1
+        draftVisitRevision = draftEditRevision
         sendReceiptsAvailable = false
         submissionRecoveryJob?.cancel()
         flushPendingAcpChunk()
@@ -775,6 +811,7 @@ class ChatViewModel @Inject constructor(
                 sessionName = sessionKey,
                 windowIndex = 0,
                 isAcp = true,
+                draftMessage = "",
                 agentActivity = AgentActivity(),
                 isLoading = true,
                 isLoadingMore = false,
@@ -897,6 +934,7 @@ class ChatViewModel @Inject constructor(
                     val prompt = trimmed.ifEmpty { "[File: ${file.filename}]" }
                     val userMsg = buildUserMessage(prompt)
                     _uiState.value.messages.add(userMsg)
+                    draftEditRevision += 1
                     _uiState.update { it.copy(attachedFile = null, isUploading = false, draftMessage = "") }
                     if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = ""
                     saveDraft(draftKey(state.sessionName, state.windowIndex), "")
@@ -914,6 +952,7 @@ class ChatViewModel @Inject constructor(
 
         if (trimmed.isEmpty()) return
 
+        draftEditRevision += 1
         _uiState.update { it.copy(draftMessage = "") }
         if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = ""
         saveDraft(draftKey(state.sessionName, state.windowIndex), "")
@@ -1010,6 +1049,9 @@ class ChatViewModel @Inject constructor(
         }
         if (newKey != null) cachedConversationKey = newKey
         if (changed && oldKey != null) saveDraft(draftKey(current.sessionName, current.windowIndex), current.draftMessage)
+        // History may already know this conversation from disk while the composer
+        // still belongs to the old session fallback. Reconcile storage separately.
+        if (newKey != null) reconcileConversationDraft(newKey, allowLegacy = oldKey == null)
         _uiState.update { it.copy(bindingState = next, detectedTool = next.tool.ifBlank { it.detectedTool },
             isLoading = false, isLoadingMore = false, error = null,
             pendingPermission = if (changed) null else it.pendingPermission,
@@ -1017,11 +1059,7 @@ class ChatViewModel @Inject constructor(
         if (changed) {
             _uiState.value.messages.clear()
             visitUnreadCursor = null
-            val key = draftKey(current.sessionName, current.windowIndex)
-            val saved = dataStore.getDraftMessage(key)
-            val draft = saved ?: if (oldKey == null) _uiState.value.draftMessage else ""
-            _uiState.update { it.copy(draftMessage = draft, attachedFile = if (oldKey == null) it.attachedFile else null) }
-            if (saved == null && draft.isNotBlank()) dataStore.setDraftMessage(key, draft)
+            if (oldKey != null) _uiState.update { it.copy(attachedFile = null) }
         }
         readTarget?.let { chatActivityRepository.linkConversation(it, next) }
         recoverSubmissions()
@@ -1118,6 +1156,7 @@ class ChatViewModel @Inject constructor(
 
     fun updateDraft(text: String) {
         val state = _uiState.value
+        draftEditRevision += 1
         _uiState.update { it.copy(draftMessage = text) }
         if (navShareId.isNotBlank()) savedStateHandle["share_draft_text"] = text
         saveDraft(draftKey(state.sessionName, state.windowIndex), text)
@@ -1146,10 +1185,12 @@ class ChatViewModel @Inject constructor(
     private fun receiveTranscription(jobId: String, text: String, context: String?) {
         if (!transcriptionReceipt.accept(jobId)) return
         val current = _uiState.value
-        if (context != null && context != draftKey(current.sessionName, current.windowIndex)) {
+        val resolvedContext = context?.let { draftKeyRedirects[it] ?: it }
+        if (resolvedContext != null && resolvedContext != draftKey(current.sessionName, current.windowIndex)) {
             viewModelScope.launch {
-                val original = dataStore.getDraftMessage(context).orEmpty()
-                dataStore.setDraftMessage(context, mergeSharedText(original, text))
+                draftWriter.flush()
+                val original = dataStore.getDraftMessage(resolvedContext).orEmpty()
+                saveDraft(resolvedContext, mergeSharedText(original, text))
             }
             return // A late recording stays with the conversation it was recorded for.
         }
@@ -1195,6 +1236,7 @@ class ChatViewModel @Inject constructor(
     // -------------------------------------------------------------------------
 
     fun attachFile(uri: String, filename: String, mimeType: String, size: Long) {
+        draftEditRevision += 1
         val file = AttachedFile(uri, filename, mimeType, size)
         _uiState.update { it.copy(attachedFile = file) }
         savedStateHandle["share_attachment"] = Json.encodeToString(file)
@@ -1202,6 +1244,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun removeAttachedFile() {
+        draftEditRevision += 1
         _uiState.update { it.copy(attachedFile = null) }
         clearSharedAttachment()
         markSubmissionDraftEdited(_uiState.value.draftMessage, null)
@@ -1211,7 +1254,7 @@ class ChatViewModel @Inject constructor(
         val ticket = (pendingSend ?: activeSubmission)?.takeIf {
             it.serverUrl == readHostServerUrl && it.bindingId == _uiState.value.bindingState?.binding?.id
         } ?: return
-        viewModelScope.launch { submissions.draftEdited(ticket.id, text, file) }
+        draftWriter.afterWrites { submissions.draftEdited(ticket.id, text, file) }
     }
 
     private fun clearSharedAttachment() {
@@ -1219,38 +1262,75 @@ class ChatViewModel @Inject constructor(
         if (navShareId.isNotBlank()) viewModelScope.launch { sharedContentRepository.discard(navShareId) }
     }
 
-    private fun draftKey(sessionName: String, windowIndex: Int): String = _uiState.value.bindingState?.binding?.conversationKey?.let {
+    private fun draftKey(sessionName: String, windowIndex: Int): String = activeDraftKey ?: _uiState.value.bindingState?.binding?.conversationKey?.let {
         "chat_draft_native_${readHostServerUrl.orEmpty()}:$it"
     } ?: "chat_draft_${sessionName}_$windowIndex"
 
     private fun saveDraft(key: String, text: String) {
-        val keepEmpty = _uiState.value.submissionNotice != null || _uiState.value.isSending
-        viewModelScope.launch {
-            dataStore.setDraftMessage(key, text, keepEmpty)
-        }
+        draftWriter.save(key, text)
     }
 
-    private fun restoreDraft(key: String) {
-        viewModelScope.launch {
-            val draft = dataStore.getDraftMessage(key).orEmpty()
-            if (navShareId.isBlank() || savedStateHandle.get<Boolean>("share_applied") == true) {
-                _uiState.update { it.copy(draftMessage = savedStateHandle.get<String>("share_draft_text") ?: draft) }
-                return@launch
-            }
+    private fun reconcileConversationDraft(conversationKey: String, allowLegacy: Boolean) {
+        val current = _uiState.value
+        val previousKey = draftKey(current.sessionName, current.windowIndex)
+        val key = "chat_draft_native_${readHostServerUrl.orEmpty()}:$conversationKey"
+        if (previousKey == key) return
+        val legacy = previousKey.takeUnless { it.startsWith("chat_draft_native_") }
+        if (legacy != null) {
+            draftKeyRedirects[legacy] = key
+            // Fresh input during the initial disk read belongs to this visit,
+            // whereas an old restored fallback must not replace a native draft.
+            if (draftEditRevision != draftVisitRevision) saveDraft(key, current.draftMessage)
+        }
+        restoreDraft(key, legacyKey = legacy, allowLegacy = allowLegacy,
+            fallback = current.draftMessage.takeIf { allowLegacy }.orEmpty(),
+            expectedLegacyText = current.draftMessage)
+    }
+
+    private fun restoreDraft(key: String, legacyKey: String? = null, allowLegacy: Boolean = false,
+        fallback: String = "", expectedLegacyText: String? = null) {
+        draftRestoreJob?.cancel()
+        activeDraftKey = key
+        val generation = ++draftRestoreGeneration
+        val visit = cacheLoadGeneration
+        val server = readHostServerUrl
+        val revision = draftEditRevision
+        val sharedForDraft = navShareId.isNotBlank() && (sharedDraftKey == null || sharedDraftKey == key || sharedDraftKey == legacyKey)
+        if (sharedForDraft) sharedDraftKey = key
+        restoringDraft.value = true
+        fun current() = generation == draftRestoreGeneration && visit == cacheLoadGeneration &&
+            (server == null || server == readHostServerUrl) && activeDraftKey == key && revision == draftEditRevision
+        draftRestoreJob = viewModelScope.launch {
+            var restored: String? = null
             try {
+                draftWriter.flush()
+                val saved = if (legacyKey != null) dataStore.migrateDraftMessage(legacyKey, key, allowLegacy, expectedLegacyText)
+                    else dataStore.getDraftMessage(key)
+                val draft = saved ?: fallback
+                restored = draft
+                if (!current()) return@launch
+                if (!sharedForDraft || savedStateHandle.get<Boolean>("share_applied") == true) {
+                    val text = if (sharedForDraft) savedStateHandle.get<String>("share_draft_text") ?: draft else draft
+                    _uiState.update { it.copy(draftMessage = text) }
+                    if (saved == null && text.isNotEmpty()) saveDraft(key, text)
+                    return@launch
+                }
                 val shared = sharedContentRepository.load(navShareId)
                     ?: throw java.io.IOException("Shared content is no longer available. Please share it again")
+                if (!current()) return@launch
                 val text = mergeSharedText(draft, shared.text)
                 val file = shared.attachment?.let { AttachedFile(it.uri, it.filename, it.mimeType, it.sizeBytes) }
                 _uiState.update { it.copy(draftMessage = text, attachedFile = file) }
                 savedStateHandle["share_applied"] = true
                 savedStateHandle["share_draft_text"] = text
                 file?.let { savedStateHandle["share_attachment"] = Json.encodeToString(it) }
-                dataStore.setDraftMessage(key, text)
+                saveDraft(key, text)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                _uiState.update { it.copy(draftMessage = draft, error = error.message ?: "Unable to restore shared content") }
+                if (current()) _uiState.update { it.copy(draftMessage = restored ?: it.draftMessage, error = error.message ?: "Unable to restore draft") }
+            } finally {
+                if (generation == draftRestoreGeneration) restoringDraft.value = false
             }
         }
     }
@@ -1759,6 +1839,7 @@ class ChatViewModel @Inject constructor(
         chatActivityRepository.setChatOpen(readOwner, null, false)
         chatActivityRepository.setViewing(readOwner, null, false)
         clearPendingAcpChunk()
+        draftWriter.close()
         super.onCleared()
         messageCollectionJob?.cancel()
     }

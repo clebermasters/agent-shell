@@ -10,6 +10,7 @@ import com.agentshell.data.local.AppDatabase
 import com.agentshell.data.local.HostDao
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.ChatBindingState
+import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.ConversationBinding
 import com.agentshell.data.model.Host
 import com.agentshell.data.remote.WebSocketService
@@ -119,13 +120,143 @@ class ChatSubmissionViewModelTest {
     }
     private suspend fun await(condition:suspend ()->Boolean)=withTimeout(10_000) { while(!condition())delay(10) }
 
+    private suspend fun reopenChat():ChatViewModel {
+        val model=model(draft="",restoring=true)
+        withContext(main) { model.watchChatLog(ticket.sessionName,ticket.windowIndex) }
+        await { model.uiState.value.readTrackingReady && !model.uiState.value.isLoading }
+        return model
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun bindChat(model:ChatViewModel,sessionName:String=ticket.sessionName,conversationKey:String=ticket.conversationKey) {
+        val messages=WebSocketService::class.java.getDeclaredField("_messages").run {
+            isAccessible=true;get(socket) as MutableSharedFlow<Map<String,Any?>>
+        }
+        messages.emit(mapOf("type" to "chat-binding","_sourceServerUrl" to ticket.serverUrl,
+            "sessionName" to sessionName,"windowIndex" to ticket.windowIndex,
+            "state" to mapOf("status" to "bound","tool" to "claude","binding" to mapOf(
+                "bindingId" to ticket.bindingId,"conversationId" to "conversation",
+                "conversationKey" to conversationKey,"source" to "hook"))))
+        await { model.uiState.value.bindingState?.let { it.canSend && it.binding?.conversationKey==conversationKey } == true }
+    }
+
+    private suspend fun expectDraft(model:ChatViewModel,expected:String) {
+        val matched=withTimeoutOrNull(2_000) {
+            while(model.uiState.value.draftMessage!=expected)delay(10)
+            true
+        }
+        assertEquals("Expected draft <$expected>, got <${model.uiState.value.draftMessage}>",true,matched)
+    }
+
+    @Test fun returningToACachedConversationRestoresItsUnsentDraftInsteadOfAnOldSessionDraft()=runBlocking<Unit> {
+        preferences.setDraftMessage("chat_draft_fixture_0","A very old sent prompt")
+        preferences.setDraftMessage(ticket.draftKey,"My next unsent message")
+        cache.saveHistory(ChatTarget.create(host.id,ticket.sessionName,0,false),emptyList(),true,ticket.conversationKey)
+        val reopened=reopenChat();bindChat(reopened)
+        expectDraft(reopened,"My next unsent message")
+    }
+
+    @Test fun returningAfterSuccessfulDeliveryDoesNotResurrectAnOlderSessionPrompt()=runBlocking<Unit> {
+        preferences.setDraftMessage("chat_draft_fixture_0","A very old sent prompt")
+        preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket)
+        val first=model();await { first.uiState.value.isSending }
+        receipt();await { first.uiState.value.draftMessage.isEmpty() }
+        await { preferences.getDraftMessage(ticket.draftKey)==null }
+        withContext(main) { models.first().clear() }
+        cache.saveHistory(ChatTarget.create(host.id,ticket.sessionName,0,false),emptyList(),true,ticket.conversationKey)
+        val reopened=reopenChat();bindChat(reopened)
+        expectDraft(reopened,"")
+    }
+
+    @Test fun firstConversationBindingKeepsAnUnsentSessionDraftButRetiresItsOldKey()=runBlocking<Unit> {
+        preferences.setDraftMessage("chat_draft_fixture_0","A message I have not sent")
+        val reopened=reopenChat();bindChat(reopened)
+        expectDraft(reopened,"A message I have not sent")
+        await { preferences.getDraftMessage(ticket.draftKey)=="A message I have not sent" }
+        assertNull("The session fallback must not resurrect this draft after a later send",
+            preferences.getDraftMessage("chat_draft_fixture_0"))
+    }
+
+    @Test fun anOfflineCachedChatRestoresItsUnsentNativeDraftWithoutWaitingForALiveBinding()=runBlocking<Unit> {
+        preferences.setDraftMessage("chat_draft_fixture_0","A very old sent prompt")
+        preferences.setDraftMessage(ticket.draftKey,"Unsent while offline")
+        cache.saveHistory(ChatTarget.create(host.id,ticket.sessionName,0,false),emptyList(),true,ticket.conversationKey)
+        val reopened=reopenChat()
+        expectDraft(reopened,"Unsent while offline")
+        assertFalse(socket.isConnected)
+        assertFalse(reopened.uiState.value.bindingState?.canSend==true)
+    }
+
+    @Test fun anExplicitlyEmptyNativeDraftWinsOverAnOldSessionPrompt()=runBlocking<Unit> {
+        preferences.setDraftMessage("chat_draft_fixture_0","A very old sent prompt")
+        preferences.setDraftMessage(ticket.draftKey,"",keepEmpty=true)
+        cache.saveHistory(ChatTarget.create(host.id,ticket.sessionName,0,false),emptyList(),true,ticket.conversationKey)
+        val reopened=reopenChat();bindChat(reopened)
+        withContext(main) { }
+        expectDraft(reopened,"")
+        assertEquals("",preferences.getDraftMessage(ticket.draftKey))
+    }
+
+    @Test fun typingDuringInitialRestorationSurvivesBindingAndAnotherVisit()=runBlocking<Unit> {
+        preferences.setDraftMessage("chat_draft_fixture_0","A very old sent prompt")
+        cache.saveHistory(ChatTarget.create(host.id,ticket.sessionName,0,false),emptyList(),true,ticket.conversationKey)
+        val first=model(draft="")
+        withContext(main) {
+            first.watchChatLog(ticket.sessionName,0)
+            first.updateDraft("Typing my next message")
+        }
+        await { first.uiState.value.readTrackingReady && !first.uiState.value.isLoading }
+        bindChat(first)
+        await { preferences.getDraftMessage(ticket.draftKey)=="Typing my next message" }
+        expectDraft(first,"Typing my next message")
+        withContext(main) { models.first().clear() }
+        val reopened=reopenChat();bindChat(reopened)
+        expectDraft(reopened,"Typing my next message")
+    }
+
+    @Test fun leavingImmediatelyAfterEditingStillPersistsTheUnsentDraft()=runBlocking<Unit> {
+        val first=model()
+        withContext(main) { first.updateDraft("Keep this unsent message");models.first().clear() }
+        await { preferences.getDraftMessage(ticket.draftKey)=="Keep this unsent message" }
+        cache.saveHistory(ChatTarget.create(host.id,ticket.sessionName,0,false),emptyList(),true,ticket.conversationKey)
+        val reopened=reopenChat();bindChat(reopened)
+        expectDraft(reopened,"Keep this unsent message")
+    }
+
+    @Test fun watchingAnotherChatDoesNotCarryThePreviousComposersDraftIntoIt()=runBlocking<Unit> {
+        val model=model()
+        withContext(main) {
+            model.updateDraft("Unsent in the first chat")
+            model.watchChatLog("other-chat",0)
+        }
+        await { model.uiState.value.readTrackingReady && !model.uiState.value.isLoading }
+        bindChat(model,sessionName="other-chat",conversationKey="native:other")
+        expectDraft(model,"")
+        await { preferences.getDraftMessage(ticket.draftKey)=="Unsent in the first chat" }
+        assertNull(preferences.getDraftMessage("chat_draft_native_${ticket.serverUrl}:native:other"))
+    }
+
+    @Test fun changingNativeConversationsKeepsBothDraftsAndRepeatedBindingsKeepNewTyping()=runBlocking<Unit> {
+        val nextKey="chat_draft_native_${ticket.serverUrl}:native:other"
+        preferences.setDraftMessage(nextKey,"Other conversation's unsent message")
+        val model=model()
+        withContext(main) { model.updateDraft("First conversation's unsent message") }
+        bindChat(model,conversationKey="native:other")
+        expectDraft(model,"Other conversation's unsent message")
+        await { preferences.getDraftMessage(ticket.draftKey)=="First conversation's unsent message" }
+        withContext(main) { model.updateDraft("New typing in the other conversation") }
+        bindChat(model,conversationKey="native:other")
+        await { preferences.getDraftMessage(nextKey)=="New typing in the other conversation" }
+        expectDraft(model,"New typing in the other conversation")
+    }
+
     @Test fun acknowledgementDuringCacheRestorationIsRetainedAndSettledAfterTheCacheFinishes()=runBlocking<Unit> {
         preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket)
         val model=model(restoring=true);await { model.uiState.value.isSending }
         receipt()
-        val completed=withTimeoutOrNull(10_000) { submissions.records.first { it.single().phase=="complete" } }
-        val logs=org.robolectric.shadows.ShadowLog.getLogsForTag("ChatViewModel").takeLast(6).map { it.msg }
-        assertNotNull("Receipt was not stored: records=${submissions.records.first()}, logs=$logs",completed)
+        // Observe committed snapshots through the same bounded helper used by
+        // the fixture's other real Room/DataStore I/O assertions.
+        await { submissions.records.first().any { it.id==ticket.id && it.phase=="complete" && it.success==true } }
         assertEquals(ticket.text,model.uiState.value.draftMessage)
         withContext(main) { field(model,"restoringCache",false);state(model).value=state(model).value.copy(isLoading=false) }
         await { model.uiState.value.draftMessage.isEmpty() }
@@ -158,8 +289,7 @@ class ChatSubmissionViewModelTest {
         val model=model();await { model.uiState.value.isSending }
         withContext(main) { state(model).value=state(model).value.copy(bindingState=binding.copy(binding=binding.binding!!.copy(id="new-binding",conversationKey="new-conversation"))) }
         await { !model.uiState.value.isSending };receipt()
-        val settled=withTimeoutOrNull(10_000) { submissions.records.first { rows -> rows.none { it.id==ticket.id && it.phase!="complete" } } }
-        assertNotNull("Old receipt was not recorded; records=${submissions.records.first()} state=${model.uiState.value.bindingState}",settled)
+        await { submissions.records.first().any { it.id==ticket.id && it.phase=="complete" && it.success==true } }
         assertEquals(ticket.text,model.uiState.value.draftMessage)
         assertEquals(ticket.text,preferences.getDraftMessage(ticket.draftKey))
     }
@@ -168,7 +298,7 @@ class ChatSubmissionViewModelTest {
         preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket)
         val first=model();await { first.uiState.value.isSending }
         withContext(main) { first.updateDraft("") }
-        withTimeout(10_000) { submissions.records.first { it.single().draftEdited } }
+        await { submissions.records.first().any { it.id==ticket.id && it.draftEdited } }
         submissions.checking(ticket.id)
         assertEquals("",first.uiState.value.draftMessage)
         withContext(main) { models.first().clear() }
@@ -198,11 +328,23 @@ class ChatSubmissionViewModelTest {
         receipt();await { first.uiState.value.draftMessage.isEmpty() }
         withTimeout(10_000) { while(preferences.getDraftMessage(ticket.draftKey)!=null)delay(10) }
         withContext(main) { first.updateDraft(ticket.text) }
-        withTimeout(10_000) { submissions.records.first { it.single().draftEdited } }
+        await { submissions.records.first().any { it.id==ticket.id && it.draftEdited } }
         withContext(main) { models.first().clear() }
         val restored=model(draft=ticket.text)
         delay(100)
         assertEquals(ticket.text,restored.uiState.value.draftMessage)
+        assertEquals(ticket.text,preferences.getDraftMessage(ticket.draftKey))
+    }
+
+    @Test fun pastingTheSamePromptAndImmediatelyLeavingKeepsItAsANewUnsentDraft()=runBlocking<Unit> {
+        preferences.setDraftMessage(ticket.draftKey,ticket.text);submissions.begin(ticket)
+        val first=model();await { first.uiState.value.isSending }
+        receipt();await { first.uiState.value.draftMessage.isEmpty() }
+        await { preferences.getDraftMessage(ticket.draftKey)==null }
+        withContext(main) { first.updateDraft(ticket.text);models.first().clear() }
+        cache.saveHistory(ChatTarget.create(host.id,ticket.sessionName,0,false),emptyList(),true,ticket.conversationKey)
+        val reopened=reopenChat();bindChat(reopened)
+        expectDraft(reopened,ticket.text)
         assertEquals(ticket.text,preferences.getDraftMessage(ticket.draftKey))
     }
 

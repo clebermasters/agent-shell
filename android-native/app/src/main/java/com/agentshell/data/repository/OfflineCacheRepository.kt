@@ -1,10 +1,15 @@
 package com.agentshell.data.repository
 
 import android.util.Log
+import com.agentshell.core.diagnostics.BatteryDiagnostics
+import com.agentshell.core.diagnostics.DiagnosticSocketRole
+import com.agentshell.core.power.BackgroundWorkPolicy
+import com.agentshell.core.power.BackgroundWorkState
 import androidx.room.withTransaction
 import com.agentshell.data.local.AppDatabase
 import com.agentshell.data.local.CachedChatMessage
 import com.agentshell.data.local.CachedHistorySync
+import com.agentshell.data.local.ArchiveSyncWork
 import com.agentshell.data.local.CachedConversation
 import com.agentshell.data.local.CachedSession
 import com.agentshell.data.model.AcpSession
@@ -51,7 +56,11 @@ class OfflineCacheRepository @Inject constructor(
     private val webSocket: WebSocketService,
     private val client: OkHttpClient,
     private val attachments: OfflineAttachmentStore,
+    private val workPolicy: BackgroundWorkPolicy,
 ) {
+    constructor(database: AppDatabase, hosts: HostRepository, webSocket: WebSocketService,
+        client: OkHttpClient, attachments: OfflineAttachmentStore) : this(database, hosts, webSocket, client, attachments, BackgroundWorkPolicy())
+
     private val dao = database.offlineCacheDao()
     private val json = Json { ignoreUnknownKeys = true }
     // Cache serialization/backfill must not occupy the whole shared IO pool while
@@ -60,6 +69,19 @@ class OfflineCacheRepository @Inject constructor(
     private val foregroundReads = Dispatchers.IO.limitedParallelism(2)
     private val scope = CoroutineScope(SupervisorJob() + cacheDispatcher)
     private val syncRequests = Channel<Unit>(Channel.CONFLATED)
+    private val syncScheduler = ArchiveSyncScheduler(object : ArchiveSyncScheduler.Store {
+        override suspend fun get(key: String) = dao.archiveSyncWork(key)
+        override suspend fun put(work: ArchiveSyncWork) = dao.saveArchiveSyncWork(work)
+        override suspend fun next(hostId: String, now: Long, preferredKey: String?) = dao.nextArchiveSyncWork(hostId, now, preferredKey)
+    })
+    private val requestBudget = ArchiveRequestBudget({ workPolicy.state.value.let { it.foreground && it.interactive } })
+    private val budgetedSockets = java.util.concurrent.ConcurrentHashMap<SessionSocket, String>()
+    private val reservedUnwatch = java.util.concurrent.ConcurrentHashMap.newKeySet<SessionSocket>()
+    @Volatile private var foregroundTargetKey: String? = null
+    private data class ArchiveConnection(val host: Host?, val status: ConnectionStatus, val generation: Long, val policy: BackgroundWorkState, val automaticAllowed: Boolean)
+    @kotlinx.serialization.Serializable
+    private data class LegacyArchiveCursor(val conversationKey: String? = null, val totalCount: Int? = null,
+        val newestMessageId: String? = null, val reconcile: Boolean = false)
     private data class HistoryWrite(val target: ChatTarget, val messages: List<ChatMessage>, val complete: Boolean, val conversationKey: String?, val tool: String?)
     private data class PendingHistoryWrite(var authoritative: HistoryWrite? = null, var latest: HistoryWrite? = null)
     private val pendingWriteLock = Any()
@@ -115,26 +137,28 @@ class OfflineCacheRepository @Inject constructor(
             }
         }
         scope.launch {
-            combine(hosts.getSelectedHost().distinctUntilChangedBy { it?.id to it?.wsUrl }, webSocket.connectionStatus) { host, status -> host to status }
-                .collectLatest { (host, status) ->
-                    if (host == null || status != ConnectionStatus.CONNECTED) return@collectLatest
+            sessions.collect { snapshot ->
+                if (snapshot.hostId != null) {
+                    seedArchiveWork(snapshot)
+                    syncRequests.trySend(Unit)
+                }
+            }
+        }
+        scope.launch {
+            combine(hosts.getSelectedHost().distinctUntilChangedBy { it?.id to it?.wsUrl }, webSocket.connectionStatus,
+                webSocket.connectionGeneration, workPolicy.state, workPolicy.automaticNetworkingAllowed) { host, status, generation, policy, automatic -> ArchiveConnection(host, status, generation, policy, automatic) }
+                .collectLatest { (host, status, _, policy, automatic) ->
+                    if (host == null || status != ConnectionStatus.CONNECTED || !policy.connected || !automatic) return@collectLatest
                     if (webSocket.currentWebSocketUrl?.substringBefore('?') != "${host.wsUrl}/ws") return@collectLatest
-                    // Each refresh has its own read-only socket: never replace the UI's watch.
                     coroutineScope {
                         launch {
                             while (isActive) {
                                 webSocket.send(mapOf("type" to "list-sessions"))
                                 webSocket.send(mapOf("type" to "acp-list-sessions"))
-                                syncRequests.trySend(Unit)
-                                delay(60_000)
+                                delay(if (policy.foreground && policy.interactive) 60_000 else 300_000)
                             }
                         }
-                        syncRequests.receiveAsFlow().collect {
-                            // Let startup/navigation frames run before beginning backfill.
-                            delay(1_500)
-                            val snapshot = sessions.first { it.hostId == host.id }
-                            syncHost(host, snapshot)
-                        }
+                        runArchiveWorker(host)
                     }
                 }
         }
@@ -166,11 +190,17 @@ class OfflineCacheRepository @Inject constructor(
         val previous = dao.observeSessions(hostId).first().filter { it.kind == kind }
         if (previous != rows) {
             dao.replaceSessions(hostId, kind, rows)
+            val names = rows.mapTo(hashSetOf()) { if (kind == "acp") it.sessionId.removePrefix("acp_") else it.sessionId }
+            for (pending in dao.archiveSyncWorkForHost(hostId)) {
+                val target = decode<ChatTarget>(pending.targetJson) ?: continue
+                if (target.isAcp == (kind == "acp") && target.sessionName !in names) dao.deleteArchiveSyncWork(pending.workKey)
+            }
             syncRequests.trySend(Unit)
         }
     }
 
     suspend fun history(target: ChatTarget): CachedHistory? = withContext(cacheDispatcher) {
+        foregroundTargetKey = target.key
         database.withTransaction {
             val meta = dao.conversation(target.key) ?: return@withTransaction null
             CachedHistory(meta, dao.messages(target.key).mapNotNull { decode<ChatMessage>(it.payload) })
@@ -184,6 +214,7 @@ class OfflineCacheRepository @Inject constructor(
         limit: Int = 100,
         beforeMessageId: String? = null,
     ): CachedHistoryPage? = withContext(foregroundReads) {
+        foregroundTargetKey = target.key
         require(limit > 0)
         val snapshot = dao.historyWindow(target.key, beforePosition, beforeMessageId, limit + 1)
         val first = snapshot.firstOrNull() ?: return@withContext null
@@ -203,6 +234,11 @@ class OfflineCacheRepository @Inject constructor(
     ) {
         recordHistoryUpdate(target.key, complete, conversationKey)
         saveHistoryWindow(target, messages, complete, conversationKey, tool)
+        // A live write that exposes a gap needs only this target's catch-up.
+        if (complete || dao.conversation(target.key)?.complete == false) {
+            syncScheduler.invalidate(target.key)
+            syncRequests.trySend(Unit)
+        }
     }
 
     private suspend fun saveHistoryWindow(
@@ -345,87 +381,142 @@ class OfflineCacheRepository @Inject constructor(
         if (changed.isNotEmpty()) dao.insertMessages(changed)
     }
 
-    private suspend fun syncHost(host: Host, snapshot: CachedSessionList) {
+    private fun work(target: ChatTarget, kind: String, hint: String) = ArchiveSyncWork(
+        if (kind == "windows") "${target.key}:windows" else target.key,
+        target.hostId, json.encodeToString(target), kind, hint,
+    )
+
+    private suspend fun seedArchiveWork(snapshot: CachedSessionList) {
+        val hostId = snapshot.hostId ?: return
+        for (session in snapshot.tmux) {
+            val hint = "${session.created.orEmpty()}:${session.windows}"
+            syncScheduler.seed(work(ChatTarget.create(hostId, session.name), "windows", hint), snapshot.windows.containsKey(session.name))
+            for (index in snapshot.windows[session.name].orEmpty()) {
+                seedHistoryWork(ChatTarget.create(hostId, session.name, index), session.created.orEmpty())
+            }
+        }
+        for (session in snapshot.acp) {
+            seedHistoryWork(ChatTarget.create(hostId, session.sessionId, isAcp = true, cwd = session.cwd), session.updatedAt)
+        }
+    }
+
+    private suspend fun seedHistoryWork(target: ChatTarget, hint: String) {
+        syncScheduler.seed(work(target, "history", hint), complete = false)
+    }
+
+    private suspend fun runArchiveWorker(host: Host) {
         val url = webSocket.currentWebSocketUrl ?: return
-        if (url.substringBefore('?') != "${host.wsUrl}/ws") return
-        val socket = SessionSocket(client)
+        var socket: SessionSocket? = null
+        var protocolGeneration = -1L
+        var incremental = false
+        fun closeSocket() {
+            socket?.let {
+                budgetedSockets.remove(it)
+                reservedUnwatch.remove(it)
+                it.dispose()
+                BatteryDiagnostics.event("cache_sync_finished")
+            }
+            socket = null
+            protocolGeneration = -1L
+        }
         try {
-            socket.connect(url)
-            withTimeout(20_000) { socket.isConnected.first { it } }
-            val incremental = supportsIncrementalSync(socket)
-            for (session in snapshot.tmux) {
-                try {
-                    val windows = request(socket, mapOf("type" to "list-windows", "sessionName" to session.name)) {
-                        it["type"] == "windows-list" && it["sessionName"] == session.name
+            while (currentCoroutineContext().isActive) {
+                if (webSocket.currentWebSocketUrl != url) return
+                val budgetWait = requestBudget.availableInMillis()
+                if (budgetWait > 0) {
+                    closeSocket()
+                    withTimeoutOrNull(budgetWait) { syncRequests.receive() }
+                    continue
+                }
+                val next = syncScheduler.next(host.id, foregroundTargetKey.takeIf { workPolicy.state.value.foreground })
+                if (next == null) {
+                    val wait = ((dao.nextArchiveSyncDue(host.id) ?: (System.currentTimeMillis() + 60_000)) - System.currentTimeMillis())
+                        .coerceIn(10L, 60_000L)
+                    if (wait > 2_000) closeSocket()
+                    withTimeoutOrNull(wait) { syncRequests.receive() }
+                    continue
+                }
+                val target = decode<ChatTarget>(next.targetJson)
+                if (target == null || target.hostId != host.id) {
+                    dao.deleteArchiveSyncWork(next.workKey)
+                    continue
+                }
+                val result = try {
+                    val active = socket ?: SessionSocket(client, DiagnosticSocketRole.OFFLINE_SYNC).also {
+                        socket = it
+                        budgetedSockets[it] = url
+                        BatteryDiagnostics.event("cache_sync_started")
+                        it.connect(url)
+                        withTimeout(20_000) { it.isConnected.first { connected -> connected } }
                     }
-                    val indexes = (windows["windows"] as? List<*>).orEmpty().mapNotNull { ((it as? Map<*, *>)?.get("index") as? Number)?.toInt() }
-                    if (snapshot.windows[session.name] != indexes) {
-                        dao.insertSessions(listOf(CachedSession(host.id, "windows", session.name, 0, json.encodeToString(indexes))))
-                    }
-                    for (index in indexes) {
-                        try {
-                            val target = ChatTarget.create(host.id, session.name, index)
-                            if (incremental) syncHistoryIncremental(socket, target) else syncHistory(socket, target)
+                    if (next.kind == "windows") {
+                        val response = request(active, mapOf("type" to "list-windows", "sessionName" to target.sessionName)) {
+                            it["type"] == "windows-list" && it["sessionName"] == target.sessionName
                         }
-                        catch (error: Exception) {
-                            if (error is CancellationException && error !is TimeoutCancellationException) throw error
-                            Log.w("OfflineCache", "History refresh deferred for a terminal window", error)
+                        val indexes = (response["windows"] as? List<*>).orEmpty().mapNotNull { ((it as? Map<*, *>)?.get("index") as? Number)?.toInt() }
+                        dao.insertSessions(listOf(CachedSession(host.id, "windows", target.sessionName, 0, json.encodeToString(indexes))))
+                        for (index in indexes) seedHistoryWork(target.copy(windowIndex = index), next.sourceHint.substringBeforeLast(':'))
+                        // Old-window archives stay on disk, but unavailable windows need no polling task.
+                        for (pending in dao.archiveSyncWorkForHost(host.id)) {
+                            val old = decode<ChatTarget>(pending.targetJson) ?: continue
+                            if (pending.kind == "history" && !old.isAcp && old.sessionName == target.sessionName && old.windowIndex !in indexes) {
+                                dao.deleteArchiveSyncWork(pending.workKey)
+                            }
                         }
-                        if (incremental) yield() else delay(150)
+                        ArchiveSyncResult.Complete
+                    } else {
+                        if (protocolGeneration != active.connectionGeneration.value) {
+                            incremental = supportsIncrementalSync(active)
+                            protocolGeneration = active.connectionGeneration.value
+                        }
+                        if (incremental) syncHistoryIncremental(active, target) else syncHistory(active, target)
                     }
+                } catch (_: ArchiveBudgetPause) {
+                    closeSocket()
+                    ArchiveSyncResult.Continue
                 } catch (error: Exception) {
                     if (error is CancellationException && error !is TimeoutCancellationException) throw error
-                    Log.w("OfflineCache", "History refresh deferred for a terminal session", error)
+                    BatteryDiagnostics.event("cache_sync_failed")
+                    Log.w("OfflineCache", "Archive target refresh deferred", error)
+                    closeSocket()
+                    ArchiveSyncResult.Retry()
                 }
+                syncScheduler.finish(next, result)
+                yield()
             }
-            for (session in snapshot.acp) {
-                try {
-                    val target = ChatTarget.create(host.id, session.sessionId, isAcp = true, cwd = session.cwd)
-                    if (incremental) syncHistoryIncremental(socket, target) else syncHistory(socket, target)
-                }
-                catch (error: Exception) {
-                    if (error is CancellationException && error !is TimeoutCancellationException) throw error
-                    Log.w("OfflineCache", "History refresh deferred for a direct session", error)
-                }
-                if (incremental) yield() else delay(150)
-            }
-        } catch (error: Exception) {
-            if (error is CancellationException && error !is TimeoutCancellationException) throw error
-            Log.w("OfflineCache", "Offline history refresh deferred", error)
-        } finally { socket.dispose() }
+        } finally { closeSocket() }
     }
 
     private suspend fun supportsIncrementalSync(socket: SessionSocket): Boolean = try {
-        withTimeout(1_500) {
-            request(socket, mapOf("type" to "get-history-sync-capabilities")) {
+            request(socket, mapOf("type" to "get-history-sync-capabilities"), timeoutMillis = 1_500) {
                 it["type"] == "history-sync-capabilities" || it["type"] == "error"
             }.let { (it["version"] as? Number)?.toInt() == 1 }
-        }
     } catch (error: Exception) {
+        if (error is ArchiveBudgetPause) throw error
         if (error is CancellationException && error !is TimeoutCancellationException) throw error
         false
     }
 
     /** Fetch finite disk-backed snapshots; never establish live archive watchers. */
-    internal suspend fun syncHistoryIncremental(socket: SessionSocket, target: ChatTarget) {
+    internal suspend fun syncHistoryIncremental(socket: SessionSocket, target: ChatTarget): ArchiveSyncResult {
         val session = if (target.isAcp) "acp_${target.sessionName}" else target.sessionName
         val requestId = java.util.UUID.randomUUID().toString()
         val state = request(socket, mapOf("type" to "get-history-state", "requestId" to requestId,
             "sessionName" to session, "windowIndex" to target.windowIndex)) { it["type"] == "history-state" && it["requestId"] == requestId }
-        if (state["available"] != true) return // An unavailable source never erases a local archive.
-        val currentRevision = state["revision"] as? String ?: return
+        if (state["available"] != true) return ArchiveSyncResult.Retry(ArchiveSyncScheduler.COMPLETE_CHECK_INTERVAL_MS)
+        val currentRevision = state["revision"] as? String ?: return ArchiveSyncResult.Retry()
         val existing = database.withTransaction { dao.historySync(target.key) to dao.conversation(target.key) }
-        if (existing.first?.revision == currentRevision && existing.first?.complete == true && existing.second?.complete == true) return
+        if (existing.first?.revision == currentRevision && existing.first?.complete == true && existing.second?.complete == true) return ArchiveSyncResult.Complete
         // Finish a pinned snapshot before catching up with concurrent appends.
         // A busy conversation must not restart its oldest-page download forever.
-        var progress = existing.first?.takeIf { it.revision == currentRevision || !it.complete }
+        var progress = existing.first?.takeIf { !it.revision.startsWith("legacy:") && (it.revision == currentRevision || !it.complete) }
             ?: CachedHistorySync(target.key, currentRevision,
                 baseRevision = existing.first?.takeIf { it.complete && it.keyed }?.revision)
         val revision = progress.revision
         val localRevision = historyRevision(target.key)
         val conversationKey = state["conversationKey"] as? String
         repeat(4) {
-            if (historyRevision(target.key) != localRevision) return
+            if (historyRevision(target.key) != localRevision) return ArchiveSyncResult.Continue
             val id = java.util.UUID.randomUUID().toString()
             val command = mapOf("type" to "get-history-page", "requestId" to id,
                 "sessionName" to session, "windowIndex" to target.windowIndex, "revision" to revision,
@@ -438,12 +529,13 @@ class OfflineCacheRepository @Inject constructor(
             if (page["error"] != null || page["revision"] != revision) {
                 if (revision != currentRevision && page["error"]?.toString()?.contains("changed", ignoreCase = true) == true) {
                     dao.saveHistorySync(CachedHistorySync(target.key, currentRevision))
-                    syncRequests.trySend(Unit)
+                    return ArchiveSyncResult.Continue
                 }
-                return
+                return ArchiveSyncResult.Retry()
             }
+            if (!validArchivePage(page)) return ArchiveSyncResult.Retry()
             @Suppress("UNCHECKED_CAST")
-            fun entries(page: Map<String, Any?>) = (page["entries"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }
+            fun entries(page: Map<String, Any?>) = (page["entries"] as? List<*>)?.map { it as Map<String, Any?> }
             var entries = entries(page)
             var known = entries?.mapNotNull { it["key"] as? String }?.chunked(400)?.flatMap {
                 dao.serverMessagesByKeys(target.key, it)
@@ -452,7 +544,8 @@ class OfflineCacheRepository @Inject constructor(
                 // A local edit or missing base snapshot can invalidate elision.
                 // Re-fetch this finite page with all bodies before acknowledging it.
                 page = fetch(command + mapOf("requestId" to java.util.UUID.randomUUID().toString(), "baseRevision" to null))
-                if (page["error"] != null || page["revision"] != revision) return
+                if (page["error"] != null || page["revision"] != revision) return ArchiveSyncResult.Retry()
+                if (!validArchivePage(page)) return ArchiveSyncResult.Retry()
                 entries = entries(page)
                 known = emptyMap()
             }
@@ -460,11 +553,11 @@ class OfflineCacheRepository @Inject constructor(
                 @Suppress("UNCHECKED_CAST")
                 (entry["message"] as? Map<String, Any?>)?.let { ChatMessageParser.parse(it) }?.let { (entry["key"] as String) to it }
             }.toMap()
-            val messages = if (entries == null) parseMessages(page) else downloaded.values.toList()
+            val messages = if (entries == null) parseMessages(page) ?: return ArchiveSyncResult.Retry() else downloaded.values.toList()
             val count = entries?.size ?: messages.size
             val hasMore = page["hasMore"] == true
-            if (hasMore && count == 0) return
-            if (entries?.any { it["key"] !in downloaded && it["key"] !in known } == true) return
+            if (hasMore && count == 0) return ArchiveSyncResult.Retry()
+            if (entries?.any { it["key"] !in downloaded && it["key"] !in known } == true) return ArchiveSyncResult.Retry()
             saveHistoryWindow(target, messages, false, conversationKey, page["tool"] as? String,
                 beforeMessageId = if (entries == null) progress.beforeMessageId else null, expectedRevision = localRevision)
             val next = progress.copy(offset = progress.offset + count,
@@ -489,19 +582,17 @@ class OfflineCacheRepository @Inject constructor(
                 dao.saveHistorySync(next)
                 true
             }
-            if (!committed) return
+            if (!committed) return ArchiveSyncResult.Continue
             if (!hasMore) {
-                if (revision != currentRevision) syncRequests.trySend(Unit)
-                return
+                return if (revision != currentRevision) ArchiveSyncResult.Continue else ArchiveSyncResult.Complete
             }
             progress = next
             delay(100)
         }
-        // A conflated continuation lets other conversations and live UI work run.
-        syncRequests.trySend(Unit)
+        return ArchiveSyncResult.Continue
     }
 
-    private suspend fun syncHistory(socket: SessionSocket, target: ChatTarget) {
+    internal suspend fun syncHistory(socket: SessionSocket, target: ChatTarget): ArchiveSyncResult {
         val sessionName = if (target.isAcp) "acp_${target.sessionName}" else target.sessionName
         // The usual refresh only needs a small head page. A larger page size is
         // reserved for backfilling a newly discovered gap or the initial cache.
@@ -514,7 +605,7 @@ class OfflineCacheRepository @Inject constructor(
             val known = knownConversationKeys[target.key]
             known == null || known == baselineKey
         }
-        if (!readyToSync) return // A queued conversation switch must be written first.
+        if (!readyToSync) return ArchiveSyncResult.Continue
         val revision = historyRevision(target.key)
         fun matches(message: Map<String, Any?>): Boolean =
             message["sessionName"] == sessionName && (message["windowIndex"] as? Number)?.toInt() == target.windowIndex
@@ -522,55 +613,108 @@ class OfflineCacheRepository @Inject constructor(
             (it["type"] == "chat-history" && matches(it)) || it["type"] == "chat-log-error" ||
                 (it["type"] == "chat-binding" && matches(it) && (it["state"] as? Map<*, *>)?.get("status") in setOf("required", "unavailable", "unsupported"))
         }
-        if (response["type"] != "chat-history") return
+        if (response["type"] != "chat-history") {
+            socket.send(mapOf("type" to "unwatch-chat-log"))
+            reservedUnwatch.remove(socket)
+            return ArchiveSyncResult.Retry()
+        }
         val bindingId = response["bindingId"] as? String
         val conversationKey = response["conversationKey"] as? String
         val tool = response["tool"] as? String
-        var page = parseMessages(response)
+        var page = parseMessages(response) ?: run {
+            socket.send(mapOf("type" to "unwatch-chat-log")); reservedUnwatch.remove(socket)
+            return ArchiveSyncResult.Retry()
+        }
+        val previousProgress = dao.historySync(target.key)?.takeIf { it.revision.startsWith("legacy:") }
+        val previousCursor = previousProgress?.baseRevision?.let { decode<LegacyArchiveCursor>(it) }
+        val total = (response["totalCount"] as? Number)?.toInt()?.takeIf { it >= 0 }
+        val sourceShrank = total != null && previousCursor?.totalCount?.let { total < it } == true
+        val previousHeadIndex = page.indexOfFirst { it.id == previousCursor?.newestMessageId }
+        val overlapGrowth = previousHeadIndex.takeIf { it >= 0 }?.let { page.size - it - 1 }
+        val sameConversation = previousCursor != null && previousCursor.conversationKey == conversationKey &&
+            (!conversationKey.isNullOrBlank() || overlapGrowth != null)
+        val growth = if (sameConversation && total != null && previousCursor?.totalCount != null && !sourceShrank)
+            total - previousCursor.totalCount else overlapGrowth
+        val resumed = previousProgress?.takeIf { !it.complete && sameConversation && !sourceShrank && growth != null }
+        val passRevision = resumed?.revision ?: "legacy:${java.util.UUID.randomUUID()}"
+        var cursor = LegacyArchiveCursor(conversationKey, total, page.lastOrNull()?.id,
+            sourceShrank || (resumed != null && previousCursor?.reconcile == true))
+        suspend fun saveLegacyProgress(offset: Int, before: String?, complete: Boolean) {
+            dao.saveHistorySync(CachedHistorySync(target.key, passRevision, offset, before, complete,
+                baseRevision = json.encodeToString(cursor)))
+        }
+        suspend fun markLegacyMessages(messages: List<ChatMessage>) {
+            for (ids in messages.map { it.id }.chunked(400)) dao.markSyncedMessages(target.key, ids, passRevision)
+        }
+        suspend fun completeLegacyPass() {
+            database.withTransaction {
+                if (historyRevision(target.key) != revision) return@withTransaction
+                dao.removeUnsyncedMessages(target.key, passRevision)
+                dao.conversation(target.key)?.let { dao.insertConversation(it.copy(complete = true)) }
+            }
+        }
         val baselineContinuous = baseline.first?.complete == true &&
             (conversationKey == null || baseline.first?.conversationKey == conversationKey)
         val baselineTail = baseline.second?.takeIf { baselineContinuous }
         try {
-            if (historyRevision(target.key) != revision) return
+            if (historyRevision(target.key) != revision) return ArchiveSyncResult.Continue
+            if (response["hasMore"] !is Boolean) {
+                saveHistoryWindow(target, page, complete = false, conversationKey, tool, expectedRevision = revision)
+                return ArchiveSyncResult.Retry(ArchiveSyncScheduler.COMPLETE_CHECK_INTERVAL_MS)
+            }
             if (response["hasMore"] != true) {
                 saveHistoryWindow(target, page, complete = true, conversationKey, tool, expectedRevision = revision)
-                return
+                saveLegacyProgress(page.size, page.firstOrNull()?.id, true)
+                return ArchiveSyncResult.Complete
             }
             saveBackgroundPage(target, page, conversationKey, tool, expectedRevision = revision)
-            if (baselineTail != null && page.any { it.id == baselineTail }) {
+            markLegacyMessages(page)
+            if (!cursor.reconcile && baselineTail != null && page.any { it.id == baselineTail }) {
                 finishBackfill(target, conversationKey, expectedRevision = revision)
-                return
+                saveLegacyProgress(page.size, page.firstOrNull()?.id, true)
+                return ArchiveSyncResult.Complete
             }
-            var offset = page.size
-            var previousFirstId = page.firstOrNull()?.id
-            while (response["hasMore"] == true) {
+            var offset = maxOf(page.size, resumed?.let { it.offset + (growth ?: 0) } ?: 0)
+            var previousFirstId = resumed?.beforeMessageId ?: page.firstOrNull()?.id
+            repeat(3) {
                 delay(100) // Cooperative backfill: release CPU/IO between pages.
                 response = request(socket, mapOf(
                     "type" to if (bindingId == null) "load-more-chat-history" else "load-more-bound-chat-history",
                     "sessionName" to sessionName, "windowIndex" to target.windowIndex,
                     "bindingId" to bindingId, "offset" to offset, "limit" to 200,
                 )) { (it["type"] == "chat-history-chunk" && matches(it) && it["bindingId"] == bindingId) || it["type"] == "chat-log-error" }
-                if (response["type"] != "chat-history-chunk") break
-                if (historyRevision(target.key) != revision) break
-                page = parseMessages(response)
-                if (page.isEmpty() || page.firstOrNull()?.id == previousFirstId) break
+                if (response["type"] != "chat-history-chunk") return ArchiveSyncResult.Retry()
+                if (historyRevision(target.key) != revision) return ArchiveSyncResult.Continue
+                if (response["hasMore"] !is Boolean) return ArchiveSyncResult.Retry()
+                page = parseMessages(response) ?: return ArchiveSyncResult.Retry()
+                if (page.isEmpty() || page.firstOrNull()?.id == previousFirstId) return ArchiveSyncResult.Retry()
+                (response["totalCount"] as? Number)?.toInt()?.takeIf { it >= 0 }?.let { cursor = cursor.copy(totalCount = it) }
                 val beforeMessageId = previousFirstId
                 previousFirstId = page.firstOrNull()?.id
                 offset += page.size
                 saveBackgroundPage(target, page, conversationKey, tool, beforeMessageId, revision)
+                markLegacyMessages(page)
                 if (response["hasMore"] != true) {
                     finishBackfill(target, conversationKey, firstMessageId = page.first().id, expectedRevision = revision)
-                    break
+                    completeLegacyPass()
+                    saveLegacyProgress(offset, previousFirstId, true)
+                    return ArchiveSyncResult.Complete
                 }
-                if (baselineTail != null && page.any { it.id == baselineTail }) {
+                if (!cursor.reconcile && baselineTail != null && page.any { it.id == baselineTail }) {
                     // A previously complete cache is now connected to the new
                     // head. Its unchanged older pages need not be downloaded.
                     finishBackfill(target, conversationKey, expectedRevision = revision)
-                    break
+                    saveLegacyProgress(offset, previousFirstId, true)
+                    return ArchiveSyncResult.Complete
                 }
+                saveLegacyProgress(offset, previousFirstId, false)
             }
+            return ArchiveSyncResult.Continue
         } finally {
-            socket.send(mapOf("type" to "unwatch-chat-log"))
+            // The watch reserved its cleanup permit. Cancellation closes the
+            // read-only socket instead of waiting for another budget window.
+            if (currentCoroutineContext().isActive) socket.send(mapOf("type" to "unwatch-chat-log"))
+            reservedUnwatch.remove(socket)
         }
     }
 
@@ -601,17 +745,48 @@ class OfflineCacheRepository @Inject constructor(
         }
     }
 
-    private suspend fun request(socket: SessionSocket, command: Map<String, Any?>, accepts: (Map<String, Any?>) -> Boolean): Map<String, Any?> = coroutineScope {
-        withTimeout(20_000) {
-            val response = async(start = CoroutineStart.UNDISPATCHED) { socket.messages.first(accepts) }
-            socket.send(command)
-            response.await()
+    private suspend fun request(socket: SessionSocket, command: Map<String, Any?>, timeoutMillis: Long = 20_000, accepts: (Map<String, Any?>) -> Boolean): Map<String, Any?> {
+        val ownedUrl = budgetedSockets[socket]
+        if (ownedUrl != null) {
+            if (webSocket.currentWebSocketUrl != ownedUrl) throw CancellationException("Archive connection changed")
+            val watch = command["type"] in setOf("watch-chat-log", "watch-acp-chat-log")
+            if (!requestBudget.tryAcquire(if (watch) 2 else 1)) throw ArchiveBudgetPause()
+            if (watch) reservedUnwatch.add(socket)
+        }
+        return coroutineScope {
+            withTimeout(timeoutMillis) {
+                val response = async(start = CoroutineStart.UNDISPATCHED) { socket.messages.first(accepts) }
+                socket.send(command)
+                response.await()
+            }
         }
     }
 
-    private fun parseMessages(message: Map<String, Any?>): List<ChatMessage> = (message["messages"] as? List<*>).orEmpty().mapNotNull {
+    private fun validMessage(value: Any?): Boolean {
+        val row = value as? Map<*, *> ?: return false
+        if (row.keys.any { it !is String }) return false
+        if (row["blocks"] != null && (row["blocks"] !is List<*> || (row["blocks"] as List<*>).any { it !is Map<*, *> })) return false
+        return row["id"] != null || row["messageId"] != null || row["uuid"] != null ||
+            row["content"] is String || row["text"] is String || row["blocks"] is List<*>
+    }
+
+    private fun validArchivePage(page: Map<String, Any?>): Boolean {
+        if (page["hasMore"] !is Boolean) return false
+        val entries = page["entries"]
+        if (entries == null) return (page["messages"] as? List<*>)?.all(::validMessage) == true
+        return (entries as? List<*>)?.all { raw ->
+            val entry = raw as? Map<*, *> ?: return@all false
+            val position = entry["position"] as? Number ?: return@all false
+            (entry["key"] as? String)?.isNotBlank() == true && position.toLong() in 0..Int.MAX_VALUE.toLong() &&
+                position.toDouble() == position.toLong().toDouble() && (entry["message"] == null || validMessage(entry["message"]))
+        } == true
+    }
+
+    private fun parseMessages(message: Map<String, Any?>): List<ChatMessage>? {
+        val rows = message["messages"] as? List<*> ?: return null
+        if (!rows.all(::validMessage)) return null
         @Suppress("UNCHECKED_CAST")
-        (it as? Map<String, Any?>)?.let(ChatMessageParser::parse)
+        return rows.map { ChatMessageParser.parse(it as Map<String, Any?>) }
     }
 
     private inline fun <reified T> decode(value: String): T? = runCatching { json.decodeFromString<T>(value) }.getOrNull()

@@ -251,6 +251,9 @@ On the server side, common response types include:
 - Direct session creation is provider-aware (`codex` or `opencode`) and opens into the shared ACP chat renderer.
 - Session tiles now support tags and provider/path grouping so long lists stay manageable.
 - File upload supports image/audio/doc attachments in chat.
+- **Live** is the default connection mode and keeps updates flowing with the app in the background. It can keep the processor awake and use more battery.
+- The connection bar on Home, Chat and Terminal has a one-tap **Battery Saver** button. Saver pauses connections and automatic downloads while the app is in the background; reopening the app resumes updates. Remote agent jobs continue on the server, but background updates and notifications wait until the app is open or Live is enabled again.
+- The timer button returns Live to Saver after **1, 5, 15 or 30 minutes, or 1, 2 or 4 hours**. Choose **No timer** for continuous Live. The deadline survives app restarts; reconnecting does not extend it. Settings also exposes these controls.
 
 ## Legacy Flutter Client
 
@@ -259,6 +262,16 @@ On the server side, common response types include:
   - [flutter/README.md](flutter/README.md)
 
 ## Debug, Logs and Verification
+
+Android **Settings → Diagnostics → Battery diagnostics** enables local battery investigation logs (off by default). The app writes 60-second summaries plus screen, foreground, service and wake-lock transitions, retains two 1 MiB log files, and provides **Share diagnostic logs**. No ADB connection is needed while collecting a sample. Disable the toggle when finished; it observes the existing connection policy without changing it.
+
+Logs include process CPU time, device suspend time, UID network-byte deltas, wake-lock duration, connected sockets by role, reconnect/timeout counts, and application-message bytes grouped by purpose. `CHAT_MONITOR` and `OFFLINE_SYNC` distinguish notification watches from cache traffic. HTTP body counters cover the shared client and transcription uploads. Logcat uses tag `AgentShellPower`.
+
+Automatic archive work uses a persisted, fair queue for all discoverable conversations. Background history traffic is capped at 32 protocol requests per minute; successful checks have a 30-minute cooldown, while live notifications and the open chat keep their existing paths. Pending attachment jobs preserve retry deadlines across restarts, respect server throttling and missing-file cooldowns, and use smaller batches on metered networks. Existing archive messages and downloaded files have no TTL or automatic eviction.
+
+Diagnostic schema 2 adds HTTP status/outcome buckets, attachment attempt/retry counters, and transport/metered state. Network transitions close the preceding measurement interval before its transport label changes. A zero-byte response alone does not mean a failed download; use the status counters. The connection wake-lock policy remains independent of archive throttling.
+
+These are diagnostic counters, not mAh measurements. WebSocket transmit bytes count accepted/enqueued UTF-8 payloads, not confirmed server delivery; TLS/framing, automatic protocol pings, WebView and media traffic are not broken down by these payload counters. UID totals provide broader context and must not be added to payload totals. CPU time covers the main app process. `-1` means an OS counter was unavailable or reset. Summaries describe the interval before their named transition, and ordinary coroutine timers do not wake a suspended device. Logs exclude message bodies, URLs, headers, credentials, filenames and session identifiers.
 
 - Backend logs: check `backend.log` in project root or systemd `journalctl -u agentshell`.
 - Start backend with debug logs:

@@ -3,14 +3,40 @@ name: Build Android Native
 on:
   push:
     branches: [main]
-    paths: [android-native/**, docker/android-native/**, docker/android-native-base/**]
+    paths: [android-native/**, docker/android-native/**, docker/android-native-base/**, .github/workflows/android-native.yml]
   pull_request:
-    paths: [android-native/**, docker/android-native/**, docker/android-native-base/**]
+    paths: [android-native/**, docker/android-native/**, docker/android-native-base/**, .github/workflows/android-native.yml]
   release:
     types: [published]
   workflow_dispatch:
 
 jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android SDK for tests
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Android regressions with isolated configuration
+        working-directory: android-native
+        run: ./gradlew -PuiPoc=true :app:testDebugUnitTest --console=plain
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentshell-native-test-results
+          path: |
+            android-native/app/build/reports/tests/
+            android-native/app/build/test-results/
+
   base-image:
     runs-on: ubuntu-latest
     permissions:
@@ -40,7 +66,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=android-native-base
 
   build-apk:
-    needs: base-image
+    needs: [base-image, unit-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write

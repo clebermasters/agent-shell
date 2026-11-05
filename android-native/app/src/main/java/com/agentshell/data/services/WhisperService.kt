@@ -1,5 +1,7 @@
 package com.agentshell.data.services
 
+import com.agentshell.core.diagnostics.BatteryDiagnostics
+
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -39,6 +41,7 @@ class WhisperService @Inject constructor() {
 
     // Dedicated OkHttp client with longer timeouts for audio uploads
     private val client = OkHttpClient.Builder()
+        .eventListenerFactory(BatteryDiagnostics.httpListenerFactory)
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)

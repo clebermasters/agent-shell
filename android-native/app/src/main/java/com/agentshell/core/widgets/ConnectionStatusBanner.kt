@@ -48,14 +48,19 @@ import kotlinx.coroutines.delay
 @Composable
 fun ConnectionStatusBanner(
     connectionStatus: ConnectionStatus,
+    pauseMessage: String? = null,
 ) {
     var visible by remember { mutableStateOf(false) }
     var displayedStatus by remember { mutableStateOf(connectionStatus) }
     var countdown by remember { mutableIntStateOf(5) }
 
     // React to status changes
-    LaunchedEffect(connectionStatus) {
+    LaunchedEffect(connectionStatus, pauseMessage) {
         displayedStatus = connectionStatus
+        if (pauseMessage != null) {
+            visible = true
+            return@LaunchedEffect
+        }
         when (connectionStatus) {
             ConnectionStatus.CONNECTED -> {
                 visible = true
@@ -114,7 +119,7 @@ fun ConnectionStatusBanner(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "Server unreachable — retrying in ${countdown}s",
+                        pauseMessage ?: "Server unreachable — retrying in ${countdown}s",
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,

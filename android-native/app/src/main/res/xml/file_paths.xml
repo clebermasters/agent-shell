@@ -2,4 +2,5 @@
 <paths>
     <cache-path name="chat_files" path="chat_files/" />
     <cache-path name="file_previews" path="file_previews/" />
+    <cache-path name="battery_diagnostics" path="battery-diagnostics/" />
 </paths>

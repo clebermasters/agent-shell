@@ -50,6 +50,20 @@ data class CachedHistorySync(
     val baseRevision: String? = null,
 )
 
+/** Scheduling metadata only. Removing a task never removes its offline history. */
+@Entity(tableName = "archive_sync_work", primaryKeys = ["workKey"], indices = [Index(value = ["hostId", "nextRunAt", "lastRunAt"])])
+data class ArchiveSyncWork(
+    val workKey: String,
+    val hostId: String,
+    val targetJson: String,
+    val kind: String,
+    val sourceHint: String = "",
+    val nextRunAt: Long = 0,
+    val lastRunAt: Long = 0,
+    val attempts: Int = 0,
+    val generation: Long = 0,
+)
+
 data class CachedServerMessage(val messageId: String, val serverKey: String)
 
 data class CachedMessageBounds(val firstPosition: Int?, val lastPosition: Int?)
@@ -65,6 +79,24 @@ data class CachedHistoryWindowRow(
 
 @Dao
 abstract class OfflineCacheDao {
+    @Query("SELECT * FROM archive_sync_work WHERE workKey = :key")
+    abstract suspend fun archiveSyncWork(key: String): ArchiveSyncWork?
+
+    @Query("SELECT * FROM archive_sync_work WHERE hostId = :hostId")
+    abstract suspend fun archiveSyncWorkForHost(hostId: String): List<ArchiveSyncWork>
+
+    @Query("SELECT * FROM archive_sync_work WHERE hostId = :hostId AND nextRunAt <= :now ORDER BY CASE WHEN workKey = :preferredKey THEN 0 ELSE 1 END, lastRunAt, nextRunAt, workKey LIMIT 1")
+    abstract suspend fun nextArchiveSyncWork(hostId: String, now: Long, preferredKey: String?): ArchiveSyncWork?
+
+    @Query("SELECT MIN(nextRunAt) FROM archive_sync_work WHERE hostId = :hostId")
+    abstract suspend fun nextArchiveSyncDue(hostId: String): Long?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    abstract suspend fun saveArchiveSyncWork(work: ArchiveSyncWork)
+
+    @Query("DELETE FROM archive_sync_work WHERE workKey = :key")
+    abstract suspend fun deleteArchiveSyncWork(key: String)
+
     // A single SELECT gets a consistent WAL snapshot without entering Room's
     // serialized write-transaction queue. Only the requested page is decoded.
     // Keep SELECT first: Android can route a leading WITH to the write connection.

@@ -1,5 +1,7 @@
 package com.agentshell.feature.chat
 
+import com.agentshell.core.widgets.ConnectionModeBar
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -353,6 +355,7 @@ fun ChatScreen(
                 .padding(innerPadding),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
+                ConnectionModeBar()
                 AgentActivityBar(uiState.agentActivity)
                 // Provider usage banner for tmux-backed AI chats
                 if (uiState.detectedTool == "claude" || uiState.detectedTool == "codex") {

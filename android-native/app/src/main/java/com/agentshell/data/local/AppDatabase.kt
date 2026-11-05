@@ -19,6 +19,7 @@ import com.agentshell.data.model.SessionTagAssignment
         CachedConversation::class,
         CachedChatMessage::class,
         CachedHistorySync::class,
+        ArchiveSyncWork::class,
         PanelLayoutEntity::class,
         PanelEntity::class,
         FavoriteSession::class,
@@ -26,7 +27,7 @@ import com.agentshell.data.model.SessionTagAssignment
         SessionTag::class,
         SessionTagAssignment::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,6 +39,13 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sessionTagDao(): SessionTagDao
 
     companion object {
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS archive_sync_work (workKey TEXT NOT NULL PRIMARY KEY, hostId TEXT NOT NULL, targetJson TEXT NOT NULL, kind TEXT NOT NULL, sourceHint TEXT NOT NULL, nextRunAt INTEGER NOT NULL, lastRunAt INTEGER NOT NULL, attempts INTEGER NOT NULL, generation INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_archive_sync_work_hostId_nextRunAt_lastRunAt ON archive_sync_work(hostId,nextRunAt,lastRunAt)")
+            }
+        }
+
         val MIGRATION_10_11 = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE cached_chat_messages ADD COLUMN syncRevision TEXT NOT NULL DEFAULT ''")

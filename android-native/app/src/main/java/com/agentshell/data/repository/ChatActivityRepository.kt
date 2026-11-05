@@ -1,5 +1,7 @@
 package com.agentshell.data.repository
 
+import com.agentshell.core.diagnostics.DiagnosticSocketRole
+
 import android.content.Context
 import android.os.SystemClock
 import com.agentshell.core.util.NotificationHelper
@@ -66,6 +68,7 @@ class ChatActivityRepository @Inject constructor(
     private val openChats = mutableMapOf<String, String>()
     private val viewers = mutableMapOf<String, String>() // owner -> chat key
     private val monitors = mutableMapOf<String, Pair<SessionSocket, CoroutineScope>>()
+    private var monitorServerUrl: String? = null
     private val lastAlert = mutableMapOf<String, Long>()
     private var selectedHost: Host? = null
     private var availableSessions: Set<String>? = null
@@ -76,6 +79,8 @@ class ChatActivityRepository @Inject constructor(
     private var signalLedgers: Map<String, AgentSignalLedger> = emptyMap()
     private val listViewers = mutableSetOf<String>()
     private val knownWindows = mutableMapOf<String, Set<Int>>()
+    private val windowRefresh = WindowCatalogRefresh()
+    private var windowRefreshJob: Job? = null
     private var started = false
 
     private data class StreamReply(
@@ -108,9 +113,10 @@ class ChatActivityRepository @Inject constructor(
             }
             launch {
                 hosts.getSelectedHost().collect { host ->
-                    if (host?.id != selectedHost?.id) {
+                    if (host?.id != selectedHost?.id || host?.wsUrl != selectedHost?.wsUrl) {
                         availableSessions = null
                         knownWindows.clear()
+                        windowRefresh.clear()
                         streams.values.forEach { it.alertJob?.cancel() }
                         streams.clear()
                     }
@@ -267,12 +273,17 @@ class ChatActivityRepository @Inject constructor(
                 if (watchedTarget != null) return
                 val sessions = message["sessions"] as? List<Map<String, Any?>> ?: return
                 availableSessions = sessions.mapNotNull { it["name"] as? String }.toSet()
+                windowRefresh.retain(hostId, availableSessions!!)
                 for (session in sessions) {
                     val name = session["name"] as? String ?: continue
                     if ((session["tool"] as? String).isNullOrBlank() && !quietEnabled && listViewers.isEmpty()) continue
+                    if (!windowRefresh.catalog(hostId, name, session["created"] as? String,
+                            (session["windows"] as? Number)?.toInt(), SystemClock.elapsedRealtime())) continue
                     for (index in knownWindows[name] ?: setOf(0)) register(ChatTarget.create(hostId, name, index))
                     val existing = monitors.entries.firstOrNull { _states.value[it.key]?.target?.sessionName == name }
-                    existing?.value?.first?.send(mapOf("type" to "list-windows", "sessionName" to name))
+                    if (existing?.value?.first?.isConnected?.value == true) {
+                        existing.value.first.send(mapOf("type" to "list-windows", "sessionName" to name))
+                    }
                 }
                 syncMonitors()
             }
@@ -448,6 +459,12 @@ class ChatActivityRepository @Inject constructor(
     private fun syncMonitors() {
         val host = selectedHost
         val url = webSocket.currentWebSocketUrl
+        if (monitorServerUrl != url) {
+            monitors.values.forEach { (socket, monitorScope) -> socket.dispose(); monitorScope.cancel() }
+            monitors.clear()
+            windowRefresh.clear()
+            monitorServerUrl = url
+        }
         val canWatch = (notificationsEnabled || finishedEnabled || quietEnabled || listViewers.isNotEmpty()) && webSocket.keepAliveEnabled.value && host != null && url?.substringBefore('?') == "${host.wsUrl}/ws"
         val desired = if (canWatch) _states.value.values.map { it.target }.filter {
             it.hostId == host!!.id && !it.isAcp && (availableSessions == null || it.sessionName in availableSessions!!)
@@ -458,15 +475,22 @@ class ChatActivityRepository @Inject constructor(
         }
         for ((key, target) in desired) {
             if (key in monitors) continue
-            val socket = SessionSocket(client)
+            val socket = SessionSocket(client, DiagnosticSocketRole.CHAT_MONITOR)
             val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
             monitors[key] = socket to monitorScope
+            val watchedServerUrl = url
             monitorScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                socket.messages.collect { handleEvent(target.hostId, it, target) }
+                socket.messages.collect {
+                    if (monitorServerUrl == watchedServerUrl && webSocket.currentWebSocketUrl == watchedServerUrl &&
+                        selectedHost?.id == target.hostId && "${selectedHost?.wsUrl}/ws" == watchedServerUrl?.substringBefore('?')) {
+                        handleEvent(target.hostId, it, target)
+                    }
+                }
             }
             monitorScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 socket.isConnected.collect { connected ->
                     if (connected) {
+                        windowRefresh.requested(target.hostId, target.sessionName, SystemClock.elapsedRealtime())
                         socket.send(mapOf("type" to "list-windows", "sessionName" to target.sessionName))
                         socket.send(mapOf("type" to "watch-chat-log", "sessionName" to target.sessionName, "windowIndex" to target.windowIndex, "limit" to 50))
                     }
@@ -474,6 +498,27 @@ class ChatActivityRepository @Inject constructor(
                 }
             }
             socket.connect(url!!)
+        }
+        if (monitors.isEmpty()) {
+            windowRefreshJob?.cancel(); windowRefreshJob = null
+        } else if (windowRefreshJob?.isActive != true) {
+            windowRefreshJob = scope.launch {
+                while (true) {
+                    val currentHost = selectedHost?.id
+                    val connectedSessions = monitors.filterValues { it.first.isConnected.value }.keys.mapNotNull { _states.value[it]?.target?.sessionName }
+                    delay(windowRefresh.nextDelay(currentHost.orEmpty(), connectedSessions, SystemClock.elapsedRealtime()))
+                    val hostId = selectedHost?.id ?: continue
+                    val refreshed = mutableSetOf<String>()
+                    for ((key, monitor) in monitors) {
+                        val target = _states.value[key]?.target ?: continue
+                        if (target.hostId != hostId || !monitor.first.isConnected.value || !refreshed.add(target.sessionName)) continue
+                        // A replacement window can have the same count as its predecessor.
+                        if (windowRefresh.due(hostId, target.sessionName, SystemClock.elapsedRealtime())) {
+                            monitor.first.send(mapOf("type" to "list-windows", "sessionName" to target.sessionName))
+                        }
+                    }
+                }
+            }
         }
     }
 

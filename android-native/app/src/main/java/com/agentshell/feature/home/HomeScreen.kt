@@ -56,6 +56,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.agentshell.core.widgets.ConnectionStatusBanner
+import com.agentshell.core.widgets.ConnectionModeBar
+import com.agentshell.core.power.ConnectionModeViewModel
 import com.agentshell.data.model.AiUsage
 import com.agentshell.data.model.Host
 import com.agentshell.data.model.ConnectionStatus
@@ -103,6 +105,8 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val connectionModeViewModel: ConnectionModeViewModel = hiltViewModel()
+    val connectionMode by connectionModeViewModel.state.collectAsStateWithLifecycle()
     val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
     val hosts by viewModel.hosts.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -203,7 +207,8 @@ fun HomeScreen(
             )
 
             // ── Connection status animated banner ──
-            ConnectionStatusBanner(connectionStatus = uiState.connectionStatus)
+            ConnectionModeBar(connectionModeViewModel)
+            ConnectionStatusBanner(connectionStatus = uiState.connectionStatus, pauseMessage = connectionMode.pauseMessage)
 
             // ── Claude usage banner ──
             claudeUsage?.let { usage -> ClaudeUsageBanner(usage) }

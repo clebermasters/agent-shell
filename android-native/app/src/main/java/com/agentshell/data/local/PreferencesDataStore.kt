@@ -10,6 +10,9 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.agentshell.data.model.BrowserContentSize
+import com.agentshell.core.power.ConnectionMode
+import com.agentshell.core.power.ConnectionModeState
+import com.agentshell.core.power.ConnectionModeCodec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -43,6 +46,8 @@ class PreferencesDataStore @Inject constructor(
         val LAST_SESSION_NAME = stringPreferencesKey("last_session_name")
         val AUTO_ATTACH_ENABLED = booleanPreferencesKey("auto_attach_enabled")
         val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
+        val BATTERY_DIAGNOSTICS_ENABLED = booleanPreferencesKey("battery_diagnostics_enabled")
+        val CONNECTION_MODE = stringPreferencesKey("connection_mode")
         val CHAT_NOTIFICATIONS_ENABLED = booleanPreferencesKey("chat_notifications_enabled")
         val CHAT_READ_STATES = stringPreferencesKey("chat_read_states")
         val AGENT_FINISHED_ENABLED = booleanPreferencesKey("agent_finished_enabled")
@@ -52,6 +57,59 @@ class PreferencesDataStore @Inject constructor(
     }
 
     // ─── selectedHostId ──────────────────────────────────────────────────────
+
+    val batteryDiagnosticsEnabled: Flow<Boolean>
+        get() = dataStore.data.map { it[Keys.BATTERY_DIAGNOSTICS_ENABLED] ?: false }
+
+    suspend fun setBatteryDiagnosticsEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.BATTERY_DIAGNOSTICS_ENABLED] = enabled }
+    }
+
+    /** Mode, remembered preset and absolute deadline always change in one transaction. */
+    val connectionMode: Flow<ConnectionModeState>
+        get() = dataStore.data.map { readConnectionModeState(it) }
+
+    private fun readConnectionModeState(prefs: Preferences): ConnectionModeState =
+        runCatching { ConnectionModeCodec.decode(prefs[Keys.CONNECTION_MODE]) }
+            .getOrElse { ConnectionModeState(mode = ConnectionMode.BATTERY_SAVER) }
+
+    suspend fun setConnectionMode(mode: ConnectionMode, nowMillis: Long = System.currentTimeMillis()) {
+        dataStore.edit { prefs ->
+            val next = readConnectionModeState(prefs).selectMode(mode, nowMillis)
+            prefs[Keys.CONNECTION_MODE] = ConnectionModeCodec.encode(next)
+        }
+    }
+
+    suspend fun setLiveTimerMinutes(minutes: Int, nowMillis: Long = System.currentTimeMillis()) {
+        require(minutes in ConnectionModeState.TIMER_PRESETS_MINUTES) { "Unsupported Live timer duration" }
+        dataStore.edit { prefs ->
+            val next = readConnectionModeState(prefs).selectTimer(minutes, nowMillis)
+            prefs[Keys.CONNECTION_MODE] = ConnectionModeCodec.encode(next)
+        }
+    }
+
+    /** Persist one already-selected UI intent without re-deriving it from older disk state. */
+    internal suspend fun storeConnectionModeState(state: ConnectionModeState) {
+        require(state.timerMinutes in ConnectionModeState.TIMER_PRESETS_MINUTES) { "Unsupported Live timer duration" }
+        require(if (state.mode == ConnectionMode.LIVE) {
+            (state.timerMinutes == 0) == (state.liveUntilEpochMillis == null)
+        } else state.liveUntilEpochMillis == null) { "Invalid connection mode timer state" }
+        dataStore.edit { prefs -> prefs[Keys.CONNECTION_MODE] = ConnectionModeCodec.encode(state) }
+    }
+
+    /** A stale timer callback cannot replace a newer user timer or mode choice. */
+    suspend fun expireLiveTimer(expectedDeadline: Long, nowMillis: Long = System.currentTimeMillis()): Boolean {
+        var expired = false
+        dataStore.edit { prefs ->
+            val current = readConnectionModeState(prefs)
+            val next = current.expire(expectedDeadline, nowMillis)
+            if (next != current) {
+                prefs[Keys.CONNECTION_MODE] = ConnectionModeCodec.encode(next)
+                expired = true
+            }
+        }
+        return expired
+    }
 
     val selectedHostId: Flow<String?>
         get() = dataStore.data.map { it[Keys.SELECTED_HOST_ID] }

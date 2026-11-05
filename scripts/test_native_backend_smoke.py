@@ -107,6 +107,30 @@ def run(binary, output=None):
                         sessions = await receive(connection, 'sessions-list', trace)
                         assert any(row['name'] == 'native-smoke' for row in sessions['sessions'])
                         checks['owned_tmux_session_discovery'] = True
+                        # Cover a full five-second detail refresh. One delayed
+                        # initial monitor snapshot is allowed after the explicit
+                        # response, but an ordinary shell must not cause a
+                        # broadcast every second because its tool is None.
+                        idle_lists = []
+                        idle_deadline = asyncio.get_running_loop().time() + 6
+                        while asyncio.get_running_loop().time() < idle_deadline:
+                            try:
+                                packet = json.loads(await asyncio.wait_for(connection.recv(),
+                                    idle_deadline - asyncio.get_running_loop().time()))
+                            except asyncio.TimeoutError:
+                                break
+                            if packet.get('type') == 'sessions-list':
+                                idle_lists.append(packet)
+                        assert len(idle_lists) <= 1, f'Unchanged monitor sent {len(idle_lists)} unsolicited session lists'
+                        checks['owned_monitor_quiet_when_idle'] = True
+
+                        tmux('new-window', '-d', '-t', 'native-smoke', '-n', 'metadata-smoke', '/bin/sh')
+                        updated = await receive(connection, 'sessions-list', trace)
+                        assert next(row for row in updated['sessions'] if row['name'] == 'native-smoke')['windows'] == 2
+                        tmux('kill-window', '-t', 'native-smoke:metadata-smoke')
+                        updated = await receive(connection, 'sessions-list', trace)
+                        assert next(row for row in updated['sessions'] if row['name'] == 'native-smoke')['windows'] == 1
+                        checks['owned_monitor_structural_changes'] = True
                         await connection.send(json.dumps({'type': 'attach-session', 'sessionName': 'native-smoke',
                             'windowIndex': 0, 'cols': 80, 'rows': 24}))
                         await receive(connection, 'attached', trace)

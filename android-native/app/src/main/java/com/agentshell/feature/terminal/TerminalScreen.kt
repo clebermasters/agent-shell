@@ -1,5 +1,7 @@
 package com.agentshell.feature.terminal
 
+import com.agentshell.core.widgets.ConnectionModeBar
+
 import android.Manifest
 import android.app.Activity
 import androidx.activity.compose.BackHandler
@@ -381,6 +383,7 @@ fun TerminalScreen(
                 .imePadding(),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
+                if (!isFullscreen) ConnectionModeBar()
                 if (isSelectionMode) {
                     // Selection overlay — native Android text selection
                     SelectionContainer(

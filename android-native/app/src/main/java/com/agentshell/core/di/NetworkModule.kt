@@ -6,6 +6,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
 import com.agentshell.data.remote.ServerDns
+import com.agentshell.core.diagnostics.BatteryDiagnostics
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 
@@ -17,6 +18,7 @@ object NetworkModule {
     @Singleton
     fun provideOkHttpClient(dns: ServerDns): OkHttpClient {
         return OkHttpClient.Builder()
+            .eventListenerFactory(BatteryDiagnostics.httpListenerFactory)
             .dns(dns)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)

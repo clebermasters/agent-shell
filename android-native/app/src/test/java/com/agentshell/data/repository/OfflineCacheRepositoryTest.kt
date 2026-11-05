@@ -7,6 +7,9 @@ import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import com.agentshell.data.local.AppDatabase
 import com.agentshell.data.local.CachedSession
+import com.agentshell.data.local.CachedHistorySync
+import com.agentshell.data.local.ArchiveSyncWork
+import com.agentshell.core.power.BackgroundWorkPolicy
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.data.model.ChatBlock
 import com.agentshell.data.model.ChatMessage
@@ -20,6 +23,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -299,8 +303,8 @@ class OfflineCacheRepositoryTest {
             val headRequests = terminalHeads.get()
             attached.set(true)
             socket.send(mapOf("type" to "list-sessions"))
-            withTimeout(10_000) { while (terminalHeads.get() <= headRequests) delay(25) }
             delay(500)
+            assertEquals("presentation-only catalog changes do not invalidate the archive", headRequests, terminalHeads.get())
             assertEquals(olderRequests, terminalOlderPages.get())
             socket.disconnect()
             assertEquals("terminal", repo.sessions.first { it.tmux.isNotEmpty() }.tmux.single().name)
@@ -323,10 +327,11 @@ class OfflineCacheRepositoryTest {
             it.execSQL("DROP TABLE cached_conversations")
             it.execSQL("DROP TABLE cached_chat_messages")
             it.execSQL("DROP TABLE cached_history_sync")
+            it.execSQL("DROP TABLE archive_sync_work")
             it.version = 8
         }
         val upgraded = Room.databaseBuilder(context, AppDatabase::class.java, "offline-test-${directory.root.name}.db")
-            .addMigrations(AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10, AppDatabase.MIGRATION_10_11).build().also { databases.add(it) }
+            .addMigrations(AppDatabase.MIGRATION_8_9, AppDatabase.MIGRATION_9_10, AppDatabase.MIGRATION_10_11, AppDatabase.MIGRATION_11_12).build().also { databases.add(it) }
         assertEquals(host, upgraded.hostDao().getById(host.id))
         assertTrue(upgraded.offlineCacheDao().observeSessions(host.id).first().isEmpty())
     }
@@ -345,13 +350,36 @@ class OfflineCacheRepositoryTest {
             it.execSQL("INSERT INTO cached_chat_messages SELECT targetKey,messageId,position,payload FROM messages_v11")
             it.execSQL("DROP TABLE messages_v11")
             it.execSQL("DROP TABLE cached_history_sync")
+            it.execSQL("DROP TABLE archive_sync_work")
             it.version = 9
         }
         val upgraded = Room.databaseBuilder(context, AppDatabase::class.java, "offline-test-${directory.root.name}.db")
-            .addMigrations(AppDatabase.MIGRATION_9_10, AppDatabase.MIGRATION_10_11).build().also { databases.add(it) }
+            .addMigrations(AppDatabase.MIGRATION_9_10, AppDatabase.MIGRATION_10_11, AppDatabase.MIGRATION_11_12).build().also { databases.add(it) }
         val page = repository(upgraded).historyPage(target)!!
         assertEquals(listOf(message("saved", 1)), page.messages)
         assertFalse(page.conversation.complete)
+    }
+
+    @Test fun migrationFromElevenPreservesHistoryAndPinnedProgressAndAddsOnlySchedulingMetadata() = runBlocking {
+        val db = database()
+        val repo = repository(db)
+        repo.saveHistory(target, (0 until 25).map { message("saved-$it", it.toLong()) }, true, "conversation")
+        val pinned = CachedHistorySync(target.key, "pinned-revision", 630, "saved-0", false, true, "base-revision")
+        db.offlineCacheDao().saveHistorySync(pinned)
+        repo.close()
+        val path = requireNotNull(db.openHelper.writableDatabase.path)
+        db.close()
+        android.database.sqlite.SQLiteDatabase.openDatabase(path, null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("DROP TABLE archive_sync_work")
+            it.version = 11
+        }
+        val upgraded = Room.databaseBuilder(context, AppDatabase::class.java, "offline-test-${directory.root.name}.db")
+            .addMigrations(AppDatabase.MIGRATION_11_12).build().also { databases.add(it) }
+        assertEquals(pinned, upgraded.offlineCacheDao().historySync(target.key))
+        assertEquals((0 until 25).map { "saved-$it" }, repository(upgraded).history(target)!!.messages.map { it.id })
+        val work = ArchiveSyncWork(target.key, target.hostId, "{}", "history", nextRunAt = 42_000, generation = 3)
+        upgraded.offlineCacheDao().saveArchiveSyncWork(work)
+        assertEquals(work, upgraded.offlineCacheDao().archiveSyncWork(target.key))
     }
 
     @Test fun incrementalArchiveResumesAfterRestartSkipsUnchangedAndRepairsOldEditsAndDeletions() = runBlocking {
@@ -535,14 +563,21 @@ class OfflineCacheRepositoryTest {
         server.start()
         val id = "restart-${java.util.UUID.randomUUID()}"
         val url = "${server.url("files/")}$id"
-        val first = OfflineAttachmentStore(context, client)
+        val clock = AtomicLong(0)
+        val policy = BackgroundWorkPolicy().apply { activityStarted() }
+        val retryPolicy = AttachmentRetryPolicy(jitter = { 0L })
+        val first = OfflineAttachmentStore(context, client, policy, clock = { clock.get() }, retryPolicy = retryPolicy)
         var second: OfflineAttachmentStore? = null
         try {
             first.enqueue(server.url("files").toString(), listOf(ChatMessage("attachment", "assistant", timestamp = 1, blocks = listOf(ChatBlock(type = "file", id = id)))))
-            withTimeout(10_000) { while (server.requestCount < 1) delay(25) }
-            delay(100)
+            withTimeout(10_000) { while (first.pendingJobs().none { it.outcome == AttachmentOutcome.RETRY }) delay(25) }
+            val due = first.pendingJobs().single().nextAttemptAtMillis
             first.close()
-            second = OfflineAttachmentStore(context, client)
+            second = OfflineAttachmentStore(context, client, policy, clock = { clock.get() }, retryPolicy = retryPolicy)
+            delay(100)
+            assertEquals("a restart preserves the retry deadline", 1, server.requestCount)
+            clock.set(due)
+            second.requestDueWork()
             withTimeout(10_000) { while (OfflineAttachmentStore.cachedFile(context, url) == null) delay(25) }
             assertEquals("durable attachment", OfflineAttachmentStore.cachedFile(context, url)!!.readText())
             assertEquals(2, server.requestCount)

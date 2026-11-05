@@ -36,11 +36,16 @@ pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(P
 /// Active panes are prioritized first.
 /// Returns a short string identifier: "claude", "codex", "opencode", or "kiro".
 pub async fn detect_tool_name(session_name: &str) -> Option<String> {
-    let pane_pids = list_session_panes(session_name).await.ok()?;
+    detect_tool_name_checked(session_name).await.ok().flatten()
+}
+
+/// Distinguish a successful scan with no agent from a failed process/pane scan.
+/// Monitor refreshes must not report a transient collection error as an agent exit.
+pub async fn detect_tool_name_checked(session_name: &str) -> Result<Option<String>> {
+    let pane_pids = list_session_panes(session_name).await?;
     tokio::task::spawn_blocking(move || detect_tool_name_from_pane_pids(pane_pids))
         .await
-        .ok()
-        .flatten()
+        .context("failed to inspect tmux pane processes")
 }
 
 async fn list_session_panes(session_name: &str) -> Result<Vec<u32>> {

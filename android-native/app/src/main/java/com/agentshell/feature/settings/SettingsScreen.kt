@@ -28,6 +28,8 @@ import androidx.lifecycle.viewModelScope
 import com.agentshell.core.config.AppConfig
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.core.util.NotificationHelper
+import com.agentshell.core.diagnostics.BatteryDiagnostics
+import com.agentshell.core.widgets.ConnectionModeBar
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +54,7 @@ data class SettingsUiState(
     val chatNotificationsEnabled: Boolean = true,
     val agentFinishedEnabled: Boolean = true,
     val agentQuietEnabled: Boolean = true,
+    val batteryDiagnosticsEnabled: Boolean = false,
     val isSaving: Boolean = false,
     val savedMessage: String? = null,
     val appVersion: String = "1.0.0",
@@ -95,6 +98,7 @@ class SettingsViewModel @Inject constructor(
         }
         viewModelScope.launch { dataStore.agentFinishedEnabled.collect { v -> _state.update { it.copy(agentFinishedEnabled = v) } } }
         viewModelScope.launch { dataStore.agentQuietEnabled.collect { v -> _state.update { it.copy(agentQuietEnabled = v) } } }
+        viewModelScope.launch { dataStore.batteryDiagnosticsEnabled.collect { v -> _state.update { it.copy(batteryDiagnosticsEnabled = v) } } }
     }
 
     fun setApiKey(key: String) { _state.update { it.copy(openaiApiKey = key) } }
@@ -154,6 +158,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { dataStore.setChatNotificationsEnabled(enabled) }
         _state.update { it.copy(chatNotificationsEnabled = enabled) }
     }
+
+    fun toggleBatteryDiagnostics(enabled: Boolean) {
+        viewModelScope.launch { dataStore.setBatteryDiagnosticsEnabled(enabled) }
+    }
 }
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
@@ -167,6 +175,8 @@ fun SettingsScreen(
     val state by viewModel.state.collectAsState()
     var obscureApiKey by remember { mutableStateOf(true) }
     val context = LocalContext.current
+    val diagnosticScope = rememberCoroutineScope()
+    var diagnosticShareError by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Settings") }) },
@@ -415,6 +425,40 @@ fun SettingsScreen(
             }
 
             BatteryOptimizationCard()
+
+            Card {
+                Column(Modifier.padding(vertical = 8.dp)) {
+                    ConnectionModeBar()
+                    Text("Live keeps updates active in the background and uses more battery. Battery Saver pauses background updates until you return; your remote sessions keep running.",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Choose a timer to switch from Live to Battery Saver automatically. The deadline survives app restarts. In Battery Saver, the timer is remembered for the next Go Live.",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            SectionHeader("Diagnostics")
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Battery diagnostics", style = MaterialTheme.typography.bodyMedium)
+                            Text("Record background activity, connection traffic, CPU use, and wake-lock time. Logs stay on this device until you share them.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = state.batteryDiagnosticsEnabled, onCheckedChange = viewModel::toggleBatteryDiagnostics)
+                    }
+                    Text("Stores up to 2 MB. Excludes message contents and credentials. Logging adds a small amount of work; turn it off after collecting a sample.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(onClick = {
+                        diagnosticScope.launch {
+                            diagnosticShareError = runCatching { context.startActivity(BatteryDiagnostics.shareIntent(context)) }.isFailure
+                        }
+                    }, modifier = Modifier.fillMaxWidth()) { Text("Share diagnostic logs") }
+                    if (diagnosticShareError) Text("Could not share diagnostic logs. Try again.", color = MaterialTheme.colorScheme.error)
+                }
+            }
 
             // ── About ─────────────────────────────────────────────────────────
             SectionHeader("About")

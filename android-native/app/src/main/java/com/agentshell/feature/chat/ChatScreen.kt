@@ -31,17 +31,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Dvr
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,8 +49,6 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -97,6 +89,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.agentshell.data.model.AiUsage
+import com.agentshell.data.model.ChatSplitPreferences
+import com.agentshell.data.model.ConnectionStatus
+import com.agentshell.feature.splitscreen.TerminalPanelContent
 import com.agentshell.feature.common.SwipeableSessionContainer
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -115,6 +110,7 @@ fun ChatScreen(
     onSwipeToChatSession: ((sessionName: String, windowIndex: Int, isAcp: Boolean) -> Unit)? = null,
     isSwipeNavigation: Boolean = false,
     viewModel: ChatViewModel = hiltViewModel(),
+    layoutViewModel: ChatLayoutViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
@@ -126,12 +122,25 @@ fun ChatScreen(
     SideEffect { if (conversationKey != null) lastConversationKey = conversationKey }
     val scrollKey = "$chatKey|${conversationKey ?: lastConversationKey.orEmpty()}"
     val listState = key(scrollKey) { rememberLazyListState() }
-    var showMenu by remember { mutableStateOf(false) }
+    val savedLayout by layoutViewModel.layout.collectAsStateWithLifecycle()
+    val connectionStatus by layoutViewModel.connectionStatus.collectAsStateWithLifecycle()
+    val splitLayout = savedLayout ?: ChatSplitPreferences()
+    val splitEnabled = !isAcp && splitLayout.enabled
+    var showDetails by rememberSaveable(chatKey) { mutableStateOf(false) }
+    var showSplitOptions by rememberSaveable(chatKey) { mutableStateOf(false) }
+    var terminalFocused by remember(chatKey) { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
     var showVoiceButton by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(chatKey) {
+        layoutViewModel.bind(sessionName, windowIndex, isAcp)
+    }
+    LaunchedEffect(layoutViewModel) {
+        layoutViewModel.saveErrors.collect { snackbarHostState.showSnackbar(it) }
+    }
 
     // Swipe navigation state
     val recentChatSessions by viewModel.recentChatSessions.collectAsStateWithLifecycle()
@@ -271,60 +280,28 @@ fun ChatScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = if (isAcp) "AI Chat" else sessionName,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        if (!isAcp && windowIndex > 0) {
-                            Text(
-                                text = "Window $windowIndex",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
+            ChatCompactHeader(
+                title = if (isAcp) "AI Chat" else sessionName,
+                windowIndex = windowIndex,
+                activity = uiState.agentActivity,
+                connected = connectionStatus == ConnectionStatus.CONNECTED,
+                detailsExpanded = showDetails,
+                onToggleDetails = { showDetails = !showDetails },
+                onNavigateBack = onNavigateBack,
+                onClearChat = { showClearConfirm = true },
+                splitEnabled = splitEnabled,
+                splitAvailable = !isAcp && savedLayout != null,
+                onToggleSplit = {
+                    terminalFocused = false
+                    layoutViewModel.toggleSplit()
                 },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    com.agentshell.core.theme.ThemeToggleButton()
-                    if (onSwitchToTerminal != null) {
-                        IconButton(onClick = { onSwitchToTerminal(sessionName) }) {
-                            Icon(Icons.Filled.Dvr, contentDescription = "Switch to Terminal")
-                        }
-                    }
-                    if (onNavigateToFileBrowser != null && !uiState.isAcp) {
-                        IconButton(onClick = {
-                            viewModel.navigateToFileBrowser { path ->
-                                onNavigateToFileBrowser(path)
-                            }
-                        }) {
-                            Icon(Icons.Filled.FolderOpen, contentDescription = "File Browser")
-                        }
-                    }
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
-                    }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Clear chat") },
-                            onClick = {
-                                showMenu = false
-                                showClearConfirm = true
-                            },
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
+                onConfigureSplit = { showSplitOptions = true },
+                onOpenTerminal = if (!isAcp && onSwitchToTerminal != null) {
+                    { onSwitchToTerminal(sessionName) }
+                } else null,
+                onBrowseFiles = if (!isAcp && onNavigateToFileBrowser != null) {
+                    { viewModel.navigateToFileBrowser { path -> onNavigateToFileBrowser(path) } }
+                } else null,
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -333,7 +310,7 @@ fun ChatScreen(
             .imePadding(),
     ) { innerPadding ->
         SwipeableSessionContainer(
-            recentSessions = recentChatSessions,
+            recentSessions = if (splitEnabled) emptyList() else recentChatSessions,
             currentSessionKey = chatKey,
             sessionLabel = { key ->
                 if (key.startsWith("acp:")) key.removePrefix("acp:")
@@ -349,188 +326,219 @@ fun ChatScreen(
                 }
             },
         ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                ConnectionModeBar()
-                AgentActivityBar(uiState.agentActivity)
-                // Provider usage banner for tmux-backed AI chats
-                if (uiState.detectedTool == "claude" || uiState.detectedTool == "codex") {
-                    val usage = when (uiState.detectedTool) {
-                        "codex" -> codexUsage?.takeIf { it.error == null }
-                        else -> claudeUsage?.takeIf { it.error == null }
-                    }
-                    val hasUsage = usage?.primary != null || usage?.secondary != null
-                    val hasCtxUsage = uiState.contextWindowUsage != null
-                    if (hasUsage || hasCtxUsage) {
-                        ChatUsageBanner(
-                            usage = usage,
-                            contextWindowUsage = uiState.contextWindowUsage,
-                            modelName = uiState.modelName,
-                        )
-                    }
-                }
+            ChatTerminalSplit(
+                preferences = splitLayout.copy(enabled = splitEnabled),
+                onResize = layoutViewModel::resize,
+                onSwap = layoutViewModel::swapPanes,
+                onConfigure = { showSplitOptions = true },
+                onChatInteraction = { terminalFocused = false },
+                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                terminal = {
+                    TerminalPanelContent(
+                        panelId = "inline:$chatKey",
+                        sessionName = sessionName,
+                        windowIndex = windowIndex,
+                        isFocused = terminalFocused,
+                        onRequestFocus = { terminalFocused = true },
+                        autoFocus = false,
+                    )
+                },
+                chat = {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            AnimatedVisibility(visible = showDetails) {
+                                Column {
+                                    ConnectionModeBar()
+                                    AgentActivityBar(uiState.agentActivity, connected = connectionStatus == ConnectionStatus.CONNECTED)
+                                    // Provider usage banner for tmux-backed AI chats
+                                    if (uiState.detectedTool == "claude" || uiState.detectedTool == "codex") {
+                                        val usage = when (uiState.detectedTool) {
+                                            "codex" -> codexUsage?.takeIf { it.error == null }
+                                            else -> claudeUsage?.takeIf { it.error == null }
+                                        }
+                                        val hasUsage = usage?.primary != null || usage?.secondary != null
+                                        val hasCtxUsage = uiState.contextWindowUsage != null
+                                        if (hasUsage || hasCtxUsage) {
+                                            ChatUsageBanner(
+                                                usage = usage,
+                                                contextWindowUsage = uiState.contextWindowUsage,
+                                                modelName = uiState.modelName,
+                                            )
+                                        }
+                                    }
 
-                // Loading indicator at top for load-more
-                if (uiState.isLoadingMore) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    }
-                }
+                                }
+                            }
 
-                // Message list
-                if (uiState.isLoading) {
-                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                } else {
-                    val messageRows = ChatMessageRows(uiState.messages, uiState.firstUnreadMessageId)
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        items(
-                            count = messageRows.count,
-                            key = messageRows::key,
-                        ) { index ->
-                            // Keep the divider outside the message's scroll anchor:
-                            // removing it on resume must not shift a tall reply's text.
-                            if (messageRows.isUnread(index)) {
-                                UnreadDivider()
+                            // Loading indicator at top for load-more
+                            if (uiState.isLoadingMore) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(8.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                }
+                            }
+
+                            // Message list
+                            if (uiState.isLoading) {
+                                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator()
+                                }
                             } else {
-                                val message = messageRows.message(index)
-                                MessageBubble(
-                                    message = message,
-                                    showThinking = uiState.showThinking,
-                                    showToolCalls = uiState.showToolCalls,
-                                    fileBaseUrl = uiState.fileBaseUrl,
-                                    audioPlayerManager = viewModel.audioPlayerManager,
-                                    serverPathBase = uiState.sessionCwd.ifBlank { null },
-                                    onOpenServerPath = onOpenServerPath,
-                                    onWidgetAction = viewModel::sendWidgetAction,
+                                val messageRows = ChatMessageRows(uiState.messages, uiState.firstUnreadMessageId)
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    items(
+                                        count = messageRows.count,
+                                        key = messageRows::key,
+                                    ) { index ->
+                                        // Keep the divider outside the message's scroll anchor:
+                                        // removing it on resume must not shift a tall reply's text.
+                                        if (messageRows.isUnread(index)) {
+                                            UnreadDivider()
+                                        } else {
+                                            val message = messageRows.message(index)
+                                            MessageBubble(
+                                                message = message,
+                                                showThinking = uiState.showThinking,
+                                                showToolCalls = uiState.showToolCalls,
+                                                fileBaseUrl = uiState.fileBaseUrl,
+                                                audioPlayerManager = viewModel.audioPlayerManager,
+                                                serverPathBase = uiState.sessionCwd.ifBlank { null },
+                                                onOpenServerPath = onOpenServerPath,
+                                                onWidgetAction = viewModel::sendWidgetAction,
+                                            )
+                                        }
+                                    }
+
+                                    if (uiState.isStreaming) {
+                                        item(key = ChatListAnchor.Streaming) {
+                                            StreamingIndicator()
+                                        }
+                                    }
+                                    item(key = ChatListAnchor.End) {
+                                        Spacer(Modifier.height(1.dp))
+                                    }
+                                }
+                            }
+
+                            // Error banner
+                            if (uiState.error != null) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                ) {
+                                    Text(
+                                        text = uiState.error ?: "",
+                                        modifier = Modifier.padding(12.dp),
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+
+                            // Bottom input bar
+                            ConversationLinkBar(uiState.bindingState,
+                                onRetry = { viewModel.refreshActiveChat("conversation link retry") })
+                            uiState.submissionNotice?.let { notice ->
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                    TextButton(onClick = { viewModel.refreshActiveChat("check delivery") }) { Text("Check") }
+                                }
+                            }
+                            ChatInputBar(
+                                value = uiState.draftMessage,
+                                onValueChange = viewModel::updateDraft,
+                                onSend = { viewModel.sendMessage(uiState.draftMessage) },
+                                isStreaming = uiState.isStreaming,
+                                showVoiceButton = showVoiceButton,
+                                onCancelRecording = viewModel::cancelVoiceRecording,
+                                isRecording = uiState.isRecording,
+                                isTranscribing = uiState.isTranscribing,
+                                recordingDuration = uiState.recordingDuration,
+                                onMicPressed = {
+                                    if (uiState.isRecording) {
+                                        viewModel.stopVoiceRecording()
+                                    } else {
+                                        if (ContextCompat.checkSelfPermission(
+                                                context, Manifest.permission.RECORD_AUDIO,
+                                            ) == PackageManager.PERMISSION_GRANTED
+                                        ) {
+                                            viewModel.startVoiceRecording()
+                                        } else {
+                                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                        }
+                                    }
+                                },
+                                attachedFile = uiState.attachedFile,
+                                isUploading = uiState.isUploading,
+                                isSending = uiState.isSending,
+                                canSend = uiState.isAcp || uiState.bindingState?.canSend != false,
+                                onAttachClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                                onRemoveAttachment = viewModel::removeAttachedFile,
+                            )
+                        }
+
+                        // Scroll to bottom FAB
+                        AnimatedVisibility(
+                            visible = chatScroll.initialized && !chatScroll.atEnd && uiState.messages.isNotEmpty(),
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 16.dp, bottom = 80.dp),
+                            enter = fadeIn() + slideInVertically { it },
+                            exit = fadeOut() + slideOutVertically { it },
+                        ) {
+                            SmallFloatingActionButton(
+                                onClick = chatScroll::jumpToLatest,
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            ) {
+                                Icon(Icons.Default.ArrowDownward, contentDescription = "Scroll to bottom")
+                            }
+                        }
+
+                        // Permission card overlay
+                        val permission = uiState.pendingPermission
+                        if (permission != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.4f)),
+                                contentAlignment = Alignment.BottomCenter,
+                            ) {
+                                AcpPermissionCard(
+                                    permission = permission,
+                                    onRespond = { requestId, optionId ->
+                                        viewModel.respondPermission(requestId, optionId)
+                                    },
+                                    modifier = Modifier.padding(16.dp),
                                 )
                             }
                         }
 
-                        if (uiState.isStreaming) {
-                            item(key = ChatListAnchor.Streaming) {
-                                StreamingIndicator()
-                            }
-                        }
-                        item(key = ChatListAnchor.End) {
-                            Spacer(Modifier.height(1.dp))
-                        }
                     }
-                }
-
-                // Error banner
-                if (uiState.error != null) {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.errorContainer,
-                    ) {
-                        Text(
-                            text = uiState.error ?: "",
-                            modifier = Modifier.padding(12.dp),
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-
-                // Bottom input bar
-                ConversationLinkBar(uiState.bindingState,
-                    onRetry = { viewModel.refreshActiveChat("conversation link retry") })
-                uiState.submissionNotice?.let { notice ->
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { viewModel.refreshActiveChat("check delivery") }) { Text("Check") }
-                    }
-                }
-                ChatInputBar(
-                    value = uiState.draftMessage,
-                    onValueChange = viewModel::updateDraft,
-                    onSend = { viewModel.sendMessage(uiState.draftMessage) },
-                    isStreaming = uiState.isStreaming,
-                    showVoiceButton = showVoiceButton,
-                    onCancelRecording = viewModel::cancelVoiceRecording,
-                    isRecording = uiState.isRecording,
-                    isTranscribing = uiState.isTranscribing,
-                    recordingDuration = uiState.recordingDuration,
-                    onMicPressed = {
-                        if (uiState.isRecording) {
-                            viewModel.stopVoiceRecording()
-                        } else {
-                            if (ContextCompat.checkSelfPermission(
-                                    context, Manifest.permission.RECORD_AUDIO,
-                                ) == PackageManager.PERMISSION_GRANTED
-                            ) {
-                                viewModel.startVoiceRecording()
-                            } else {
-                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        }
-                    },
-                    attachedFile = uiState.attachedFile,
-                    isUploading = uiState.isUploading,
-                    isSending = uiState.isSending,
-                    canSend = uiState.isAcp || uiState.bindingState?.canSend != false,
-                    onAttachClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                    onRemoveAttachment = viewModel::removeAttachedFile,
-                )
-            }
-
-            // Scroll to bottom FAB
-            AnimatedVisibility(
-                visible = chatScroll.initialized && !chatScroll.atEnd && uiState.messages.isNotEmpty(),
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 80.dp),
-                enter = fadeIn() + slideInVertically { it },
-                exit = fadeOut() + slideOutVertically { it },
-            ) {
-                SmallFloatingActionButton(
-                    onClick = chatScroll::jumpToLatest,
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                ) {
-                    Icon(Icons.Default.ArrowDownward, contentDescription = "Scroll to bottom")
-                }
-            }
-
-            // Permission card overlay
-            val permission = uiState.pendingPermission
-            if (permission != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.4f)),
-                    contentAlignment = Alignment.BottomCenter,
-                ) {
-                    AcpPermissionCard(
-                        permission = permission,
-                        onRespond = { requestId, optionId ->
-                            viewModel.respondPermission(requestId, optionId)
-                        },
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-            }
-
-        }
+                },
+            )
         } // SwipeableSessionContainer
+    }
+
+    if (showSplitOptions && splitEnabled) {
+        ChatSplitLayoutDialog(
+            preferences = splitLayout,
+            onOrientation = layoutViewModel::setOrientation,
+            onSwap = layoutViewModel::swapPanes,
+            onReset = layoutViewModel::resetSizes,
+            onDismiss = { showSplitOptions = false },
+        )
     }
 
     if (showClearConfirm) {
@@ -689,80 +697,56 @@ private fun ChatInputBar(
                 }
             }
 
-            // Input row
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                IconButton(onClick = onAttachClick, enabled = !isUploading) {
-                    Icon(
-                        Icons.Default.AttachFile,
-                        contentDescription = "Attach file",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            ChatComposerLayout(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                field = {
+                    OutlinedTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        enabled = !isUploading,
+                        placeholder = { Text("Message…") },
+                        maxLines = 6,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        shape = RoundedCornerShape(24.dp),
                     )
-                }
-
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    enabled = !isUploading,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message…") },
-                    maxLines = 6,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                    shape = RoundedCornerShape(24.dp),
-                )
-
-                // Mic button
-                if (showVoiceButton) {
+                },
+                attach = {
+                    IconButton(onClick = onAttachClick, enabled = !isUploading) {
+                        Icon(
+                            Icons.Default.AttachFile,
+                            contentDescription = "Attach file",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                voice = if (showVoiceButton) {
+                    {
+                        IconButton(onClick = onMicPressed, enabled = !isTranscribing && !isUploading) {
+                            when {
+                                isTranscribing -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                isRecording -> Icon(Icons.Default.Stop, contentDescription = "Stop recording", tint = Color(0xFFEF4444))
+                                else -> Icon(Icons.Default.Mic, contentDescription = "Voice input", tint = Color(0xFF6366F1))
+                            }
+                        }
+                    }
+                } else null,
+                send = {
                     IconButton(
-                        onClick = onMicPressed,
-                        enabled = !isTranscribing && !isUploading,
+                        onClick = onSend,
+                        enabled = canSend && (value.isNotBlank() || attachedFile != null) && !isStreaming && !isUploading && !isSending,
                     ) {
-                        when {
-                            isTranscribing -> CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                            )
-                            isRecording -> Icon(
-                                Icons.Default.Stop,
-                                contentDescription = "Stop recording",
-                                tint = Color(0xFFEF4444),
-                            )
-                            else -> Icon(
-                                Icons.Default.Mic,
-                                contentDescription = "Voice input",
-                                tint = Color(0xFF6366F1),
+                        if (isStreaming || isUploading || isSending) {
+                            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                tint = if (value.isNotBlank() || attachedFile != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
-                }
-
-                Spacer(Modifier.width(4.dp))
-
-                IconButton(
-                    onClick = onSend,
-                    enabled = canSend && (value.isNotBlank() || attachedFile != null) && !isStreaming && !isUploading && !isSending,
-                ) {
-                    if (isStreaming || isUploading || isSending) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send",
-                            tint = if (value.isNotBlank() || attachedFile != null)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
+                },
+            )
         }
     }
 }

@@ -7,6 +7,7 @@ import android.util.Base64
 import android.util.Log
 import android.view.MotionEvent
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -101,9 +102,28 @@ class XTermController {
         bridge?.callJs("termBridge.clear()")
     }
 
-    /** Focus the terminal. */
+    /** Focus the terminal without requesting the soft keyboard. */
     fun focus() {
         bridge?.callJs("termBridge.focus()")
+    }
+
+    /** Request native and DOM input focus after an explicit terminal tap. */
+    fun requestInputFocus() {
+        val webView = bridge?.webView ?: return
+        webView.post {
+            webView.requestFocus()
+            webView.evaluateJavascript("termBridge.focus()") {
+                // The terminal tap is handled by a Compose overlay. Transfer the
+                // native editor focus as well as xterm's textarea focus so the
+                // first tap opens the IME instead of leaving it on the chat.
+                webView.post {
+                    if (webView.hasFocus()) {
+                        val keyboard = webView.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                        keyboard?.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT)
+                    }
+                }
+            }
+        }
     }
 
     /** Get selected text from xterm.js via callback. */

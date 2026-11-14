@@ -10,12 +10,16 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.agentshell.data.model.BrowserContentSize
+import com.agentshell.data.model.ChatSplitPreferences
+import com.agentshell.data.model.ChatTarget
 import com.agentshell.core.power.ConnectionMode
 import com.agentshell.core.power.ConnectionModeState
 import com.agentshell.core.power.ConnectionModeCodec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -276,6 +280,33 @@ class PreferencesDataStore @Inject constructor(
     suspend fun setBrowserContentSize(hostId: String, size: BrowserContentSize) {
         require(hostId.isNotBlank())
         dataStore.edit { it[browserContentSizeKey(hostId)] = size.densityPercent }
+    }
+
+    // ─── chat / terminal split ───────────────────────────────────────────────
+
+    private val splitJson = Json { ignoreUnknownKeys = true }
+
+    private fun chatSplitKey(hostId: String, sessionName: String, windowIndex: Int) =
+        stringPreferencesKey("chat_split_${ChatTarget.create(hostId, sessionName, windowIndex).key}")
+
+    fun chatSplitPreferences(hostId: String, sessionName: String, windowIndex: Int = 0): Flow<ChatSplitPreferences> =
+        dataStore.data.map { prefs ->
+            prefs[chatSplitKey(hostId, sessionName, windowIndex)]?.let { raw ->
+                runCatching { splitJson.decodeFromString<ChatSplitPreferences>(raw).normalized() }.getOrNull()
+            } ?: ChatSplitPreferences()
+        }
+
+    /** One transaction saves orientation, ordering and both divider positions together. */
+    suspend fun setChatSplitPreferences(
+        hostId: String,
+        sessionName: String,
+        windowIndex: Int = 0,
+        value: ChatSplitPreferences,
+    ) {
+        require(hostId.isNotBlank() && sessionName.isNotBlank() && windowIndex >= 0)
+        dataStore.edit { prefs ->
+            prefs[chatSplitKey(hostId, sessionName, windowIndex)] = splitJson.encodeToString(value.normalized())
+        }
     }
 
     // ─── recent sessions (swipe navigation) ───────────────────────────────────

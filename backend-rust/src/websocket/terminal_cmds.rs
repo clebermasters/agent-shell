@@ -121,7 +121,7 @@ pub(crate) async fn handle_attach(
 
     let previous_window = *state.current_window.lock().await;
     *state.current_window.lock().await = window_index;
-    if let Err(error) = attach_to_session(state, &session_name, cols, rows).await {
+    if let Err(error) = attach_to_session_target(state, &session_name, cols, rows, window_index).await {
         *state.current_window.lock().await = previous_window;
         return Err(error);
     }
@@ -135,6 +135,25 @@ pub(crate) async fn attach_to_session(
     session_name: &str,
     cols: u16,
     rows: u16,
+) -> anyhow::Result<()> {
+    // Session-only callers (for example selecting a window in another session)
+    // must not inherit a window index from the previously attached session.
+    attach_to_session_target(state, session_name, cols, rows, None).await
+}
+
+fn attach_target(session_name: &str, window_index: Option<u32>) -> String {
+    match window_index {
+        Some(index) => format!("={session_name}:{index}"),
+        None => format!("={session_name}"),
+    }
+}
+
+async fn attach_to_session_target(
+    state: &mut WsState,
+    session_name: &str,
+    cols: u16,
+    rows: u16,
+    window_index: Option<u32>,
 ) -> anyhow::Result<()> {
     // Attaching is navigation, never an instruction to create a session. Check
     // before replacing the active PTY, and require an exact name (no prefix match).
@@ -150,8 +169,22 @@ pub(crate) async fn attach_to_session(
         super::session_cmds::handle_list_sessions(&state.message_tx).await?;
         anyhow::bail!("Session '{session_name}' no longer exists. Refresh the session list.");
     }
+    let target = attach_target(session_name, window_index);
+    if let Some(index) = window_index {
+        // display-message can silently fall back to the current window for a
+        // missing target. Check the resolved index before replacing the PTY.
+        let window = tokio::process::Command::new("tmux")
+            .args(["display-message", "-p", "-t", &target, "#{window_index}"])
+            .output()
+            .await?;
+        if !window.status.success() || String::from_utf8_lossy(&window.stdout).trim() != index.to_string() {
+            let message = format!("Window {index} in session '{session_name}' no longer exists. Refresh the session list.");
+            send_message(&state.message_tx, ServerMessage::Error { message: message.clone() }).await?;
+            anyhow::bail!(message);
+        }
+    }
     let tx = &state.message_tx;
-    // Update current session
+    // Update current session only after both requested targets are validated.
     {
         let mut current = state.current_session.lock().await;
         *current = Some(session_name.to_string());
@@ -408,7 +441,7 @@ pub(crate) async fn attach_to_session(
     // queued live output so nothing is lost or reordered.
     let tx_bootstrap = tx.clone();
     let session_owned = session_name.to_string();
-    let window_index_val = *state.current_window.lock().await;
+    let window_index_val = window_index;
     let mut live_queue_rx = live_queue_rx;
 
     tokio::spawn(async move {
@@ -611,6 +644,66 @@ mod tests {
     use tokio::sync::{mpsc, Mutex};
 
     #[test]
+    fn terminal_attach_shows_requested_window_instead_of_active_window() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let socket = dir.path().join("tmux.sock");
+        struct ServerGuard(std::path::PathBuf);
+        impl Drop for ServerGuard {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("tmux").arg("-S").arg(&self.0).arg("kill-server").output();
+            }
+        }
+        let _server = ServerGuard(socket.clone());
+        let tmux = |args: &[&str]| {
+            let result = std::process::Command::new("tmux")
+                .arg("-S").arg(&socket).args(["-f", "/dev/null"]).args(args)
+                .output().unwrap();
+            assert!(result.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&result.stderr));
+            String::from_utf8_lossy(&result.stdout).trim().to_owned()
+        };
+        tmux(&["new-session", "-d", "-s", "split", "-n", "first", "sleep 60"]);
+        tmux(&["new-window", "-d", "-t", "=split:3", "-n", "requested", "sleep 60"]);
+        tmux(&["select-window", "-t", "=split:0"]);
+
+        let pair = native_pty_system().openpty(PtySize {
+            rows: 24, cols: 80, pixel_width: 0, pixel_height: 0,
+        }).unwrap();
+        let mut command = CommandBuilder::new("tmux");
+        command.arg("-S"); command.arg(&socket);
+        command.args(["attach-session", "-t", &attach_target("split", Some(3))]);
+        command.env_remove("TMUX");
+        command.env("TERM", "xterm");
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        let mut visible = String::new();
+        for _ in 0..40 {
+            visible = tmux(&["list-clients", "-t", "=split", "-F", "#{session_name}:#{window_index}"]);
+            if !visible.is_empty() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let _ = child.kill(); let _ = child.wait();
+        assert_eq!(visible, "split:3", "Terminal must attach to the chat's window");
+
+        // Without a requested window, preserve the selected window as before.
+        tmux(&["select-window", "-t", "=split:0"]);
+        let pair = native_pty_system().openpty(PtySize {
+            rows: 24, cols: 80, pixel_width: 0, pixel_height: 0,
+        }).unwrap();
+        let mut command = CommandBuilder::new("tmux");
+        command.arg("-S"); command.arg(&socket);
+        command.args(["attach-session", "-t", &attach_target("split", None)]);
+        command.env_remove("TMUX"); command.env("TERM", "xterm");
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        visible.clear();
+        for _ in 0..40 {
+            visible = tmux(&["list-clients", "-t", "=split", "-F", "#{session_name}:#{window_index}"]);
+            if !visible.is_empty() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let _ = child.kill(); let _ = child.wait();
+        assert_eq!(visible, "split:0", "Session-only attachment must retain its selected window");
+    }
+
+    #[test]
     fn tmux_context_preserves_named_servers_and_comma_paths() {
         assert_eq!(tmux_socket_from_context("/tmp/tmux-1000/default,123,0").unwrap(), "/tmp/tmux-1000/default");
         assert_eq!(tmux_socket_from_context("/private/tmp/folder,one/socket,456,0").unwrap(), "/private/tmp/folder,one/socket");
@@ -702,6 +795,26 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("no longer exists"));
         assert!(ws_state.current_session.lock().await.is_none());
         assert!(ws_state.current_pty.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_attach_missing_window_preserves_previous_target() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (mut ws_state, mut rx) = make_ws_state(dir.path());
+        let session = format!("split-window-{}", uuid::Uuid::new_v4());
+        crate::tmux::create_session(&session).await.unwrap();
+        *ws_state.current_session.lock().await = Some("previous-session".into());
+        *ws_state.current_window.lock().await = Some(3);
+        // The only live window is 0. tmux display-message would silently resolve
+        // this missing numeric window to 0 without the explicit index check.
+        let result = handle_attach(&mut ws_state, session.clone(), 80, 24, Some(999)).await;
+        let _ = crate::tmux::kill_session(&session).await;
+        assert!(result.unwrap_err().to_string().contains("Window 999"));
+        assert_eq!(*ws_state.current_session.lock().await, Some("previous-session".into()));
+        assert_eq!(*ws_state.current_window.lock().await, Some(3));
+        assert!(ws_state.current_pty.lock().await.is_none());
+        let BroadcastMessage::Text(message) = rx.recv().await.unwrap() else { panic!("Expected error") };
+        assert!(message.contains("Window 999"));
     }
 
     #[tokio::test]

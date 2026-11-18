@@ -45,6 +45,54 @@ class NativeSafetyTests(unittest.TestCase):
         self.assertNotIn('about:blank',command)
         self.assertFalse(any(arg.startswith('--profile-directory') for arg in command))
 
+    def test_retained_crash_requires_matching_prelaunch_profile_and_natural_zero_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            value = {'userDataDir': directory, 'profileDirectory': 'Default'}
+            for profile in ('Default', 'Profile 1'):
+                runtime.write_json(root/profile/'Preferences', {'profile': {'exit_type': 'Crashed'}})
+            evidence = runtime.chrome_exit_evidence(value)
+            self.assertEqual(evidence['crashedProfilesAtLaunch'], ['Default'])
+            source = dict(pid=101, processGeneration='boot:101', chromePid=202, chromeGeneration='boot:202',
+                          runtimeGeneration='generation', configFingerprint=runtime.fingerprint(value),
+                          state='ready', **evidence)
+            stopped = dict(source, state='stopped', chromeExitCode=0)
+            def verified(end, profiles=None):
+                return native.clean_exit(value, runtime, profiles, source=source, stopped=end)
+            self.assertTrue(verified(stopped))
+            self.assertFalse(verified(stopped, ['Profile 1']))
+            self.assertFalse(native.clean_exit(value, runtime))
+            self.assertEqual(runtime.profile_exit_type(directory, 'Default'), 'Crashed')
+            for key in ('pid', 'processGeneration', 'chromePid', 'chromeGeneration', 'runtimeGeneration', 'configFingerprint'):
+                with self.subTest(key=key):
+                    self.assertFalse(verified(dict(stopped, **{key: 'different'})))
+            self.assertFalse(verified(dict(stopped, state='ready')))
+            for code in (-9, -15, 1, None, False):
+                with self.subTest(code=code):
+                    self.assertFalse(verified(dict(stopped, chromeExitCode=code)))
+            # A newly crashed profile cannot borrow a different launch's marker.
+            source['crashedProfilesAtLaunch'] = []
+            self.assertFalse(verified(dict(stopped, crashedProfilesAtLaunch=[])))
+            runtime.write_json(root/'Default/Preferences', {'profile': {'exit_type': 'Normal'}})
+            self.assertTrue(verified(dict(stopped, crashedProfilesAtLaunch=[])))
+            self.assertFalse(verified(dict(stopped, chromeExitCode=-9, crashedProfilesAtLaunch=[])))
+            self.assertFalse(verified({}))
+
+    def test_old_native_exit_is_not_evidence_for_a_later_profile_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            value = {'userDataDir': directory, 'profileDirectory': 'Default'}
+            prefs = Path(directory)/'Default/Preferences'
+            marker = {'profile': {'exit_type': 'Crashed'}}
+            runtime.write_json(prefs, marker)
+            record = dict(pid=101, processGeneration='boot:101', chromePid=202, chromeGeneration='boot:202',
+                          runtimeGeneration='closed-native', configFingerprint=runtime.fingerprint(value),
+                          state='stopped', chromeExitCode=0, crashedProfilesAtLaunch=['Default'])
+            self.assertFalse(native.clean_exit(value, runtime, source=record, stopped=record))
+            record['crashPreferenceRevisions'] = {'Default': runtime.preference_file_revision(directory, 'Default')}
+            self.assertTrue(native.clean_exit(value, runtime, source=record, stopped=record))
+            runtime.write_json(prefs, marker)  # Another Chrome instance wrote the same marker.
+            self.assertFalse(native.clean_exit(value, runtime, source=record, stopped=record))
+
     def test_switch_marker_blocks_unrelated_start(self):
         with tempfile.TemporaryDirectory() as directory:
             value={'sessionId':'test','runtimeDir':directory,'userDataDir':directory}
@@ -188,6 +236,8 @@ class NativeFocusTests(unittest.TestCase):
             native.focus_native(self.value,runtime,'native-generation')
 
     def move_context(self,current):
+        if current['state'] == 'ready':
+            runtime.write_json(Path(self.directory.name)/'runtime.json', dict(self.record, runtimeGeneration=current['runtimeGeneration']))
         gtk=types.SimpleNamespace(init_check=lambda:(True,[]))
         gi=types.SimpleNamespace(require_version=lambda *_:None)
         stack=__import__('contextlib').ExitStack();self.addCleanup(stack.close)

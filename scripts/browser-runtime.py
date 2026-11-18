@@ -172,6 +172,42 @@ def profile_metadata(root):
     return value if isinstance(value, dict) else {}
 
 
+def exit_check_profiles(value):
+    metadata = profile_metadata(value['userDataDir'])
+    selected = value.get('profileDirectory') or metadata.get('last_used')
+    if selected:
+        return [selected]
+    active = metadata.get('last_active_profiles', [])
+    if isinstance(active, list) and active:
+        return active
+    cache = metadata.get('info_cache', {})
+    return list(cache) if isinstance(cache, dict) and len(cache) == 1 else []
+
+
+def profile_exit_type(root, directory):
+    if not safe_profile(root, directory):
+        return None
+    prefs = read_json(Path(root)/directory/'Preferences').get('profile')
+    return prefs.get('exit_type') if isinstance(prefs, dict) else None
+
+
+def chrome_exit_evidence(value):
+    # Sample before Popen: Chrome sets exit_type to Crashed on every launch.
+    return {'chromeExitCode': None, 'crashedProfilesAtLaunch': [
+        profile for profile in exit_check_profiles(value)
+        if profile_exit_type(value['userDataDir'], profile) == 'Crashed']}
+
+
+def preference_file_revision(root, profile):
+    if not safe_profile(root, profile):
+        return None
+    try:
+        file = (Path(root)/profile/'Preferences').stat()
+        return [file.st_dev, file.st_ino, file.st_size, file.st_mtime_ns, file.st_ctime_ns]
+    except OSError:
+        return None
+
+
 def catalog(value):
     current = status(value)
     profiles = []
@@ -285,8 +321,16 @@ def select_profile(value, path, identifier, confirmation_token=None):
                 if not active and metadata.get('last_used'): active = [metadata['last_used']]
                 native.quit_chrome(owner_value, owners[root], _runtime_module())
                 closed_roots.append(root)
-                if root == value['userDataDir']: native.wait_supervisor(source_record, _runtime_module())
-                if not native.clean_exit(owner_value, _runtime_module(), active):
+                managed = (root == value['userDataDir'] and current.get('state') in ('ready', 'native')
+                           and current.get('runtimeGeneration') == source_record.get('runtimeGeneration')
+                           and owners[root].get('chromePid') == source_record.get('chromePid')
+                           and owners[root].get('chromeGeneration') == source_record.get('chromeGeneration'))
+                exit_evidence = {}
+                if managed:
+                    native.wait_supervisor(source_record, _runtime_module())
+                    filename = 'native.json' if current['state'] == 'native' else 'runtime.json'
+                    exit_evidence = {'source': source_record, 'stopped': read_json(directory/filename)}
+                if not native.clean_exit(owner_value, _runtime_module(), active, **exit_evidence):
                     raise RuntimeErrorCode('UNCLEAN_CHROME_EXIT')
             if value.get('supervision', 'systemd-user') == 'systemd-user':
                 for unit in ('agentshell-browser.service', 'agentshell-browser-native.service'):
@@ -528,6 +572,7 @@ def run(value):
                 wm=subprocess.Popen(['openbox','--config-file',str(directory/'openbox.xml')],env=env,stdout=log,stderr=log);children.append(wm)
                 # Preserve the installed Chrome version, sandbox and credential-store behavior.
                 restore = read_json(directory/'restore-next.json').get('restore') is True
+                record.update(chrome_exit_evidence(value))
                 chrome=subprocess.Popen([*chrome_command(value, restore=restore), '--ozone-platform=x11'],env=env,stdout=log,stderr=log);children.append(chrome)
                 for _ in range(100):
                     if stopped or chrome.poll() is not None: raise RuntimeErrorCode('CHROME_START_FAILED')
@@ -541,7 +586,13 @@ def run(value):
                     time.sleep(.1)
                 else: raise RuntimeErrorCode('PROFILE_OWNER_MISMATCH')
                 while not stopped:
-                    if any(child.poll() is not None for child in children): raise RuntimeErrorCode('RUNTIME_EXITED')
+                    if any(child.poll() is not None for child in children if child is not chrome):
+                        raise RuntimeErrorCode('RUNTIME_EXITED')
+                    exit_code = chrome.poll()
+                    if exit_code is not None:
+                        record['chromeExitCode'] = exit_code
+                        if exit_code != 0: raise RuntimeErrorCode('RUNTIME_EXITED')
+                        break
                     time.sleep(.25)
         except RuntimeErrorCode as error:
             record['code']=error.code

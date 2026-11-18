@@ -68,16 +68,46 @@ def wait_supervisor(record, runtime):
         time.sleep(.1)
 
 
-def clean_exit(value,runtime,profiles=None):
-    metadata=runtime.profile_metadata(value['userDataDir'])
-    selected=value.get('profileDirectory') or metadata.get('last_used')
-    if profiles is None: profiles=[selected] if selected else metadata.get('last_active_profiles',[])
-    if not profiles and len(metadata.get('info_cache',{}))==1:profiles=list(metadata['info_cache'])
-    if not profiles:return False
+def clean_exit(value, runtime, profiles=None, *, source=None, stopped=None):
+    previous_crashes = []
+    if source is not None:
+        # A stopped/newer service, by itself, says nothing about the Chrome
+        # process we asked to quit. Match the two lifetime records.
+        identity = ('pid', 'processGeneration', 'chromePid', 'chromeGeneration', 'runtimeGeneration', 'configFingerprint')
+        if (source.get('state') not in ('ready', 'stopped') or not stopped or stopped.get('state') != 'stopped'
+                or source.get('configFingerprint') != runtime.fingerprint(value)
+                or any(not source.get(key) or source[key] != stopped.get(key) for key in identity)):
+            return False
+        if 'chromeExitCode' in source or 'chromeExitCode' in stopped:
+            code = stopped.get('chromeExitCode')
+            if type(code) is not int or code != 0:
+                return False
+            previous_crashes = source.get('crashedProfilesAtLaunch')
+            if not isinstance(previous_crashes, list) or previous_crashes != stopped.get('crashedProfilesAtLaunch'):
+                return False
+    if profiles is None:
+        profiles = runtime.exit_check_profiles(value)
+    elif not profiles:
+        cache = runtime.profile_metadata(value['userDataDir']).get('info_cache', {})
+        profiles = list(cache) if isinstance(cache, dict) and len(cache) == 1 else []
+    if not profiles:
+        return False
     for profile in profiles:
-        if not isinstance(profile,str) or '/' in profile or '\\' in profile or profile in ('','.','..'):return False
-        preferences=runtime.read_json(Path(value['userDataDir'])/profile/'Preferences').get('profile',{})
-        if not isinstance(preferences,dict) or preferences.get('exit_type')!='Normal':return False
+        marker = runtime.profile_exit_type(value['userDataDir'], profile)
+        # Chromium's ExitTypeService retains a historical crash during normal
+        # shutdown until its recovery prompt is acknowledged. Leave that data
+        # intact; the verified child exit and pre-launch sample prove this case.
+        if marker == 'Normal':
+            continue
+        if marker != 'Crashed' or profile not in previous_crashes:
+            return False
+        if source['state'] == 'stopped':
+            # The user had already quit native Chrome. Another instance may
+            # have used the same profile since then without using our launcher.
+            revisions = stopped.get('crashPreferenceRevisions', {})
+            revision = runtime.preference_file_revision(value['userDataDir'], profile)
+            if not revision or not isinstance(revisions, dict) or revisions.get(profile) != revision:
+                return False
     return True
 
 
@@ -209,7 +239,10 @@ def move(value, path, destination, expected, runtime):
             return {'code':'CONNECTED','connected':True,'destination':'native' if source_native else 'phone','session':current}
         if current.get('state') not in ('ready','native','native-closed'):
             raise runtime.RuntimeErrorCode('BROWSER_NOT_READY')
-        record=runtime.read_json(directory/('native.json' if source_native else 'runtime.json'))
+        record_path=directory/('native.json' if source_native else 'runtime.json')
+        record=runtime.read_json(record_path)
+        if record.get('runtimeGeneration') != expected:
+            raise runtime.RuntimeErrorCode('RUNTIME_CHANGED')
         switch={'pid':os.getpid(),'processGeneration':runtime.generation(os.getpid()),'destination':destination}
         runtime.write_json(directory/'native-switch.json',switch)
         closed=False
@@ -217,7 +250,8 @@ def move(value, path, destination, expected, runtime):
             if not already_closed:quit_chrome(value,record,runtime)
             closed=True
             wait_supervisor(record,runtime)
-            if not clean_exit(value,runtime):raise runtime.RuntimeErrorCode('UNCLEAN_CHROME_EXIT')
+            if not clean_exit(value, runtime, source=record, stopped=runtime.read_json(record_path)):
+                raise runtime.RuntimeErrorCode('UNCLEAN_CHROME_EXIT')
             # systemd is stopped only AFTER Chrome has exited normally. It must
             # never signal/kill the browser to bypass a close confirmation.
             if value.get('supervision','systemd-user')=='systemd-user':
@@ -257,6 +291,7 @@ def run(value, runtime):
             if runtime.profile_owner(value['userDataDir']) is not None:raise runtime.RuntimeErrorCode('PROFILE_IN_USE')
             secret_preflight(value,runtime)
             with (directory/'native-chrome.log').open('ab') as log:
+                record.update(runtime.chrome_exit_evidence(value))
                 chrome=subprocess.Popen(runtime.chrome_command(value,restore=True),env=dict(os.environ),stdout=log,stderr=log)
                 for _ in range(100):
                     if chrome.poll() is not None:raise runtime.RuntimeErrorCode('NATIVE_START_FAILED')
@@ -268,7 +303,13 @@ def run(value, runtime):
                     time.sleep(.1)
                 else:raise runtime.RuntimeErrorCode('PROFILE_OWNER_MISMATCH')
                 while not stopped and chrome.poll() is None:time.sleep(.25)
-                if stopped and chrome.poll() is None:
+                if not stopped:
+                    record['chromeExitCode'] = chrome.returncode
+                    if chrome.returncode == 0:
+                        record['crashPreferenceRevisions'] = {
+                            profile: runtime.preference_file_revision(value['userDataDir'], profile)
+                            for profile in record['crashedProfilesAtLaunch']}
+                elif chrome.poll() is None:
                     quit_chrome(value,record,runtime)
                     chrome.wait(timeout=5)
         except runtime.RuntimeErrorCode as error:record['code']=error.code

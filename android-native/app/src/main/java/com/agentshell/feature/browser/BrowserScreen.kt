@@ -423,7 +423,7 @@ fun BrowserScreen(
         confirmButton={TextButton(onClick={confirmStop=false;viewModel.stop()}){Text("Stop Chrome")}},dismissButton={TextButton(onClick={confirmStop=false}){Text("Keep running")}})
     confirmNative?.let { toComputer -> AlertDialog(onDismissRequest={confirmNative=null},
         title={Text(if(toComputer) "Open Chrome on the desktop?" else "Return Chrome to this phone?")},
-        text={Text("Chrome will close and reopen on the other display using the same profile. All Chrome windows and other profiles in the same browser data folder may close too. Tabs are restored, but unsaved page inputs and live page state may be lost. Save your work first.")},
+        text={Text("Chrome will reopen the same profile on the other display. Other windows in this browser data folder may close too.\n\nSave unsaved work first. If Chrome shows “Restore pages?”, handle that prompt before moving so Chrome can save your current tabs.")},
         confirmButton={TextButton(onClick={confirmNative=null;viewModel.moveNative(toComputer)}){Text(if(toComputer) "Open native Chrome" else "Return to phone")}},
         dismissButton={TextButton(onClick={confirmNative=null}){Text("Cancel")}}) }
 }

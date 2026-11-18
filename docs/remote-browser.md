@@ -54,9 +54,9 @@ The same installation includes the native desktop browser and the graphical
 session broker. Native Chrome uses the logged-in desktop session (Wayland on
 Omarchy); the X11 override applies only to the virtual display. Moving the same
 managed profile between native Chrome and VNC keeps the existing normal-close,
-profile-lock, keyring and process-generation checks. An unacknowledged prior
-Chrome crash can block a handoff with `UNCLEAN_CHROME_EXIT`; the installer does
-not rewrite profile exit markers to bypass that check.
+profile-lock, keyring and process-generation checks. When the helper cannot
+verify Chrome's exit, Android reports `UNCLEAN_CHROME_EXIT`. The native
+handoff section below explains how Chrome's crash-recovery marker is handled.
 
 Check the selected dependencies before installation:
 
@@ -264,8 +264,9 @@ Chrome running. **Open native Chrome on computer** is a separate Android menu
 action that closes the managed browser normally and reopens that same profile
 directly on the logged-in desktop, without a VNC viewer. While native Chrome is
 active, **Use on this phone** offers the reverse handoff. Both native actions
-show a confirmation: tabs are restored, but unsaved page inputs and JavaScript
-memory cannot survive the restart. Cancel leaves the current browser untouched.
+show a confirmation before closing Chrome. Chrome normally restores its saved
+tabs. Save unsent form input and other work before moving. Cancel leaves the
+current browser open.
 If you close native Chrome normally yourself, the return action still restores
 its tabs on the phone; it does not require leaving the native window open.
 
@@ -297,11 +298,34 @@ download confirmation prevents closure, Chrome stays open and the handoff fails
 safely. Resolve the dialog or quit Chrome normally before retrying. See
 [Chromium's shutdown implementation](https://chromium.googlesource.com/chromium/src/+/HEAD/chrome/browser/chrome_browser_main_posix.cc).
 
-The helper checks Chrome's recorded clean exit, requests `--restore-last-session`
-without opening an extra blank tab, and restarts the original location if the
-destination launch fails. It never copies a live profile, removes a live lock,
-enables production DevTools, disables the sandbox or selects plaintext password
-storage. The previous viewer-transfer workflow and its recovery remain available.
+Chrome can keep a profile marked `Crashed` after an orderly exit so you can
+still recover an earlier session. AgentShell records the profile's exit marker
+before launching Chrome and the managed process's exit status when it finishes.
+A handoff can proceed with a retained marker when that same process exited
+successfully and the same profile was already marked at launch. An unexpected
+exit or missing evidence still triggers recovery. [Chromium's exit-type service](https://chromium.googlesource.com/chromium/src/+/lkgr/chrome/browser/sessions/exit_type_service.cc)
+
+AgentShell starts the same profile with `--restore-last-session` and leaves
+Chrome's recovery files intact. With recovery pending, Chrome can open a
+**New Tab** on the destination and offer **Restore** for the last saved session.
+If you want those tabs, select **Restore** in Chrome. If you see **Restore
+pages?** on the source display, resolve it before moving. Chrome may still be
+holding the older session while you browse, and tabs opened since the crash
+may be missing from that checkpoint.
+
+If the destination fails to start, AgentShell tries to reopen the browser on
+the original display. A browser already running
+during a helper upgrade uses the earlier checks for that first move. If it
+returns to the phone with the normal-exit warning, retry from the restored
+browser so the updated helper can verify the new process.
+
+The helper never copies a live profile, removes a live lock, enables production
+DevTools, disables the sandbox or selects plaintext password storage. The
+existing viewer-transfer workflow and its recovery remain available.
+
+Run `python3 scripts/test_browser_native_unit.py` to check exit verification
+and `python3 scripts/test_browser_native_crash_restore.py` on a Linux browser
+host to exercise recovery in a disposable Chrome profile.
 
 Verification used two independent owned X displays and a synthetic profile. Two
 native round trips restored both original tabs, the selected tab, and session/

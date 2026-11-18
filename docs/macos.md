@@ -91,7 +91,9 @@ the Linux browser provider.
 
 ## Verification
 
-CI builds and tests on Ubuntu, macOS 15 Apple Silicon and macOS 15 Intel. It runs
+CI builds and tests on Ubuntu, macOS 26 for Apple Silicon, and macOS 15 for Intel.
+It checks that the Apple Silicon daemon targets macOS 11 and the Swift browser
+helper targets macOS 13. On all three runners, it runs
 the Rust and installer regressions plus an isolated native HTTP/WebSocket/tmux
 smoke test, validates matching Python/Rust process generations, exercises PTY
 input, and checks session survival across a backend restart. The Swift helper

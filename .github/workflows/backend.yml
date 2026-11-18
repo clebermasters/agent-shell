@@ -24,7 +24,7 @@ jobs:
           - runner: ubuntu-latest
             artifact: agentshell-backend-linux-x86_64
             asset: agentshell-backend
-          - runner: macos-15
+          - runner: macos-26
             artifact: agentshell-backend-macos-arm64
             asset: agentshell-backend-macos-arm64
             browser_asset: AgentShellBrowser-macos-arm64.app.zip
@@ -61,6 +61,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Set Apple Silicon backend deployment target
+        if: matrix.runner == 'macos-26'
+        run: echo 'MACOSX_DEPLOYMENT_TARGET=11.0' >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend-rust
@@ -68,6 +72,21 @@ jobs:
       - name: Build
         run: cargo build --release --locked
         working-directory: backend-rust
+
+      - name: Verify Apple Silicon release deployment targets
+        if: matrix.runner == 'macos-26'
+        run: |
+          check_target() {
+            local binary=$1 expected=$2 minimum
+            xcrun lipo "$binary" -verify_arch arm64
+            minimum=$(xcrun vtool -arch arm64 -show-build "$binary" | awk '$1 == "minos" { print $2 }')
+            if [[ "$minimum" != "$expected" ]]; then
+              echo "::error::$binary has minimum macOS '$minimum', expected '$expected'"
+              return 1
+            fi
+          }
+          check_target backend-rust/target/release/agentshell-backend "$MACOSX_DEPLOYMENT_TARGET"
+          check_target "$RUNNER_TEMP/AgentShellBrowser.app/Contents/MacOS/AgentShellBrowser" 13.0
 
       - name: Rust regressions
         run: cargo test --locked -- --test-threads=1

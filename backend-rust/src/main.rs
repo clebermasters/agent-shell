@@ -58,7 +58,7 @@ pub static ENABLE_AUDIO_LOGS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Parser, Debug)]
-#[command(name = "agentshell-backend")]
+#[command(name = "agentshell-backend", version)]
 #[command(about = "AgentShell backend server", long_about = None)]
 struct Args {
     /// Enable audio streaming debug logs

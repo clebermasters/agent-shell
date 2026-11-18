@@ -25,6 +25,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
+import com.agentshell.BuildConfig
 import com.agentshell.core.config.AppConfig
 import com.agentshell.data.local.PreferencesDataStore
 import com.agentshell.core.util.NotificationHelper
@@ -57,7 +58,6 @@ data class SettingsUiState(
     val batteryDiagnosticsEnabled: Boolean = false,
     val isSaving: Boolean = false,
     val savedMessage: String? = null,
-    val appVersion: String = "1.0.0",
 )
 
 @HiltViewModel
@@ -467,7 +467,7 @@ fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("AgentShell", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(4.dp))
-                    Text("Version ${state.appVersion}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Version ${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "Connect to your remote tmux sessions, manage dotfiles, and interact with AI agents from anywhere.",

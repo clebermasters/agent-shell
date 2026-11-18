@@ -125,6 +125,106 @@ class ChatActivityRepositoryTest {
         assertEquals("conversation:B", repo.states.value.getValue(target.key).conversationKey)
     }
 
+    private fun publication(session: String, window: Int, lease: String = "publisher", conversation: String = "conversation:publisher", id: String = "image") =
+        mapOf<String, Any?>("type" to "chat-event", "sessionName" to session, "windowIndex" to window,
+            "bindingId" to lease, "conversationKey" to conversation, "source" to "agent-publication",
+            "message" to mapOf("id" to id, "role" to "assistant", "timestamp" to 200,
+                "blocks" to listOf(mapOf("type" to "image", "id" to "file-$id", "mimeType" to "image/png"))))
+
+    @Test fun publishedImageFollowsVerifiedConversationToItsRenamedSessionAndMovedWindow() = runTest {
+        val repo = repository()
+        repo.register(target)
+        repo.linkConversation(target, link("publisher", "conversation:publisher"))
+        repo.history(target, listOf(old))
+        val destination = target.copy(sessionName = "renamed session", windowIndex = 7)
+        val packet = publication(destination.sessionName, destination.windowIndex)
+
+        repo.handleEvent(target.hostId, packet, target)
+
+        val delivered = repo.states.value.getValue(destination.key)
+        assertEquals("conversation:publisher", delivered.conversationKey)
+        assertEquals("image", delivered.unread.single().id)
+        assertEquals("old", repo.states.value.getValue(target.key).latestReceived?.id)
+        assertEquals(destination, NotificationHelper.chatTarget(shadowOf(shadowOf(manager).allNotifications.single().contentIntent).savedIntent))
+        repo.handleEvent(target.hostId, packet)
+        assertEquals(1, repo.states.value.getValue(destination.key).unread.size)
+        assertEquals(1, shadowOf(manager).allNotifications.size)
+    }
+
+    @Test fun viewingTheOldAliasSuppressesRenamedPublicationButAnotherHostsViewerDoesNot() = runTest {
+        val repo = repository()
+        repo.register(target)
+        repo.linkConversation(target, link("publisher", "conversation:publisher"))
+        repo.history(target, listOf(old))
+        repo.setViewing("screen", target, true)
+        val destination = target.copy(sessionName = "renamed session", windowIndex = 7)
+
+        repo.handleEvent(target.hostId, publication(destination.sessionName, destination.windowIndex))
+
+        assertEquals("image", repo.states.value.getValue(destination.key).unread.single().id)
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+
+        repo.setViewing("screen", target, false)
+        val foreign = target.copy(hostId = "other-host")
+        repo.register(foreign)
+        repo.linkConversation(foreign, link("publisher", "conversation:publisher"))
+        repo.setViewing("foreign screen", foreign, true)
+        repo.handleEvent(target.hostId, publication(destination.sessionName, destination.windowIndex, id = "next-image"))
+
+        val notification = shadowOf(manager).allNotifications.single()
+        assertEquals(destination, NotificationHelper.chatTarget(shadowOf(notification.contentIntent).savedIntent))
+    }
+
+    @Test fun renamedPublicationCannotBorrowALeaseFromAnotherHostOrOverwriteAKnownConversation() = runTest {
+        val repo = repository()
+        repo.register(target)
+        repo.linkConversation(target, link("publisher", "conversation:publisher"))
+        val destination = target.copy(sessionName = "destination", windowIndex = 2)
+        val packet = publication(destination.sessionName, destination.windowIndex)
+        repo.handleEvent("other-host", packet)
+        assertFalse(repo.states.value.containsKey(destination.copy(hostId = "other-host").key))
+        repo.handleEvent(target.hostId, packet + ("conversationKey" to "conversation:wrong"))
+        assertFalse(repo.states.value.containsKey(destination.key))
+
+        repo.register(destination)
+        repo.linkConversation(destination, link("independent", "conversation:independent"))
+        repo.history(destination, listOf(old))
+        repo.handleEvent(target.hostId, packet)
+        assertEquals("conversation:independent", repo.states.value.getValue(destination.key).conversationKey)
+        assertEquals("old", repo.states.value.getValue(destination.key).latestReceived?.id)
+        assertTrue(repo.states.value.getValue(destination.key).unread.isEmpty())
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
+    @Test fun resumingConversationInvalidatesEveryPreviouslyAcceptedAliasForItsOldLease() = runTest {
+        val repo = repository()
+        repo.register(target)
+        repo.linkConversation(target, link("publisher", "conversation:publisher"))
+        val renamed = target.copy(sessionName = "renamed", windowIndex = 4)
+        repo.handleEvent(target.hostId, publication(renamed.sessionName, renamed.windowIndex))
+        manager.cancelAll()
+
+        repo.linkConversation(target, link("resumed", "conversation:resumed"))
+        repo.handleEvent(target.hostId, publication("another alias", 6, id = "late-old-image"))
+        repo.handleEvent(target.hostId, publication(renamed.sessionName, renamed.windowIndex, id = "late-old-image"))
+
+        assertFalse(repo.states.value.containsKey(target.copy(sessionName = "another alias", windowIndex = 6).key))
+        assertEquals(listOf("image"), repo.states.value.getValue(renamed.key).unread.map { it.id })
+        assertFalse(repo.bindings.value.containsKey(renamed.key))
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
+    @Test fun aBackgroundSocketCannotAcceptAnotherPanesPublicationEvenIfItsAliasIsNew() = runTest {
+        val repo = repository()
+        val other = target.copy(sessionName = "other")
+        repo.register(target); repo.register(other)
+        repo.linkConversation(target, link("first", "conversation:first"))
+        repo.linkConversation(other, link("publisher", "conversation:publisher"))
+        repo.handleEvent(target.hostId, publication("renamed other", 3), target)
+        assertFalse(repo.states.value.containsKey(other.copy(sessionName = "renamed other", windowIndex = 3).key))
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
     @Test fun late_completion_from_previous_conversation_does_not_notify_the_resumed_chat() = runTest {
         val repo = repository(); repo.register(target)
         repo.linkConversation(target, link("old", "conversation:A"))

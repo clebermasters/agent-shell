@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise publication routing and HTTP failures through the stdio adapter."""
 import importlib.util
+import base64
 import io
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -132,6 +133,94 @@ class InstallationTests(unittest.TestCase):
             self.assertIn('AGENTSHELL_UI_REVISION=' + revision, command)
             self.assertNotIn('private-test-token', ' '.join(command))
             self.assertEqual((Path(directory) / '.config/agentshell/interactive-ui.json').stat().st_mode & 0o777, 0o600)
+
+
+class FilePublicationTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.file = Path(self.directory.name) / 'chart.png'
+        self.file.write_bytes(b'attachment-bytes')
+        self.received = []
+        self.receipt = {'published': True, 'bindingId': 'lease-a', 'conversationKey': 'conversation:codex:one',
+                        'sessionName': 'arbitrary-renamed-session', 'windowIndex': 3, 'fileIds': ['stored-file']}
+        self.response = (200, json.dumps(self.receipt).encode())
+        test = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                test.received.append((self.path, json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
+                self.send_response(test.response[0])
+                self.end_headers()
+                self.wfile.write(test.response[1])
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.config = patch.object(adapter, 'runtime_config', return_value=(f'http://127.0.0.1:{self.server.server_port}', 'private-test-token'))
+        self.identity = patch.object(adapter, 'publisher_identity', return_value={'agentPid': 123, 'agentStart': 456, 'codexThreadId': 'native-thread'})
+        self.config.start()
+        self.identity_mock = self.identity.start()
+
+    def tearDown(self):
+        self.identity.stop()
+        self.config.stop()
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+        self.directory.cleanup()
+
+    def test_file_uses_assistant_publication_and_current_native_identity(self):
+        result = adapter.publish_chat_file(str(self.file), 'Requested chart', {'threadId': 'native-thread'})
+        endpoint, payload = self.received[0]
+        self.assertEqual(endpoint, '/api/chat/publish')
+        self.assertEqual(result, self.receipt)
+        self.identity_mock.assert_called_once_with({'threadId': 'native-thread'})
+        self.assertNotIn('sessionName', payload)
+        self.assertNotIn('paneId', payload)
+        self.assertNotIn('type', payload)
+        self.assertEqual(payload['text'], 'Requested chart')
+        self.assertEqual(payload['files'][0]['filename'], 'chart.png')
+        self.assertEqual(payload['files'][0]['mimeType'], 'image/png')
+        self.assertEqual(base64.b64decode(payload['files'][0]['data']), b'attachment-bytes')
+
+    def test_arbitrary_broadcast_or_incomplete_receipt_is_not_success(self):
+        for response in ({'type': 'sessions-list', 'sessions': []}, {'published': True}, dict(self.receipt, published=False)):
+            self.response = (200, json.dumps(response).encode())
+            with self.assertRaisesRegex(adapter.PublicationError, 'did not confirm'):
+                adapter.publish_chat_file(str(self.file))
+
+    def test_explicit_session_and_window_are_guards_not_routing_overrides(self):
+        adapter.publish_chat_file(str(self.file), expected_session_name='arbitrary-renamed-session', expected_window_index=3)
+        self.assertEqual(self.received[0][1]['expectedSessionName'], 'arbitrary-renamed-session')
+        self.assertEqual(self.received[0][1]['expectedWindowIndex'], 3)
+        with self.assertRaisesRegex(adapter.PublicationError, 'different session'):
+            adapter.publish_chat_file(str(self.file), expected_session_name='another-chat')
+
+    def test_stdio_file_tool_forwards_per_call_metadata_and_returns_destination(self):
+        request = {'id': 1, 'method': 'tools/call', 'params': {'name': 'send_file_to_chat',
+            'arguments': {'path': str(self.file), 'description': 'Requested image'}, '_meta': {'threadId': 'native-thread'}}}
+        output = io.StringIO()
+        with patch.object(adapter.sys, 'stdin', io.StringIO(json.dumps(request) + '\n')), patch.object(adapter.sys, 'stdout', output):
+            adapter.run()
+        result = json.loads(output.getvalue())['result']
+        self.identity_mock.assert_called_once_with({'threadId': 'native-thread'})
+        self.assertEqual(result['structuredContent'], self.receipt)
+        self.assertIn('arbitrary-renamed-session:3', result['content'][0]['text'])
+
+    def test_failed_publication_never_claims_the_file_was_saved(self):
+        self.response = (409, b'The terminal switched conversations')
+        with self.assertRaisesRegex(adapter.PublicationError, 'HTTP 409.*switched conversations'):
+            adapter.publish_chat_file(str(self.file))
+
+    def test_tool_inventory_includes_conversation_scoped_file_delivery(self):
+        output = io.StringIO()
+        with patch.object(adapter.sys, 'stdin', io.StringIO('{"id":1,"method":"tools/list"}\n')), patch.object(adapter.sys, 'stdout', output):
+            adapter.run()
+        names = {tool['name'] for tool in json.loads(output.getvalue())['result']['tools']}
+        self.assertEqual(names, {'get_ui_design_system', 'render_interactive_ui', 'send_file_to_chat'})
 
 
 if __name__ == '__main__':

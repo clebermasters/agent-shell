@@ -182,7 +182,19 @@ class ChatActivityRepository @Inject constructor(
         syncMonitors()
     }
 
-    private fun isViewing(target: ChatTarget) = target.key in viewers.values
+    private fun isViewing(target: ChatTarget): Boolean {
+        if (viewers.isEmpty()) return false
+        if (target.key in viewers.values) return true
+        val bindings = _bindings.value
+        val current = bindings[target.key]?.takeIf { it.canSend }?.binding ?: return false
+        // A visible chat can retain its old alias while publication names the
+        // pane's new location. Compare only the few active viewers, not all chats.
+        return viewers.values.any { key ->
+            if (_states.value[key]?.target?.hostId != target.hostId) return@any false
+            val viewed = bindings[key]?.takeIf { it.canSend }?.binding
+            viewed != null && viewed.id == current.id && viewed.conversationKey == current.conversationKey
+        }
+    }
 
     suspend fun history(target: ChatTarget, messages: List<ChatMessage>) {
         ready.await()
@@ -215,7 +227,15 @@ class ChatActivityRepository @Inject constructor(
     suspend fun linkConversation(target: ChatTarget, binding: ChatBindingState) {
         start(); ready.await()
         val previous = _bindings.value[target.key]
-        _bindings.value = _bindings.value + (target.key to binding)
+        val previousLease = previous?.binding?.id
+        val retained = if (previousLease != null && (!binding.canSend || previousLease != binding.binding?.id)) {
+            // A renamed alias may share this lease. Once the native conversation
+            // changes, those old aliases must not authorize delayed packets.
+            _bindings.value.filterNot { (key, value) ->
+                key != target.key && value.binding?.id == previousLease && _states.value[key]?.target?.hostId == target.hostId
+            }
+        } else _bindings.value
+        _bindings.value = retained + (target.key to binding)
         val key = binding.binding?.conversationKey
         if (key != null) update(target) { current ->
             if (current.conversationKey == key) current else ChatReadState(target, conversationKey = key)
@@ -265,7 +285,12 @@ class ChatActivityRepository @Inject constructor(
         }
         if (message["bindingId"] != null) {
             val target = eventTarget(hostId, message) ?: watchedTarget ?: return
-            if (!_bindings.value[target.key].acceptsConversationPacket(message)) return
+            val binding = bindingForEvent(hostId, target, message, watchedTarget) ?: return
+            if (_bindings.value[target.key] == null) {
+                // The publisher reports the pane's current alias after a rename
+                // or move. Notifications should open that actual destination.
+                linkConversation(target, binding)
+            }
         }
         handleAgentActivity(hostId, message, watchedTarget)
         when (message["type"] as? String) {
@@ -357,6 +382,26 @@ class ChatActivityRepository @Inject constructor(
                 if (message["success"] == true) eventTarget(hostId, message)?.let { clear(it) }
             }
         }
+    }
+
+    private fun bindingForEvent(
+        hostId: String,
+        target: ChatTarget,
+        message: Map<String, Any?>,
+        watchedTarget: ChatTarget?,
+    ): ChatBindingState? {
+        if (watchedTarget != null) {
+            if (watchedTarget.hostId != hostId) return null
+            if (!_bindings.value[watchedTarget.key].acceptsConversationPacket(message)) return null
+        }
+        // Never replace a different known conversation just because another
+        // pane on this server owns the packet's lease.
+        _bindings.value[target.key]?.let { return it.takeIf { it.acceptsConversationPacket(message) } }
+        if (watchedTarget != null) return _bindings.value[watchedTarget.key]
+        // This path is only needed for bound packets arriving under a new alias.
+        return _bindings.value.entries.firstOrNull { (key, binding) ->
+            _states.value[key]?.target?.hostId == hostId && binding.acceptsConversationPacket(message)
+        }?.value
     }
 
     internal fun handleAgentActivity(hostId: String, message: Map<String, Any?>, watchedTarget: ChatTarget? = null) {

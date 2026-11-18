@@ -1,11 +1,12 @@
 # Configure AgentShell Smart UI MCP
 
-The **agentshell-ui** stdio server exposes two tools:
+The **agentshell-ui** stdio server exposes three tools:
 
 | Tool | Purpose |
 | --- | --- |
 | `get_ui_design_system` | Obtain the mobile stylesheet, theme variables and bridge guidance. |
 | `render_interactive_ui` | Publish a complete `{title, html}` document to the calling agent's Android conversation. |
+| `send_file_to_chat` | Save a requested local file as an assistant attachment in the calling conversation, automatically resolving its current TMUX session/window. |
 
 The native agent must run in a TMUX pane on the daemon's machine. AgentShell must
 know that pane's native conversation identity. The adapter currently recognizes

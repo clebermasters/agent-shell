@@ -649,9 +649,9 @@ class Installer:
         if len(results) != 3 or any('error' in value for value in results):
             raise ValueError('Installed MCP stdio/design-system verification failed')
         names = {tool['name'] for tool in results[1]['result']['tools']}
-        if names != {'get_ui_design_system', 'render_interactive_ui'}:
+        if names != {'get_ui_design_system', 'render_interactive_ui', 'send_file_to_chat'}:
             raise ValueError('Installed MCP tool inventory is incomplete')
-        print('Installed MCP handshake, both tools and design-system files verified.', flush=True)
+        print('Installed MCP handshake, publication tools and design-system files verified.', flush=True)
 
     def configure_shell_path(self):
         path = self.user_home / '.config/agentshell/path.sh'

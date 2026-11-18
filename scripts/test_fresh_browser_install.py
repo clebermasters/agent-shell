@@ -85,7 +85,7 @@ requests=[{'id':1,'method':'initialize','params':{'protocolVersion':'2024-11-05'
 result=subprocess.run(['/usr/bin/python3',str(base/'ui/agent-ui-mcp.py')],input=''.join(json.dumps(item)+'\\n' for item in requests),env=environment,user=account.pw_uid,group=account.pw_gid,capture_output=True,text=True,check=True)
 messages=[json.loads(line) for line in result.stdout.splitlines()]
 assert len(messages)==3 and all('result' in item for item in messages)
-assert {tool['name'] for tool in messages[1]['result']['tools']}=={'get_ui_design_system','render_interactive_ui'}
+assert {tool['name'] for tool in messages[1]['result']['tools']}=={'get_ui_design_system','render_interactive_ui','send_file_to_chat'}
 assert '--accent' in messages[2]['result']['content'][0]['text']
 server=subprocess.Popen([str(base/'backend/agentshell-backend')],cwd=base/'backend',env=dict(os.environ,**runtime,AGENTSHELL_BROWSER_CONFIG=str(config)),user=account.pw_uid,group=account.pw_gid,stdout=open('/tmp/backend.log','w'),stderr=subprocess.STDOUT)
 try:

@@ -1,5 +1,10 @@
 ## AgentShell Smart UI
 
+When the user requests delivery of a local image, document, audio clip, or other
+file to their AgentShell chat, use `send_file_to_chat`. It identifies the calling
+conversation and current TMUX session/window automatically. Do not choose a
+fixed session or use the app's phone-to-agent upload command for this direction.
+
 When an interactive explanation helps, call `get_ui_design_system`, then
 `render_interactive_ui` with a useful title and complete self-contained HTML.
 Use the supplied mobile styles and light/dark theme variables, accurate labelled

@@ -100,7 +100,7 @@ result = subprocess.run(['python3', str(base / 'ui/agent-ui-mcp.py')],
                         capture_output=True, check=True)
 messages = [json.loads(line) for line in result.stdout.splitlines()]
 assert len(messages) == 3 and all('result' in value for value in messages)
-assert {tool['name'] for tool in messages[1]['result']['tools']} == {'get_ui_design_system', 'render_interactive_ui'}
+assert {tool['name'] for tool in messages[1]['result']['tools']} == {'get_ui_design_system', 'render_interactive_ui', 'send_file_to_chat'}
 assert '--accent' in messages[2]['result']['content'][0]['text']
 
 subprocess.run(['tmux', 'new-session', '-d', '-s', 'installer-fixture', '/bin/sleep 600'], check=True)

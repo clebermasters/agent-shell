@@ -14,20 +14,38 @@ impl ChatFileStorage {
     }
 
     pub fn save_file(&self, data: &str, filename: &str, mime_type: &str) -> Result<String, String> {
+        let decoded = BASE64
+            .decode(data)
+            .map_err(|e| format!("Failed to decode base64: {}", e))?;
+        self.save_bytes(&decoded, filename, mime_type)
+    }
+
+    /// Save bytes already decoded and validated by the publication worker.
+    pub fn save_bytes(
+        &self,
+        data: &[u8],
+        filename: &str,
+        mime_type: &str,
+    ) -> Result<String, String> {
         let id = Uuid::new_v4().to_string();
         let extension = extension_from_filename(filename)
             .or_else(|| extension_from_mime_type(mime_type))
             .unwrap_or_else(|| "bin".to_string());
-
         let file_path = self.storage_dir.join(format!("{}.{}", id, extension));
-
-        let decoded = BASE64
-            .decode(data)
-            .map_err(|e| format!("Failed to decode base64: {}", e))?;
-
-        std::fs::write(&file_path, decoded).map_err(|e| format!("Failed to write file: {}", e))?;
-
+        if let Err(error) = std::fs::write(&file_path, data) {
+            let _ = std::fs::remove_file(&file_path);
+            return Err(format!("Failed to write file: {}", error));
+        }
         Ok(id)
+    }
+
+    /// Roll back files from a publication that could not be committed.
+    pub fn remove_file(&self, id: &str) -> Result<(), String> {
+        if let Some(path) = self.get_path(id) {
+            std::fs::remove_file(path)
+                .map_err(|error| format!("Failed to remove file: {}", error))?;
+        }
+        Ok(())
     }
 
     pub fn save_file_to_directory(

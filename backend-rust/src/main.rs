@@ -35,6 +35,7 @@ mod chat_event_store;
 mod chat_file_storage;
 mod chat_log;
 mod history;
+mod chat_publication;
 mod codex_app;
 mod cron;
 mod cron_handler;
@@ -207,6 +208,8 @@ async fn run_backend(args: Args) -> Result<()> {
         .merge(device_adb::api_router(app_state.device_adb_registry.clone()))
         .route("/api/chat/bind", post(chat_binding::register_hook))
         .route("/api/chat/ui", post(interactive_ui::publish))
+        .route("/api/chat/publish", post(chat_publication::publish)
+            .layer(axum::extract::DefaultBodyLimit::max(chat_publication::MAX_JSON_BYTES)))
         // API: Get connected clients count
         .route(
             "/api/clients",
@@ -233,7 +236,8 @@ async fn run_backend(args: Args) -> Result<()> {
                                     "public, max-age=3600".to_string(),
                                 ),
                             ];
-                            return Ok((headers,axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file))));
+                            let stream=tokio_util::io::ReaderStream::new(file);
+                            return Ok((headers, axum::body::Body::from_stream(stream)));
                         }
                     }
                     Err(axum::http::StatusCode::NOT_FOUND)

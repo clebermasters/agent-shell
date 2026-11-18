@@ -84,6 +84,7 @@ credentials is needed to recreate its software setup.
 | [backend-dependencies.json](backend-dependencies.json) | System packages, pinned download versions, agent npm packages and source-to-install mappings. |
 | [templates/](templates/) | Credential-free service, runtime, MCP registration and optional agent-guidance examples. |
 | [MCP publisher](../scripts/agent-ui-mcp.py) | Canonical source installed as `ui/agent-ui-mcp.py`. |
+| [File sender](../scripts/agentshell-send-file.py) | Uses the same verified conversation publisher; installed beside the MCP adapter. |
 | [Identity hook](../scripts/chat-binding-hook.py) | Canonical source installed as `hooks/chat-binding-hook.py`. |
 | [Native MCP refresh](../scripts/reload-codex-mcp.py) | Locates the current daemon socket and queues a configuration refresh. |
 | [UI assets](../android-native/app/src/main/assets/ui/) | Complete renderer/library reference, bundled in Android and copied by backend installation. |

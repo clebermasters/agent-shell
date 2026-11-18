@@ -200,6 +200,7 @@ If you already have an APK and want install only:
 - `GET /api/clients`
 - `GET /api/devices`, `GET /api/devices/:id/adb`, and `GET /api/devices/:id/network` — current phone network addresses and Wi-Fi ADB endpoints
 - `GET /api/chat/files/:id`
+- `POST /api/chat/publish` — publish assistant text/files to the verified calling conversation; see [automatic file delivery](docs/chat-file-publication.md).
 - `GET /api/notifications`
 - `POST /api/notifications`
 - `POST /api/tmux/input`

@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.view.MotionEvent
+import android.view.ViewConfiguration
 import android.webkit.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,10 +26,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -42,6 +47,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.sqrt
 
 /** Sandboxed interactive document; only the trusted host receives a native message bridge. */
@@ -84,8 +90,7 @@ fun UiWidgetBlock(block: ChatBlock, onAction: (String, String) -> Unit,
         if (shareError) Text("Unable to share this view. Try reopening it.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     }
-    if (expanded) Dialog(onDismissRequest = { expanded = false },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
+    if (expanded) ChatFullscreenDialog(onDismissRequest = { expanded = false }) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             // Fullscreen dialogs can receive consumed navigation insets on Android 15.
             // Preserve the parent window's minimum safe area, including three-button navigation.
@@ -125,8 +130,12 @@ private fun WidgetSurface(
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val density = LocalDensity.current.density
+    val localDensity = LocalDensity.current
+    val density = localDensity.density
+    val imeBottom = WindowInsets.ime.getBottom(localDensity)
     val bringIntoView = remember { BringIntoViewRequester() }
+    val nestedScrollDispatcher = remember { NestedScrollDispatcher() }
+    val nestedScrollConnection = remember { object : NestedScrollConnection {} }
     val scope = rememberCoroutineScope()
     val actionCallback by rememberUpdatedState(onAction)
     val stateCallback by rememberUpdatedState(onState)
@@ -139,7 +148,9 @@ private fun WidgetSurface(
     val view = remember(id, block.html, light, attempt, density) {
         val themed = android.view.ContextThemeWrapper(context,
             if (light) android.R.style.Theme_Material_Light_NoActionBar else android.R.style.Theme_Material_NoActionBar)
-        WebView(themed).apply {
+        WidgetWebView(themed) { deltaY ->
+            nestedScrollDispatcher.dispatchPostScroll(Offset.Zero, Offset(0f, deltaY), NestedScrollSource.UserInput)
+        }.apply {
             WebView.setWebContentsDebuggingEnabled(context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0)
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = false
@@ -157,6 +168,10 @@ private fun WidgetSurface(
                 val payload = runCatching { JSONObject(message.data ?: "") }.getOrNull() ?: return@addWebMessageListener
                 when (payload.optString("type")) {
                 "resize" -> post { height = payload.optInt("value", height).coerceIn(100, 1600) }
+                "scroll" -> post {
+                    widgetCanScrollUp = payload.optBoolean("canScrollUp")
+                    widgetCanScrollDown = payload.optBoolean("canScrollDown")
+                }
                 "ready" -> post {
                     postVisualStateCallback(android.os.SystemClock.uptimeMillis(), object : WebView.VisualStateCallback() {
                         override fun onComplete(requestId: Long) { loading = false; invalidate() }
@@ -164,12 +179,17 @@ private fun WidgetSurface(
                 }
                 "failed" -> post { failed = true; loading = false }
                 "focus" -> {
+                    post { scope.launch {
+                        // The IME and Chromium can move the document after focusin.
+                        // Measure again once the keyboard has changed the viewport.
+                        delay(350)
+                        if (isShown && hasFocus()) evaluateJavascript("window.requestWidgetFocus?.()", null)
+                    } }
+                }
+                "focus-reveal" -> {
                     val top = payload.optDouble("top"); val bottom = payload.optDouble("bottom")
                     if (!top.isFinite() || !bottom.isFinite() || bottom <= top) return@addWebMessageListener
                     post { scope.launch {
-                        // Wait for the IME insets before asking the Compose scroll
-                        // container to reveal this field inside its AndroidView.
-                        delay(350)
                         if (!isShown || !hasFocus()) return@launch
                         val cssStart = top.coerceIn(0.0, height.toDouble())
                         val start = cssStart.toFloat() * density
@@ -222,6 +242,13 @@ private fun WidgetSurface(
             loadUrl("https://appassets.androidplatform.net/assets/ui/host.html")
         }
     }
+    LaunchedEffect(view, imeBottom) {
+        if (imeBottom > 0) {
+            // Wait until changing IME insets settle, including a cold keyboard.
+            delay(100)
+            if (view.isShown && view.hasFocus()) view.evaluateJavascript("window.requestWidgetFocus?.()", null)
+        }
+    }
     LaunchedEffect(view) {
         loading = true; failed = false
         delay(12_000)
@@ -260,8 +287,57 @@ private fun WidgetSurface(
                 Text("Your conversation is still available. Reopen the view to try again.",
                     style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = { attempt++ }) { Text("Reopen view") }
-            } else AndroidView(factory = { view }, modifier = Modifier.fillMaxWidth().height(height.dp).bringIntoViewRequester(bringIntoView))
+            } else AndroidView(factory = { view }, modifier = Modifier.fillMaxWidth().height(height.dp)
+                .bringIntoViewRequester(bringIntoView).nestedScroll(nestedScrollConnection, nestedScrollDispatcher))
         }
+    }
+}
+
+/** Let a bounded widget scroll before its surrounding conversation takes the gesture. */
+private class WidgetWebView(context: android.content.Context, private val onScrollBoundary: (Float) -> Unit) : WebView(context) {
+    var widgetCanScrollUp = false
+    var widgetCanScrollDown = false
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+    private var startX = 0f
+    private var startY = 0f
+    private var previousY = 0f
+    private var scrollGesture = false
+
+    private fun canWidgetScroll(direction: Int) = canScrollVertically(direction) ||
+        if (direction < 0) widgetCanScrollUp else widgetCanScrollDown
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                startX = event.rawX
+                startY = event.rawY
+                previousY = event.rawY
+                // Compose otherwise intercepts the first move before WebView can
+                // scroll. Short widgets still leave scrolling to their parent.
+                scrollGesture = canWidgetScroll(-1) || canWidgetScroll(1)
+                parent?.requestDisallowInterceptTouchEvent(scrollGesture)
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.rawX - startX
+                val dy = event.rawY - startY
+                if (event.pointerCount > 1 || abs(dx) > touchSlop && abs(dx) > abs(dy)) {
+                    // Keep pinch and horizontal controls inside the document.
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                } else if (scrollGesture && abs(dy) > touchSlop && event.rawY != previousY) {
+                    val deltaY = event.rawY - previousY
+                    val direction = if (deltaY < 0) 1 else -1
+                    // Compose has already yielded this gesture to AndroidView.
+                    // Forward boundary movement through nested scroll instead of
+                    // trying to restart the parent's cancelled pointer gesture.
+                    if (!canWidgetScroll(direction)) onScrollBoundary(deltaY)
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                previousY = event.rawY
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> parent?.requestDisallowInterceptTouchEvent(false)
+        }
+        return super.onTouchEvent(event)
     }
 }
 

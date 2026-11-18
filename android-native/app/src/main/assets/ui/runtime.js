@@ -37,10 +37,5 @@ window.addEventListener('message', event => {
   if (data.type === 'widget-active') window.dispatchEvent(new CustomEvent('widget-visibility',{detail:data.active === true}));
 });
 window.addEventListener('error', () => tellHost({type:'widget-error',message:'This interactive view could not load. Try reopening it.'}));
-let resizeFrame;
-new ResizeObserver(() => {
-  cancelAnimationFrame(resizeFrame);
-  resizeFrame = requestAnimationFrame(() => tellHost({type:'widget-resize',height:Math.ceil(document.body.getBoundingClientRect().height)}));
-}).observe(document.body);
-// Defer the handshake until each widget has registered its state restoration handlers.
-queueMicrotask(() => tellHost({type:'widget-ready'}));
+// The host's injected bridge owns layout, scrolling and the ready handshake.
+// Optional helpers must not send duplicate layout reports.

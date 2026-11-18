@@ -144,8 +144,7 @@ fun MessageBubble(
         widgetState = Bundle(widgetState).apply { putString(id, value) }
     }
     if (expanded) {
-        Dialog(onDismissRequest = { expanded = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
+        ChatFullscreenDialog(onDismissRequest = { expanded = false }) {
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 val safeInsets = WindowInsets.safeDrawing.union(WindowInsets(bottom = parentNavigationBottom))
                 Column(Modifier.fillMaxSize().windowInsetsPadding(safeInsets).imePadding()) {

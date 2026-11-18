@@ -7,6 +7,9 @@ previews and Leaflet maps share the mobile design system from the reference
 branch. This integrates its rendering and MCP pattern; it does not install the
 full CopilotKit React, AG-UI or LangGraph stack.
 
+The same publisher also exposes `send_file_to_chat` for requested images, audio,
+and documents. See [conversation-scoped file delivery](chat-file-publication.md).
+
 ## On Android
 
 The sun/moon button in Home and Chat changes the app and widget theme together.
@@ -18,6 +21,21 @@ the entire response, including its text and interactive cards, at full screen
 width. Closing the view, changing the theme or rotating the device preserves
 opt-in widget control state. This is local view state, not server-synchronized
 application data. Tablet layouts use the available width.
+
+Long cards scroll inside their bounded WebView. The document reports whether it
+can scroll in each direction so Android can distinguish card gestures from chat
+gestures. At the document's edge, further dragging moves the surrounding message.
+Both expansion controls use this same renderer. Expanding changes the available
+space; it does not remove the WebView's 1600dp height limit.
+Focused fields are measured again after keyboard layout changes before Android
+scrolls them into view.
+
+Fullscreen measurement is shared by
+[`ChatFullscreenDialog`](../android-native/app/src/main/java/com/agentshell/feature/chat/ChatFullscreenDialog.kt).
+It uses native window constraints and explicitly fills the window. Compose 1.7's
+custom-width dialog path measures from configuration height, which can include
+system bars on Android 15 and extend the scroll area behind the keyboard. See
+[Android's configuration change](https://developer.android.com/about/versions/15/behavior-changes-15#configuration-changes).
 
 | Token | Light | Dark |
 | --- | --- | --- |
@@ -137,6 +155,12 @@ above three-button Android navigation and a physical tap reaches the scoped agen
 host isolation and explicit-click follow-ups. `test_app_theme.py` tests the regular
 app's theme controls, exact colors, process-restart persistence and System mode.
 Use only an isolated emulator for these scripts; they change emulator preferences.
+
+`test_host_scroll.py` runs without a daemon or Android device and checks bounded
+document scrolling, dynamic layout, viewport changes and stale bridge messages.
+`test_native_scroll.py --serial emulator-5560 --output /path/to/evidence` exercises
+real swipes and bottom controls in inline, maximized-message and expanded-card
+views, using an isolated fixture endpoint on an owned emulator.
 
 The reference branch retains the original POC. Production uses this same
 renderer in `src/main/assets/ui` and does not require a POC daemon flag.

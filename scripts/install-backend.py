@@ -331,18 +331,21 @@ class Installer:
             raise ValueError('Supply --browser-origin https://trusted-host[:port] without a path')
         hostname = '[' + parsed.hostname + ']' if ':' in parsed.hostname else parsed.hostname
         origin = 'https://' + hostname.lower() + (':' + str(parsed.port) if parsed.port and parsed.port != 443 else '')
-        profile = str((self.args.browser_user_data_dir or Path(previous.get('userDataDir', self.user_home / '.local/share/agentshell/chrome'))).resolve())
+        stored_root = Path(previous['userDataDir']) if previous.get('userDataDir') else None
+        profile = (self.args.browser_user_data_dir or stored_root or self.user_home / '.local/share/agentshell/chrome').resolve()
         profile_directory = self.args.browser_profile if self.args.browser_profile is not None else previous.get('profileDirectory')
         if profile_directory is not None and (not isinstance(profile_directory, str) or
                 not re.fullmatch(r'[A-Za-z0-9 _-]{1,64}', profile_directory)):
             raise ValueError('Invalid Chrome profile directory')
-        if previous and (profile != previous.get('userDataDir') or profile_directory != previous.get('profileDirectory')):
+        if previous and (stored_root is None or not stored_root.is_absolute() or stored_root.resolve() != profile or
+                         profile_directory != previous.get('profileDirectory')):
             raise ValueError('Stop and explicitly reconfigure the existing browser before changing its profile')
         runtime_directory = self.user_home / '.local/state/agentshell/browser'
         self.mkdir(runtime_directory)
         self.run(['chmod', '700', str(runtime_directory)], root=True)
         runner = self.install_dir / 'browser/browser-runtime.py'
-        value = dict(previous, sessionId=previous.get('sessionId', str(uuid.uuid4())), userDataDir=profile,
+        value = dict(previous, sessionId=previous.get('sessionId', str(uuid.uuid4())),
+            userDataDir=previous.get('userDataDir', str(profile)),
             profileDirectory=profile_directory, runtimeDir=str(runtime_directory), display=previous.get('display', 93),
             port=previous.get('port', 18996), password=previous.get('password', secrets.token_urlsafe(48)),
             publicOrigin=origin, runner=str(runner), supervision='systemd-user', requireSecretService=True,

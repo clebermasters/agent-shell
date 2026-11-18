@@ -59,7 +59,10 @@ class JsoncTests(unittest.TestCase):
 class InstallerTests(unittest.TestCase):
     def test_browser_install_registers_window_manager_under_existing_service_user(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
+            home = Path(directory) / 'home-alias'
+            actual_home = Path(directory) / 'home'
+            actual_home.mkdir()
+            home.symlink_to(actual_home, target_is_directory=True)
             path = home / '.config/agentshell/browser.json'
             path.parent.mkdir(parents=True)
             origin = 'https://browser.example.test'
@@ -94,6 +97,9 @@ class InstallerTests(unittest.TestCase):
             config = json.loads(path.read_text())
             self.assertEqual({name:config[name] for name in previous}, previous)
             self.assertEqual(sum(call.args[0][-1]=='register-windows' for call in value.run.call_args_list), 1)
+            value.args.browser_user_data_dir = actual_home/'different-root'
+            with self.assertRaisesRegex(ValueError, 'before changing its profile'):
+                value.configure_browser()
 
     def test_arch_dependencies_use_pacman_and_arch_certificate_packages(self):
         value=installer.Installer.__new__(installer.Installer)

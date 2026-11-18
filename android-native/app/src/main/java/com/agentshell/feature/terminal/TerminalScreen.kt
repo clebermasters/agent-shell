@@ -95,7 +95,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun TerminalScreen(
     sessionName: String,
-    windowIndex: Int = 0,
+    windowIndex: Int? = null,
     onNavigateBack: () -> Unit,
     onSwitchToChat: ((sessionName: String, windowIndex: Int) -> Unit)? = null,
     onNavigateToFileBrowser: ((path: String) -> Unit)? = null,
@@ -357,7 +357,10 @@ fun TerminalScreen(
                             )
                         }
                         if (onSwitchToChat != null) {
-                            IconButton(onClick = { onSwitchToChat(sessionName, windowIndex) }) {
+                            IconButton(
+                                onClick = { onSwitchToChat(sessionName, uiState.windowIndex) },
+                                enabled = !uiState.isLoading && uiState.terminalError == null,
+                            ) {
                                 Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Switch to Chat")
                             }
                         }
@@ -384,6 +387,9 @@ fun TerminalScreen(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 if (!isFullscreen) ConnectionModeBar()
+                uiState.terminalError?.let { message ->
+                    Text(message, color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth().padding(12.dp))
+                }
                 if (isSelectionMode) {
                     // Selection overlay — native Android text selection
                     SelectionContainer(

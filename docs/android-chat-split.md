@@ -5,6 +5,11 @@ split button, and options menu. Tap the title or choose **Connection & usage**
 to expand connection controls, detailed activity, and provider usage. Terminal,
 file browser, theme, and clear-history actions are in the options menu.
 
+Choose **Open terminal** in that menu for terminal-only view. It keeps the
+chat's exact tmux window, and the terminal's chat button returns to that same
+window. Opening a terminal from Home or by swiping resolves the session's active
+window and retains it across reconnects; it does not assume window 0 exists.
+
 For tmux chats, tap **Split chat and terminal** in the header to open a terminal
 for the same session and window. Tap the button again to return to chat only.
 ACP chats have no tmux terminal, so they do not offer this action.
@@ -36,6 +41,8 @@ to guarantee that the terminal initially displays the chat's exact tmux window.
 ```bash
 cd android-native
 ./gradlew -PuiPoc=true assembleDebug testDebugUnitTest \
+  --tests com.agentshell.feature.home.TerminalRouteTest \
+  --tests com.agentshell.feature.terminal.TerminalWindowTargetTest \
   --tests com.agentshell.data.local.ChatSplitPreferencesTest \
   --tests com.agentshell.feature.chat.ChatTerminalSplitTest \
   --tests com.agentshell.feature.chat.ChatScrollStateTest
@@ -50,3 +57,8 @@ python3 scripts/test_android_chat_split.py --serial emulator-5560 \
 Build production APKs without `-PuiPoc=true` to restore the normal server
 configuration. The isolated Android fixture uses only the owned
 `agentshell-ui-poc` emulator and loopback WebSocket data.
+
+The terminal-only navigation correction passed 14 focused route, window-target,
+and split-layout tests. The production release was installed as an update on
+2026-11-13, and opening **agentShell** from Home displayed live output from its
+existing window 1. The original tmux pane and agent process were retained.

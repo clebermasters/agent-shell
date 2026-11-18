@@ -11,6 +11,7 @@ import com.agentshell.data.model.ConnectionStatus
 import com.agentshell.data.remote.WebSocketService
 import com.agentshell.data.remote.getSessionCwd
 import com.agentshell.data.remote.renameSession
+import com.agentshell.data.remote.requestWindows
 import com.agentshell.data.services.AudioService
 import com.agentshell.data.services.TerminalService
 import com.agentshell.data.services.TranscriptionQueueService
@@ -31,6 +32,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -41,6 +45,7 @@ data class TerminalUiState(
     val isLoading: Boolean = true,
     val sessionName: String = "",
     val windowIndex: Int = 0,
+    val terminalError: String? = null,
     val fontSize: Float = AppConfig.DEFAULT_FONT_SIZE,
     val isRecording: Boolean = false,
     val recordingDuration: Int = 0,
@@ -75,6 +80,9 @@ class TerminalViewModel @Inject constructor(
     // Last known terminal dimensions from xterm.js — used for reconnection
     private var lastCols = 80
     private var lastRows = 24
+    private var requestedWindowIndex: Int? = null
+    private var terminalReady = false
+    private var attachJob: Job? = null
 
     private val _cwdResult = MutableSharedFlow<String>(replay = 1)
     val cwdResult: SharedFlow<String> = _cwdResult.asSharedFlow()
@@ -93,13 +101,9 @@ class TerminalViewModel @Inject constructor(
                 .collect { connected ->
                     if (connected) {
                         val state = _uiState.value
-                        if (state.sessionName.isNotBlank() && !state.isLoading) {
-                            terminalService.attachSession(
-                                state.sessionName,
-                                lastCols, lastRows,
-                                state.windowIndex,
-                            )
-                        }
+                        if (state.sessionName.isNotBlank() && terminalReady) attachTerminal()
+                    } else {
+                        attachJob?.cancel()
                     }
                 }
         }
@@ -163,9 +167,11 @@ class TerminalViewModel @Inject constructor(
      * Called when xterm.js is ready (WebView loaded).
      * Attaches to the backend session and starts piping data.
      */
-    fun onTerminalReady(sessionName: String, windowIndex: Int, cols: Int, rows: Int) {
+    fun onTerminalReady(sessionName: String, windowIndex: Int?, cols: Int, rows: Int) {
+        requestedWindowIndex = windowIndex ?: requestedWindowIndex.takeIf { _uiState.value.sessionName == sessionName }
+        terminalReady = true
         _uiState.update {
-            it.copy(sessionName = sessionName, windowIndex = windowIndex, isLoading = false)
+            it.copy(sessionName = sessionName, isLoading = true, terminalError = null)
         }
         lastCols = cols
         lastRows = rows
@@ -176,7 +182,7 @@ class TerminalViewModel @Inject constructor(
         }
 
         // Attach to backend (triggers history + live output)
-        terminalService.attachSession(sessionName, cols, rows, windowIndex)
+        attachTerminal()
 
         // Persist last session for auto-attach on next app open
         viewModelScope.launch { prefs.setLastSessionName(sessionName) }
@@ -188,8 +194,39 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
+    private fun attachTerminal() {
+        if (!terminalReady || webSocketService.connectionStatus.value != ConnectionStatus.CONNECTED) return
+        attachJob?.cancel()
+        val sessionName = _uiState.value.sessionName
+        attachJob = viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, terminalError = null) }
+            // Home/swipe navigation names a session, while chat navigation names
+            // an exact window. Resolve the active window once, then pin it for
+            // reconnects and for the terminal-to-chat switch.
+            val window = requestedWindowIndex ?: withTimeoutOrNull(5_000) {
+                coroutineScope {
+                    val response = async(start = CoroutineStart.UNDISPATCHED) {
+                        webSocketService.messages.first {
+                            it["type"] == "windows-list" && it["sessionName"] == sessionName
+                        }
+                    }
+                    webSocketService.requestWindows(sessionName)
+                    activeTerminalWindow(response.await()["windows"] as? List<*> ?: emptyList<Any>())
+                }
+            }
+            if (window == null) {
+                _uiState.update { it.copy(isLoading = false, terminalError = "Unable to identify this terminal's window. Reopen the session.") }
+                return@launch
+            }
+            requestedWindowIndex = window
+            _uiState.update { it.copy(windowIndex = window, isLoading = false) }
+            terminalService.attachSession(sessionName, lastCols, lastRows, window)
+        }
+    }
+
     /** Called when user types in xterm.js. */
     fun onTerminalInput(data: String) {
+        if (_uiState.value.isLoading || _uiState.value.terminalError != null) return
         terminalService.sendInput(data)
     }
 
@@ -197,10 +234,12 @@ class TerminalViewModel @Inject constructor(
     fun onTerminalResize(cols: Int, rows: Int) {
         lastCols = cols
         lastRows = rows
-        terminalService.resize(cols, rows)
+        if (!_uiState.value.isLoading) terminalService.resize(cols, rows)
     }
 
     fun detachSession() {
+        terminalReady = false
+        attachJob?.cancel()
         terminalService.detach()
     }
 

@@ -480,16 +480,48 @@ fn valid_codex_uuid_prefix(id: &str) -> bool {
 /// text, the draft, menus, or scrollback are not conversation identity.
 fn parse_codex_terminal_id(screen: &str, cursor_y: usize) -> Option<CodexTerminalId> {
     let lines: Vec<_> = screen.lines().collect();
-    // Native Codex reserves the penultimate viewport row for the status line.
-    // The final row is a context-dependent hint (or blank): typing, scrollback
-    // and active turns all change it. Identity must not depend on those words,
-    // especially between bracketed paste and the guarded Enter.
-    let footer_index = lines.len().checked_sub(2)?;
+    // Codex ordinarily reserves its final row for a keyboard hint, but an
+    // expanded composer can omit that hint and put the native status there.
+    // Keep the established penultimate-row path, then accept the final-row
+    // layout with the same cursor, separator and native-block guards.
+    let penultimate = lines.len().checked_sub(2)?;
+    parse_codex_footer_block(&lines, cursor_y, penultimate).or_else(|| {
+        let last = lines.len() - 1;
+        if !lines[last].starts_with("  ") || lines[last].trim().is_empty() {
+            None
+        } else {
+            parse_codex_footer_block(&lines, cursor_y, last)
+        }
+    })
+}
+
+fn parse_codex_footer_block(
+    lines: &[&str],
+    cursor_y: usize,
+    footer_end: usize,
+) -> Option<CodexTerminalId> {
+    // Newer TUIs wrap status fields across multiple indented rows. Read only
+    // that contiguous bottom block, stopping at its blank composer separator;
+    // never search the draft or assistant output for a plausible UUID.
+    let mut footer_index = footer_end;
+    while footer_index > cursor_y.saturating_add(2)
+        && !lines.get(footer_index - 1)?.trim().is_empty()
+    {
+        footer_index -= 1;
+    }
     if footer_index <= cursor_y.saturating_add(1) || !lines.get(footer_index - 1)?.trim().is_empty()
     {
         return None;
     }
-    let footer = lines.get(footer_index)?.trim();
+    let footer_lines = &lines[footer_index..=footer_end];
+    if footer_lines.len() > 1 && footer_lines.iter().any(|line| !line.starts_with("  ")) {
+        return None;
+    }
+    let footer = footer_lines
+        .iter()
+        .map(|line| line.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
     // Goals append a separate banner without the ordinary middle-dot separator
     // and can truncate the ID even when it is the first configured status item.
     let token = footer.split_whitespace().next()?;
@@ -1590,6 +1622,149 @@ mod tests {
             0
         )
         .is_none());
+    }
+
+    #[test]
+    fn codex_identity_survives_a_wrapped_native_status_line() {
+        let id = "01a1d84f-0a09-7ee2-bbe2-bb4620d6c3a0";
+        for hint in [
+            "← for agents       Goal achieved (20m)",
+            "Goal stalled (/goal resume)",
+            "esc latest",
+            "",
+        ] {
+            let screen = format!(
+                "Agent output\n\n» Ask Codex to do anything\n\n  {id} ·\n  GPT-6.1-Sol ultra · ~ · Context 59%\n  left · Main [default]\n  {hint}\n"
+            );
+            assert_eq!(
+                parse_codex_terminal_id(&screen, 2),
+                Some(CodexTerminalId::Complete(id.into())),
+                "{hint}"
+            );
+            // A UUID in the composer cannot identify a conversation.
+            assert!(parse_codex_terminal_id(&screen, 4).is_none());
+        }
+        // Never search above the native status block, through its blank
+        // separator, or through output/menu rows with a different indentation.
+        for screen in [
+            format!("» draft\n\n  {id} ·\n\n  model · folder\n  hint\n"),
+            format!("» draft\n\n  {id}\nEnter to select\n  hint\n"),
+            format!("  {id}\n» draft\n\n  model · folder\n  context · branch\n  hint\n"),
+            format!("» draft\n\n  model · {id}\n  context · branch\n  hint\n"),
+        ] {
+            assert!(parse_codex_terminal_id(&screen, 0).is_none(), "{screen}");
+        }
+    }
+
+    #[test]
+    fn codex_identity_survives_a_native_status_on_the_last_viewport_row() {
+        // Sanitized geometry captured from KrebsBot: 122 columns, 51 rows,
+        // cursor on row 48, a blank composer separator on row 49, then the
+        // native status on row 50. Codex omitted its bottom keyboard hint.
+        let id = "01a11981-6ad0-7300-94d2-c653ae4a0973";
+        let mut lines = vec!["history".to_string(); 51];
+        lines[47] = "› existing draft".into();
+        lines[48] = "  continuation".into();
+        lines[49] = String::new();
+        lines[50] = format!("  {id} · model · folder · Context 66% left");
+        let screen = lines.join("\n") + "\n";
+        assert_eq!(
+            parse_codex_terminal_id(&screen, 48),
+            Some(CodexTerminalId::Complete(id.into()))
+        );
+    }
+
+    #[test]
+    fn codex_native_status_keeps_identity_with_or_without_its_hint_row() {
+        let id = "01a11981-6ad0-7300-94d2-c653ae4a0973";
+        for status in [
+            format!("  {id}"),
+            format!("  {id} · model · folder"),
+            format!("  {id} ·\n  model · folder\n  Context 66% left"),
+        ] {
+            for hint in ["", "\n", "\n  ← for agents · ? for shortcuts"] {
+                let screen = format!("History\n› draft\n\n{status}{hint}\n");
+                assert_eq!(
+                    parse_codex_terminal_id(&screen, 1),
+                    Some(CodexTerminalId::Complete(id.into())),
+                    "{screen}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn codex_last_row_status_preserves_explicit_prefix_rules() {
+        for (status, expected) in [
+            (
+                "01a11981-6ad0-7300-94d2… · model",
+                CodexTerminalId::Prefix("01a11981-6ad0-7300-94d2".into()),
+            ),
+            (
+                "01a11981-6ad0-7300-94d2… Goal achieved",
+                CodexTerminalId::GoalPrefix("01a11981-6ad0-7300-94d2".into()),
+            ),
+        ] {
+            assert_eq!(
+                parse_codex_terminal_id(&format!("History\n› draft\n\n  {status}\n"), 1),
+                Some(expected)
+            );
+        }
+        assert!(parse_codex_terminal_id("History\n› draft\n\n  01a11981… · model\n", 1).is_none());
+    }
+
+    #[test]
+    fn codex_last_row_does_not_promote_drafts_output_or_menus_to_identity() {
+        let id = "01a11981-6ad0-7300-94d2-c653ae4a0973";
+        for (screen, cursor) in [
+            (format!("History\n› draft\n\n{id}\n"), 1),
+            (format!("History\n› draft\n\n  {id}\n"), 3),
+            (format!("History\n› draft\n  {id}\n"), 1),
+            (
+                format!("  {id}\n› draft\n\n  model\n  Context 66% left\n"),
+                1,
+            ),
+            (format!("History\n› draft\n\nSession ID:\n  {id}\n"), 1),
+            (format!("History\n› draft\n\n  model · {id}\n"), 1),
+            (
+                format!("History\n› draft\n\n  {id} ·\nEnter to select\n  model\n"),
+                1,
+            ),
+        ] {
+            assert!(
+                parse_codex_terminal_id(&screen, cursor).is_none(),
+                "{screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn last_row_native_conversation_switch_replaces_the_old_lease_in_the_same_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = store(&directory);
+        let identity = pane("%1");
+        let first_id = "01a11981-6ad0-7300-94d2-c653ae4a0973";
+        let next_id = "01a11982-6ad0-7300-94d2-c653ae4a0973";
+        let resolve = |id: &str| {
+            let screen = format!("History\n› draft\n\n  {id} · model\n");
+            let Some(CodexTerminalId::Complete(id)) = parse_codex_terminal_id(&screen, 1) else {
+                panic!("native last-row identity was not recognized");
+            };
+            store
+                .resolve_pane_with_terminal(identity.clone(), Some(id))
+                .unwrap()
+                .binding
+                .unwrap()
+        };
+        let first = resolve(first_id);
+        assert_eq!(resolve(first_id).binding_id, first.binding_id);
+        let next = resolve(next_id);
+        assert_ne!(first.binding_id, next.binding_id);
+        assert_eq!(next.conversation_id, next_id);
+        assert!(store.by_id(&first.binding_id).is_err());
+        let hidden = store.resolve_pane_with_terminal(identity, None).unwrap();
+        assert_eq!(hidden.status, "required");
+        assert!(hidden.binding.is_none());
     }
 
     #[test]

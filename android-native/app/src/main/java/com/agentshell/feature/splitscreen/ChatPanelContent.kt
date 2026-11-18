@@ -42,6 +42,7 @@ import com.agentshell.feature.chat.CopyMessageButton
 import com.agentshell.feature.chat.ConversationLinkBar
 import com.agentshell.data.model.ChatBindingState
 import com.agentshell.data.model.acceptsConversationPacket
+import com.agentshell.data.model.matchesConversationTarget
 import com.agentshell.feature.chat.UnreadDivider
 import com.agentshell.feature.chat.UiWidgetBlock
 import kotlinx.coroutines.flow.sample
@@ -366,7 +367,7 @@ fun ChatPanelContent(
                     history.loadingOlder = false
                 }
                 "chat-history" -> {
-                    if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp)) return@collect
+                    if (!bindingState.matchesConversationTarget(message, sessionName, windowIndex, isAcp)) return@collect
                     if (message["bindingId"] == null && bindingState?.status == "checking") bindingState = null
                     val parsed = withContext(Dispatchers.Default) { parseMessageList(message["messages"]) }
                     history.pagingVersion += 1
@@ -393,7 +394,7 @@ fun ChatPanelContent(
                 "chat-history-chunk" -> {
                     if (!history.loadingOlder) return@collect
                     val expectedVersion = history.pagingVersion
-                    if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp)) return@collect
+                    if (!bindingState.matchesConversationTarget(message, sessionName, windowIndex, isAcp)) return@collect
                     val parsed = withContext(Dispatchers.Default) { parseMessageList(message["messages"]) }
                     if (expectedVersion != history.pagingVersion) return@collect
                     val previousRemoteOffset = history.remoteOffset
@@ -407,7 +408,7 @@ fun ChatPanelContent(
                     history.loadingOlder = false
                 }
                 "chat-log-cleared" -> {
-                    if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp) || message["success"] != true) return@collect
+                    if (!bindingState.matchesConversationTarget(message, sessionName, windowIndex, isAcp) || message["success"] != true) return@collect
                     history.cacheDirty = false
                     history.pagingVersion += 1
                     messages.clear()
@@ -421,7 +422,7 @@ fun ChatPanelContent(
                 }
                 "chat-event" -> {
                     if (isAcp) return@collect
-                    if (!matchesTmuxSession(message, sessionName, windowIndex, isAcp)) return@collect
+                    if (!bindingState.matchesConversationTarget(message, sessionName, windowIndex, isAcp)) return@collect
                     @Suppress("UNCHECKED_CAST")
                     val msgData = message["message"] as? Map<String, Any?> ?: return@collect
                     val source = message["source"] as? String

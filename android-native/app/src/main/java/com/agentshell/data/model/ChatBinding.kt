@@ -34,6 +34,27 @@ data class ChatBindingState(
 
 /** A delayed packet from a previous conversation must never be shown after a link changes. */
 fun ChatBindingState?.acceptsConversationPacket(message: Map<String, Any?>): Boolean {
-    val packet = message["bindingId"] as? String ?: return true // Direct sessions and older backends.
-    return this?.binding?.id == packet && this.canSend
+    val packet = message["bindingId"] ?: return true // Direct sessions and older backends.
+    val current = this?.takeIf { it.canSend }?.binding ?: return false
+    if (packet !is String || current.id != packet) return false
+    val conversationKey = message["conversationKey"]
+    return conversationKey == null || conversationKey == current.conversationKey
+}
+
+/** Session/window aliases may change while the verified native conversation stays open. */
+fun ChatBindingState?.matchesConversationTarget(
+    message: Map<String, Any?>,
+    sessionName: String,
+    windowIndex: Int,
+    isAcp: Boolean = false,
+): Boolean {
+    if (message["bindingId"] != null) {
+        // Direct sessions do not use terminal binding leases.
+        return !isAcp && acceptsConversationPacket(message)
+    }
+    val session = (message["sessionName"] ?: message["session-name"]) as? String ?: return false
+    val window = ((message["windowIndex"] ?: message["window-index"]) as? Number)?.toInt() ?: return false
+    return window == windowIndex && if (isAcp) {
+        session.removePrefix("acp_") == sessionName.removePrefix("acp_")
+    } else session == sessionName
 }

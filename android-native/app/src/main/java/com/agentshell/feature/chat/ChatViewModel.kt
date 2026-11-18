@@ -16,6 +16,7 @@ import com.agentshell.data.model.ChatMessageParser
 import com.agentshell.data.model.ChatTarget
 import com.agentshell.data.model.ChatBindingState
 import com.agentshell.data.model.acceptsConversationPacket
+import com.agentshell.data.model.matchesConversationTarget
 import com.agentshell.data.model.AgentActivity
 import com.agentshell.data.model.ChatReadState
 import com.agentshell.data.model.ChatCursor
@@ -1401,7 +1402,7 @@ class ChatViewModel @Inject constructor(
         val generation = cacheLoadGeneration
         val expectedConversation = cachedConversationKey
         val state = _uiState.value
-        if (sessionName != state.sessionName || windowIndex != state.windowIndex) return
+        if (!state.bindingState.matchesConversationTarget(message, state.sessionName, state.windowIndex, state.isAcp)) return
 
         val messagesData = message["messages"] as? List<*> ?: emptyList<Any>()
         val parsed = withContext(Dispatchers.Default) {
@@ -1444,16 +1445,11 @@ class ChatViewModel @Inject constructor(
     private suspend fun handleChatHistoryChunk(message: Map<String, Any?>) {
         if (!requestedRemotePage) return
         flushPendingAcpChunk()
-        val sessionName = (message["sessionName"] ?: message["session-name"]) as? String ?: return
-        val windowIndex = (message["windowIndex"] ?: message["window-index"])?.let {
-            (it as? Number)?.toInt()
-        } ?: return
-
         val generation = cacheLoadGeneration
         val expectedPagingGeneration = pagingGeneration
         val expectedConversation = cachedConversationKey
         val state = _uiState.value
-        if (sessionName != state.sessionName || windowIndex != state.windowIndex) return
+        if (!state.bindingState.matchesConversationTarget(message, state.sessionName, state.windowIndex, state.isAcp)) return
 
         val messagesData = message["messages"] as? List<*> ?: emptyList<Any>()
         val newMessages = withContext(Dispatchers.Default) {
@@ -1493,7 +1489,7 @@ class ChatViewModel @Inject constructor(
         } ?: return
 
         val state = _uiState.value
-        if (sessionName != state.sessionName || windowIndex != state.windowIndex) return
+        if (!state.bindingState.matchesConversationTarget(message, state.sessionName, state.windowIndex, state.isAcp)) return
 
         logDebug("Received chat event session=$sessionName window=$windowIndex source=${message["source"]}")
 
@@ -1513,13 +1509,8 @@ class ChatViewModel @Inject constructor(
 
     private fun handleChatFileMessage(message: Map<String, Any?>) {
         flushPendingAcpChunk()
-        val sessionName = (message["sessionName"] ?: message["session-name"]) as? String ?: return
-        val windowIndex = (message["windowIndex"] ?: message["window-index"])?.let {
-            (it as? Number)?.toInt()
-        } ?: return
-
         val state = _uiState.value
-        if (sessionName != state.sessionName || windowIndex != state.windowIndex) return
+        if (!state.bindingState.matchesConversationTarget(message, state.sessionName, state.windowIndex, state.isAcp)) return
 
         @Suppress("UNCHECKED_CAST")
         val msgData = message["message"] as? Map<String, Any?> ?: return
@@ -1538,7 +1529,6 @@ class ChatViewModel @Inject constructor(
     private fun handleChatLogCleared(message: Map<String, Any?>) {
         clearPendingAcpChunk()
         val sessionName = message["sessionName"] as? String ?: return
-        val windowIndex = (message["windowIndex"] as? Number)?.toInt() ?: 0
         val success = message["success"] as? Boolean ?: false
 
         val state = _uiState.value
@@ -1546,7 +1536,7 @@ class ChatViewModel @Inject constructor(
         val matches = if (state.isAcp) {
             sessionName == state.sessionName || sessionName == "acp_${state.sessionName}"
         } else {
-            sessionName == state.sessionName && windowIndex == state.windowIndex
+            state.bindingState.matchesConversationTarget(message, state.sessionName, state.windowIndex)
         }
         if (!matches) return
 

@@ -53,7 +53,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 object Routes {
     const val HOME = "home"
     const val BROWSER = "browser"
-    const val TERMINAL = "terminal/{sessionName}?isSwipeNav={isSwipeNav}"
+    const val TERMINAL = "terminal/{sessionName}?isSwipeNav={isSwipeNav}&windowIndex={windowIndex}"
     const val CHAT = "chat/{sessionName}/{windowIndex}?isAcp={isAcp}&isSwipeNav={isSwipeNav}&cwd={cwd}&shareId={shareId}"
     const val SHARE = "share"
     const val SETTINGS = "settings"
@@ -74,8 +74,9 @@ object Routes {
         return "git/$encodedSession?path=$encodedPath&isAcp=$isAcp"
     }
     fun splitScreen(layoutId: String? = null) = if (layoutId != null) "split_screen?layoutId=$layoutId" else "split_screen"
-    fun terminal(sessionName: String, isSwipeNav: Boolean = false) =
-        "terminal/${encodeRouteParam(sessionName)}?isSwipeNav=$isSwipeNav"
+    fun terminal(sessionName: String, isSwipeNav: Boolean = false, windowIndex: Int? = null) =
+        "terminal/${encodeRouteParam(sessionName)}?isSwipeNav=$isSwipeNav" +
+            (windowIndex?.let { "&windowIndex=$it" } ?: "")
     fun chat(
         sessionName: String,
         windowIndex: Int,
@@ -260,12 +261,15 @@ fun AgentShellNavHost(
             arguments = listOf(
                 navArgument("sessionName") { type = NavType.StringType },
                 navArgument("isSwipeNav") { type = NavType.BoolType; defaultValue = false },
+                navArgument("windowIndex") { type = NavType.IntType; defaultValue = -1 },
             ),
         ) { backStackEntry ->
             val sessionName = Uri.decode(backStackEntry.arguments?.getString("sessionName") ?: "")
             val isSwipeNav = backStackEntry.arguments?.getBoolean("isSwipeNav") ?: false
+            val windowIndex = backStackEntry.arguments?.getInt("windowIndex")?.takeIf { it >= 0 }
             TerminalScreen(
                 sessionName = sessionName,
+                windowIndex = windowIndex,
                 isSwipeNavigation = isSwipeNav,
                 onNavigateBack = { navController.popBackStack() },
                 onSwitchToChat = { name, idx ->
@@ -307,7 +311,7 @@ fun AgentShellNavHost(
                 isSwipeNavigation = isSwipeNav,
                 onNavigateBack = { navController.popBackStack() },
                 onSwitchToTerminal = { name ->
-                    navController.navigate(Routes.terminal(name)) { popUpTo(Routes.HOME) }
+                    navController.navigate(Routes.terminal(name, windowIndex = windowIndex)) { popUpTo(Routes.HOME) }
                 },
                 onNavigateToFileBrowser = { path ->
                     navController.navigate(Routes.fileBrowser(path))

@@ -48,7 +48,7 @@ def native_texts(identifier, role):
 
 
 class Fixture:
-    def __init__(self, root, evidence=None):
+    def __init__(self, root, evidence=None, status_line=None):
         self.root = root
         self.project = root / 'shared-project'
         self.project.mkdir()
@@ -62,6 +62,7 @@ class Fixture:
         self.threads = {}
         self.sequence = 0
         self.evidence = evidence
+        self.status_line = status_line if status_line is not None else ['session-id']
         if evidence:
             evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
 
@@ -93,7 +94,8 @@ class Fixture:
         # Explicitly disable every globally configured MCP; a bare empty map merges.
         config = (Path.home() / '.codex/config.toml').read_text()
         names = re.findall(r'^\[mcp_servers\.([^\.\]]+)\]\s*$', config, re.M)
-        overrides = ['--config', 'tui.status_line=["session-id"]', '--config', 'model_reasoning_effort="low"']
+        overrides = ['--config', 'tui.status_line=' + json.dumps(self.status_line),
+                     '--config', 'model_reasoning_effort="low"']
         for name in names:
             overrides.extend(['--config', 'mcp_servers.' + name + '.enabled=false'])
         address = 'unix://' + str(self.root / 'server.sock')

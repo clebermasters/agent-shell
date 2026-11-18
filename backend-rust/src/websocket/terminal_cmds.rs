@@ -643,64 +643,66 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::{mpsc, Mutex};
 
-    #[test]
-    fn terminal_attach_shows_requested_window_instead_of_active_window() {
+    #[tokio::test]
+    async fn terminal_attach_shows_requested_window_instead_of_active_window() {
+        use std::time::Duration;
+        use tokio::time::timeout;
+
         let dir = tempfile::TempDir::new().unwrap();
         let socket = dir.path().join("tmux.sock");
-        struct ServerGuard(std::path::PathBuf);
-        impl Drop for ServerGuard {
-            fn drop(&mut self) {
-                let _ = std::process::Command::new("tmux").arg("-S").arg(&self.0).arg("kill-server").output();
-            }
-        }
-        let _server = ServerGuard(socket.clone());
-        let tmux = |args: &[&str]| {
-            let result = std::process::Command::new("tmux")
-                .arg("-S").arg(&socket).args(["-f", "/dev/null"]).args(args)
-                .output().unwrap();
-            assert!(result.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&result.stderr));
-            String::from_utf8_lossy(&result.stdout).trim().to_owned()
+        let tmux = || {
+            let mut command = tokio::process::Command::new("tmux");
+            command
+                .arg("-S")
+                .arg(&socket)
+                .args(["-f", "/dev/null"])
+                .env_remove("TMUX")
+                .kill_on_drop(true);
+            command
         };
-        tmux(&["new-session", "-d", "-s", "split", "-n", "first", "sleep 60"]);
-        tmux(&["new-window", "-d", "-t", "=split:3", "-n", "requested", "sleep 60"]);
-        tmux(&["select-window", "-t", "=split:0"]);
+        let deadline = Duration::from_secs(10);
+        // With no attached client the test server exits when its panes finish,
+        // even if an assertion interrupts the normal kill-server cleanup.
+        let mut setup = tmux();
+        setup
+            .args(["new-session", "-d", "-s", "split", "-n", "first", "sleep 30"])
+            .args([";", "new-window", "-d", "-t", "=split:3", "-n", "requested", "sleep 30"]);
+        let status = timeout(deadline, setup.status())
+            .await.expect("tmux setup timed out").unwrap();
+        assert!(status.success(), "tmux setup failed: {status}");
 
-        let pair = native_pty_system().openpty(PtySize {
-            rows: 24, cols: 80, pixel_width: 0, pixel_height: 0,
-        }).unwrap();
-        let mut command = CommandBuilder::new("tmux");
-        command.arg("-S"); command.arg(&socket);
-        command.args(["attach-session", "-t", &attach_target("split", Some(3))]);
-        command.env_remove("TMUX");
-        command.env("TERM", "xterm");
-        let mut child = pair.slave.spawn_command(command).unwrap();
-        let mut visible = String::new();
-        for _ in 0..40 {
-            visible = tmux(&["list-clients", "-t", "=split", "-F", "#{session_name}:#{window_index}"]);
-            if !visible.is_empty() { break; }
-            std::thread::sleep(std::time::Duration::from_millis(25));
+        for (window, expected) in [(Some(3), "split:3"), (None, "split:0")] {
+            // Control mode uses a real tmux client and reports its own window,
+            // without relying on an unread PTY or waiting for a detached client.
+            let mut client = tmux();
+            client
+                .args(["-C", "select-window", "-t", "=split:0"])
+                .args([";", "attach-session", "-t", &attach_target("split", window)])
+                .args([";", "display-message", "-p", "#{session_name}:#{window_index}"])
+                .args([";", "detach-client"]);
+            let result = timeout(deadline, client.output())
+                .await.expect("tmux attachment timed out").unwrap();
+            let output = String::from_utf8(result.stdout).unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(
+                !output.lines().any(|line| line.starts_with("%error")),
+                "{output}"
+            );
+            assert!(
+                output.lines().any(|line| line == expected),
+                "expected {expected}: {output}"
+            );
         }
-        let _ = child.kill(); let _ = child.wait();
-        assert_eq!(visible, "split:3", "Terminal must attach to the chat's window");
 
-        // Without a requested window, preserve the selected window as before.
-        tmux(&["select-window", "-t", "=split:0"]);
-        let pair = native_pty_system().openpty(PtySize {
-            rows: 24, cols: 80, pixel_width: 0, pixel_height: 0,
-        }).unwrap();
-        let mut command = CommandBuilder::new("tmux");
-        command.arg("-S"); command.arg(&socket);
-        command.args(["attach-session", "-t", &attach_target("split", None)]);
-        command.env_remove("TMUX"); command.env("TERM", "xterm");
-        let mut child = pair.slave.spawn_command(command).unwrap();
-        visible.clear();
-        for _ in 0..40 {
-            visible = tmux(&["list-clients", "-t", "=split", "-F", "#{session_name}:#{window_index}"]);
-            if !visible.is_empty() { break; }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        let _ = child.kill(); let _ = child.wait();
-        assert_eq!(visible, "split:0", "Session-only attachment must retain its selected window");
+        let status = timeout(deadline, tmux().arg("kill-server").status())
+            .await
+            .expect("tmux cleanup timed out")
+            .unwrap();
+        assert!(status.success());
     }
 
     #[test]

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Browser windows · AgentShell design prototype</title>
+<style>
+:root{color-scheme:light;--bg:#f6f7f5;--card:#fff;--ink:#202822;--dim:#526255;--line:#cbd5cc;--accent:#216343;--tint:#e4f2e8;--focus:#007147;font:16px/1.4 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#131a16;--card:#1d2721;--ink:#e6eee7;--dim:#b1bfb4;--line:#3a4b3f;--accent:#9ce6b5;--tint:#294638;--focus:#acffc8}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#131a16;--card:#1d2721;--ink:#e6eee7;--dim:#b1bfb4;--line:#3a4b3f;--accent:#9ce6b5;--tint:#294638;--focus:#acffc8}
+*{box-sizing:border-box}body{margin:0}main{max-width:660px;margin:auto;padding:14px}header,.bar,.heading,.tabrow,.workbar,.choices{display:flex;align-items:center;gap:8px;justify-content:space-between}
+header{margin-bottom:10px}.brand{font-size:1.25rem;font-weight:750;letter-spacing:-.03em}.meta,small{font-size:.8rem;color:var(--dim)}button,select,textarea{font:inherit;color:inherit}button,select{min-height:44px;cursor:pointer}
+button{background:none;border:1px solid transparent;border-radius:9px;font-weight:600;padding:7px 10px;line-height:1.2;text-align:center}button:disabled{opacity:.5;cursor:default}button:not(:disabled):hover{background:var(--tint)}
+:focus-visible{outline:3px solid var(--focus);outline-offset:1px}.outline,select{border:1px solid var(--line);background:var(--card)}button.primary{background:var(--accent);color:var(--card)}
+.bar{padding:5px 6px 5px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px}.clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.summary{display:grid;min-width:0}.windows{flex:none;color:var(--accent);background:var(--tint)}
+.sheet,.desk{margin-top:12px;border-radius:16px;background:var(--card);border:1px solid var(--line);padding:14px}.heading{margin-bottom:8px}.heading h1,.pane h2{margin:0;font-size:1.12rem;letter-spacing:-.025em}.group{margin:8px 0 12px;border:1px solid var(--line);border-radius:12px;overflow:hidden}.window{width:100%;display:flex;align-items:center;justify-content:space-between;gap:5px;padding:8px 10px;border-radius:0;text-align:left}.window.current{background:var(--tint);color:var(--accent)}.window small{display:block;font-weight:400}.tabrow{padding:0 4px;border-top:1px solid var(--line);gap:0}.tab{flex:1;min-width:0;display:flex;align-items:center;gap:8px;text-align:left}.mark{width:8px;height:8px;border:1px solid var(--dim);border-radius:50%;flex:none}.mark.on{background:var(--accent);border-color:var(--accent)}.more{width:44px;flex:none;color:var(--dim);font-size:1.1rem}.menu{display:grid;gap:3px;padding:6px 8px;border-top:1px solid var(--line)}.menu button,.pick button{text-align:left;color:var(--accent)}.full{width:100%}.pick{display:grid;gap:6px}.choices{justify-content:flex-end;flex-wrap:wrap;margin-top:12px}
+select{width:100%;border-radius:8px;padding:7px;margin:6px 0}.help,.status{margin:6px 0;color:var(--dim);font-size:.88rem}.status:empty{margin:0}.status{margin:10px 3px 0}.workbar{justify-content:flex-end;flex-wrap:wrap;margin-bottom:10px}.panes{display:grid;gap:8px}.panes.two{grid-template-columns:repeat(2,minmax(0,1fr))}.pane{min-width:0;border:1px solid var(--line);border-radius:10px;padding:10px}.pane.selected{border-color:var(--accent)}.pane h2{overflow-wrap:anywhere}.panehead{width:100%;text-align:left;padding:4px 0;color:var(--accent)}.pane label{display:block;font-size:.8rem;color:var(--dim);margin:12px 0 4px}textarea{width:100%;min-height:90px;resize:vertical;border:1px solid var(--line);border-radius:7px;background:var(--bg);padding:7px}.desk{padding:10px}.two .pane{padding:7px}
+@media(max-width:350px){main{padding:8px}.sheet{padding:9px}.two{gap:4px}.window{padding-inline:8px}}
+</style>
+</head>
+<body><main>
+<header><span class="brand">Browser</span><span class="meta">Design prototype</span></header>
+<div id="app"></div><p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
+</main>
+<script>
+(() => {
+  const app = document.querySelector('#app');
+  const status = document.querySelector('#status');
+  // Only these synthetic pages are in the model. Each retains its own draft.
+  const pages = new Map([
+    ['notes', 'Field notes'], ['route', 'Route ideas'], ['packing', 'Packing list'],
+    ['map', 'Weekend map'], ['rail', 'Train timetable']
+  ].map(([id, title]) => [id, {title, draft:''}]));
+  let windows = [
+    {id:1, tabs:['notes','route','packing'], active:'notes', pairs:[]},
+    {id:2, tabs:['map','rail'], active:'map', pairs:[]}
+  ];
+  let nextWindow = 3, current = 1, screen = 'manager', menu = null, pairFirst = null, destination = 1;
+  const byId = id => windows.find(w => w.id === Number(id));
+  const here = () => byId(current);
+  const owner = id => windows.find(w => w.tabs.includes(id));
+  const pairFor = (w,id) => w.pairs.find(pair => pair.includes(id));
+  const partners = (w,id) => w.tabs.filter(other => other !== id && !pairFor(w,other));
+  const count = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+  const title = id => pages.get(id).title;
+  function focusTab(id) {
+    const w = owner(id);
+    current = w.id;
+    w.active = id;
+    screen = 'desk';
+    menu = null;
+  }
+  function button(action, label, cls = '', attrs = '') {
+    return '<button type="button" class="' + cls + '" data-action="' + action + '" ' + attrs + '>' + label + '</button>';
+  }
+  const tabAttr = id => 'data-tab="' + id + '"';
+  const winAttr = id => 'data-win="' + id + '"';
+  function manager() {
+    const groups = windows.map(w => {
+      const tabs = w.tabs.map(id => {
+        const active = w.active === id;
+        const last = w.tabs.length === 1, paired = pairFor(w,id);
+        const actions = menu === id ? '<div class="menu">' +
+          button('choose-destination', 'Move to another window…', '', tabAttr(id) + (windows.length < 2 || paired ? ' disabled' : '')) +
+          button('split', 'Move to new window', '', tabAttr(id) + (last || paired ? ' disabled' : '')) +
+          (paired ? '<small>Exit side by side to move this tab.</small>' : '') +
+          (last ? '<small>This is the only tab in this window.</small>' : '') +
+          (paired ? button('unpair','Exit side by side','',tabAttr(id)) : button('pair', 'View side by side…', '', tabAttr(id) + (!partners(w,id).length ? ' disabled' : ''))) + '</div>' : '';
+        const pairLabel = paired ? '<small class="clip">Paired with ' + title(paired.find(other => other !== id)) + '</small>' : '';
+        return '<div class="tabrow">' + button('tab','<span class="mark ' + (active ? 'on':'') + '" aria-hidden="true"></span><span class="summary"><span class="clip">' + title(id) + '</span>' + pairLabel + '</span>', 'tab', tabAttr(id) + (active ? ' aria-current="true"' : '')) +
+          button('more','&#8943;', 'more', tabAttr(id) + ' aria-label="Options for ' + title(id) + '" aria-expanded="' + (menu === id) + '"') + '</div>' + actions;
+      }).join('');
+      const label = '<span class="clip">Window ' + w.id + '<small class="clip">' + title(w.active) + ' · ' + count(w.tabs.length,'tab') + '</small></span>' + (w.id === current ? '<small>Viewing</small>':'');
+      return '<section class="group" aria-label="Window ' + w.id + '">' + button('window',label,'window' + (w.id === current ? ' current':''),winAttr(w.id)) + tabs + '</section>';
+    }).join('');
+    return '<section class="sheet"><div class="heading"><h1>Windows</h1>' + button('done','Done') + '</div>' + groups +
+      button('preview','Merge all windows…','outline full',windows.length < 2 ? 'disabled':'') + '</section>';
+  }
+  function mergePreview() {
+    const dest = byId(destination);
+    const incoming = windows.filter(w => w !== dest);
+    const total = incoming.reduce((n,w) => n + w.tabs.length, 0);
+    return '<section class="sheet"><div class="heading"><h1>Merge windows</h1></div><label for="dest">Keep this window</label><select id="dest">' +
+      windows.map(w => '<option value="' + w.id + '"' + (w === dest ? ' selected':'') + '>Window ' + w.id + ' · ' + title(w.active) + '</option>').join('') +
+      '</select><p>Move ' + count(total,'tab') + ' from ' + count(incoming.length,'other window') + ' to Window ' + dest.id + '. It will hold ' + count(total + dest.tabs.length,'tab') + '.</p>' +
+      '<p class="help">Keep ' + title(dest.active) + ' selected. Incoming tabs follow the existing tabs in the order shown.</p><div class="choices">' +
+      button('cancel-merge','Cancel','outline') + button('merge','Merge into Window ' + dest.id,'primary') + '</div></section>';
+  }
+  function partnerPicker() {
+    return '<section class="sheet"><div class="heading"><h1>View side by side</h1>' + button('cancel-pair','Cancel') + '</div><p>Choose a tab to view beside <strong>' + title(pairFirst) + '</strong>. It will move directly after this tab in the tab strip.</p><div class="pick">' +
+      partners(owner(pairFirst),pairFirst).map(id => button('partner',title(id),'outline',tabAttr(id))).join('') + '</div></section>';
+  }
+  let moving = null;
+  function movePicker() {
+    return '<section class="sheet"><div class="heading"><h1>Move tab</h1>' + button('cancel-move','Cancel') + '</div><p>Move <strong>' + title(moving) + '</strong> to</p><div class="pick">' +
+      windows.filter(w => w !== owner(moving)).map(w => button('move', 'Window ' + w.id + ' · ' + title(w.active), 'outline', winAttr(w.id))).join('') + '</div></section>';
+  }
+  function desktop() {
+    const w = here(), paired = pairFor(w,w.active);
+    const tabs = paired || [w.active];
+    const control = paired ? button('unpair','Exit side by side','outline',tabAttr(w.active)) :
+      button('pair','View side by side…','outline',tabAttr(w.active) + (!partners(w,w.active).length ? ' disabled' : ''));
+    const panes = tabs.map(id => '<section class="pane' + (w.active === id ? ' selected':'') + '" data-pane="' + id + '">' +
+      (paired ? button('pane',title(id),'panehead',tabAttr(id) + ' aria-pressed="' + (w.active === id) + '"') : '<h2>' + title(id) + '</h2>') +
+      '<label for="draft-' + id + '">Page draft</label><textarea id="draft-' + id + '" data-draft="' + id + '" aria-label="Page draft for ' + title(id) + '" placeholder="Type a note"></textarea></section>').join('');
+    return '<section class="desk" aria-label="Browser content"><div class="workbar">' + control + '</div><div class="panes' + (paired ? ' two':'') + '">' + panes + '</div></section>';
+  }
+  function render(message, focusSelector) {
+    const w = here();
+    app.innerHTML = '<div class="bar"><div class="summary"><small id="location">Window ' + w.id + '</small><strong class="clip" id="active">' + title(w.active) + '</strong></div>' +
+      button('windows','Windows (' + windows.length + ')','windows','aria-expanded="' + (screen !== 'desk') + '"') + '</div>' +
+      (screen === 'manager' ? manager() : screen === 'merge' ? mergePreview() : screen === 'pair' ? partnerPicker() : screen === 'move' ? movePicker() : desktop());
+    for (const node of app.querySelectorAll('[data-draft]')) node.value = pages.get(node.dataset.draft).draft;
+    if (typeof message === 'string') status.textContent = message;
+    if (focusSelector) app.querySelector(focusSelector)?.focus();
+  }
+  function activatePane(id) {
+    const w = here();
+    if (!pairFor(w,w.active)?.includes(id) || w.active === id) return;
+    w.active = id;
+    app.querySelector('#active').textContent = title(id);
+    for (const pane of app.querySelectorAll('[data-pane]')) {
+      const selected = pane.dataset.pane === id;
+      pane.classList.toggle('selected', selected);
+      pane.querySelector('button').setAttribute('aria-pressed', String(selected));
+    }
+  }
+  function detachTab(w,id) {
+    const index = w.tabs.indexOf(id);
+    w.tabs.splice(index,1);
+    if (w.active === id) w.active = w.tabs[Math.min(index,w.tabs.length-1)];
+  }
+  app.addEventListener('focusin', e => { if (e.target.dataset.draft) activatePane(e.target.dataset.draft); });
+  app.addEventListener('input', e => { if (e.target.dataset.draft) pages.get(e.target.dataset.draft).draft = e.target.value; });
+  app.addEventListener('change', e => { if (e.target.id === 'dest') { destination = Number(e.target.value); render('', '#dest'); } });
+  let beforePair = 'manager';
+  app.addEventListener('click', e => {
+    const b = e.target.closest('[data-action]');
+    if (!b || b.disabled) return;
+    const action = b.dataset.action, id = b.dataset.tab;
+    const panel = '[data-action="windows"]', list = '[data-action="done"]';
+    let focus = panel, message = '';
+    switch (action) {
+      case 'windows': screen = screen === 'manager' ? 'desk' : 'manager'; menu = null; focus = screen === 'manager' ? list : panel; break;
+      case 'done': screen = 'desk'; menu = null; break;
+      case 'window': current = Number(b.dataset.win); screen = 'desk'; menu = null; message = 'Viewing Window ' + current + ', ' + title(here().active) + '.'; break;
+      case 'tab': focusTab(id); message = 'Viewing ' + title(id) + ' in Window ' + current + '.'; break;
+      case 'more': menu = menu === id ? null : id; focus = '[data-action="more"][' + tabAttr(id) + ']'; break;
+      case 'choose-destination': if (windows.length < 2 || pairFor(owner(id),id)) return; moving = id; screen = 'move'; focus = '[data-action="move"]'; break;
+      case 'cancel-move': screen = 'manager'; focus = '[data-action="choose-destination"]'; break;
+      case 'move': {
+        const source = owner(moving), dest = byId(b.dataset.win);
+        if (!source || !dest || source === dest || pairFor(source,moving)) return;
+        detachTab(source,moving);
+        dest.tabs.push(moving);
+        if (!source.tabs.length) windows = windows.filter(w => w !== source);
+        focusTab(moving);
+        message = 'Moved ' + title(moving) + ' to Window ' + dest.id + '.'; break;
+      }
+      case 'split': {
+        const source = owner(id);
+        if (source.tabs.length < 2 || pairFor(source,id)) return;
+        detachTab(source,id);
+        windows.push({id:nextWindow++,tabs:[id],active:id,pairs:[]});
+        focusTab(id); message = 'Moved ' + title(id) + ' to Window ' + current + '.'; break;
+      }
+      case 'preview': if (windows.length < 2) return; destination = current; screen = 'merge'; menu = null; focus = '#dest'; break;
+      case 'cancel-merge': screen = 'manager'; focus = '[data-action="preview"]'; break;
+      case 'merge': {
+        const dest = byId(destination);
+        const sources = windows.filter(w => w !== dest);
+        for (const w of sources) { dest.tabs.push(...w.tabs); dest.pairs.push(...w.pairs); }
+        windows = [dest]; current = dest.id; screen = 'desk';
+        message = 'Merged ' + count(dest.tabs.length,'tab') + ' into Window ' + dest.id + '.'; break;
+      }
+      case 'pair': if (pairFor(owner(id),id) || !partners(owner(id),id).length) return; beforePair = screen; pairFirst = id; screen = 'pair'; focus = '[data-action="partner"]'; break;
+      case 'cancel-pair': screen = beforePair; focus = '[data-action="pair"]'; break;
+      case 'partner': {
+        const w = owner(pairFirst);
+        if (!partners(w,pairFirst).includes(id) || pairFor(w,pairFirst)) return;
+        w.tabs.splice(w.tabs.indexOf(id),1);
+        w.tabs.splice(w.tabs.indexOf(pairFirst)+1,0,id);
+        w.pairs.push([pairFirst,id]); focusTab(pairFirst); message = 'Viewing ' + title(pairFirst) + ' and ' + title(id) + ' side by side.'; break;
+      }
+      case 'unpair': {
+        const w = owner(id);
+        w.pairs = w.pairs.filter(pair => !pair.includes(id));
+        focusTab(id); message = 'Viewing ' + title(id) + '.'; break;
+      }
+      case 'pane': activatePane(id); return;
+      default: return;
+    }
+    render(message, focus);
+  });
+  render();
+})();
+</script></body></html>

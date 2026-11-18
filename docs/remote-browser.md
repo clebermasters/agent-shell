@@ -5,6 +5,26 @@ the selected Linux server. Chrome's address bar, tabs, menus, popups and file
 dialogs stay inside a dedicated graphical display. The Android Browser screen
 provides keyboard shortcuts, fullscreen, viewer zoom and connection recovery.
 
+## Use Chrome and chat together
+
+**Deployment** puts the remote browser and an AgentShell chat on the same screen.
+
+- From a chat, open **Chat options** (⋮) and tap **Deployment** to bring in the
+  browser for that server.
+- From **Remote browser**, tap **Deployment** in the bottom toolbar. In
+  fullscreen, open the floating controls to find the same action. The app
+  reopens the paired chat or uses the last chat you visited on that server
+  when available. If you need to pick one, tap a chat in **Choose a chat**.
+  Each tmux row shows its session and window. Direct chats also appear here.
+  To pair a different chat, open that chat and choose **Deployment**.
+- Tap **Split layout** in the header or tap the divider to choose **Top /
+  bottom**, **Side by side**, or **Auto**. Drag the divider to resize.
+  Use **Swap chat and browser** to change their order.
+- Press **Back** to leave Deployment. Reopening the paired chat or that server’s
+  remote browser restores the split. The pairing, pane order and sizes also
+  survive an app restart. Tap **Close split** (×) to return to the screen you
+  opened it from and turn off automatic reopening.
+
 ## Install
 
 The runtime supports Ubuntu/Pop!_OS 22.04 on amd64/arm64 and Omarchy/Arch on
@@ -378,6 +398,13 @@ The native client supplies viewport/keyboard state; the viewer assets remain
 served by the same configured HTTPS host and port.
 
 ## Interaction
+
+On a Linux host with the AgentShell Browser Windows extension enabled, tap
+**Windows** in the browser controls or **Fullscreen controls**. Tap a window
+to bring it forward. A tab’s menu can move that live tab to an existing or new
+window, or place two tabs side by side. **Merge all into this window** previews
+the incoming tabs and keeps the destination’s active tab selected.
+See [browser windows and split view](browser-windows.md) for setup and details.
 
 - **Keyboard** opens the Android IME. **Esc**, **Tab** and **Enter** send actual
   remote key events. Accented text and composition are handled by the client.

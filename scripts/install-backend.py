@@ -352,7 +352,17 @@ class Installer:
         if getattr(self.args, 'lan_hostname', None):
             lan_origin = 'https://' + self.args.lan_hostname.lower() + (':' + str(self.args.https_port) if self.args.https_port != 443 else '')
             value['additionalOrigins'] = list(dict.fromkeys([*previous.get('additionalOrigins', []), lan_origin]))
+        extension_dir = self.user_home / '.local/share/agentshell/browser-windows'
+        package = self.run(['/usr/bin/python3', str(runner.with_name('browser_windows.py')),
+                            '--config', str(path), '--install', str(runner.with_name('window-extension')),
+                            '--output', str(extension_dir)], capture=True, user=True)
+        value['windowExtension'] = json.loads(package.stdout)
         self.write(path, json.dumps(value, indent=2) + '\n', '600')
+        registration = self.run(['/usr/bin/python3', str(runner), '--config', str(path), 'register-windows'],
+                                capture=True, user=True)
+        if json.loads(registration.stdout).get('registered') is not True:
+            raise ValueError('Could not register the Chrome window manager')
+        print(f'Browser window extension staged in {extension_dir}. Enable it in the managed Chrome profile.', flush=True)
         unit = self.user_home / '.config/systemd/user/agentshell-browser.service'
         text = Template((PROJECT / 'deployment/browser/agentshell-browser.service').read_text()).substitute(
             runner=json.dumps(str(runner)), config=json.dumps(str(path)), runtime_directory=str(runtime_directory),

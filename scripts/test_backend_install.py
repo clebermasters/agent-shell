@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 from jsonc_config import merge_mcp, parse
@@ -57,6 +57,44 @@ class JsoncTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_browser_install_registers_window_manager_under_existing_service_user(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            path = home / '.config/agentshell/browser.json'
+            path.parent.mkdir(parents=True)
+            origin = 'https://browser.example.test'
+            previous = {'sessionId':'old-session', 'publicOrigin':origin, 'password':'existing-test-secret',
+                        'userDataDir':str(home/'original-root'), 'profileDirectory':'Profile 3'}
+            path.write_text(json.dumps(previous))
+            value = installer.Installer.__new__(installer.Installer)
+            value.user_home = home
+            value.install_dir = home/'installation'
+            value.args = SimpleNamespace(with_browser='kasmvnc', browser_origin=None, browser_profile=None,
+                                         browser_user_data_dir=None, no_start=True)
+            value.account = SimpleNamespace(pw_uid=os.getuid())
+            value.mkdir = Mock()
+            value.configure_desktop_browser = Mock()
+            def write(file, content, *args):
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(content)
+            value.write = write
+            extension = {'id':'a'*32,'host':str(home/'native-host'),'package':str(home/'windows.crx')}
+            def run(command, **options):
+                if '--install' in command:
+                    self.assertTrue(options['user'])
+                    self.assertEqual(command[command.index('--config')+1], str(path))
+                    return SimpleNamespace(stdout=json.dumps(extension))
+                if command[-1] == 'register-windows':
+                    self.assertTrue(options['user'])
+                    self.assertEqual(json.loads(path.read_text())['windowExtension'], extension)
+                    return SimpleNamespace(stdout='{"registered":true}')
+                return SimpleNamespace(stdout='{"state":"stopped"}')
+            value.run = Mock(side_effect=run)
+            value.configure_browser()
+            config = json.loads(path.read_text())
+            self.assertEqual({name:config[name] for name in previous}, previous)
+            self.assertEqual(sum(call.args[0][-1]=='register-windows' for call in value.run.call_args_list), 1)
+
     def test_arch_dependencies_use_pacman_and_arch_certificate_packages(self):
         value=installer.Installer.__new__(installer.Installer)
         value.family='arch'

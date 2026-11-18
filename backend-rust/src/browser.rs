@@ -1,5 +1,6 @@
 //! Browser control is authenticated by the normal API; the binary stream gets a
 //! single-use bootstrap grant and a runtime-scoped HttpOnly cookie instead.
+mod windows;
 use axum::{
     body::Body,
     extract::{
@@ -86,6 +87,7 @@ struct Ticket {
 }
 struct Controller {
     viewer: Uuid,
+    generation: String,
     connection: Uuid,
     cancel: CancellationToken,
     lease_expires: Instant,
@@ -261,6 +263,9 @@ struct Service {
     access: Mutex<Access>,
     runtime: Mutex<()>,
     handoff: Mutex<()>,
+    // Order a Chrome mutation against controller replacement without blocking
+    // the relay's lease renewals or either direction of the live video stream.
+    window_action: Mutex<()>,
 }
 
 static SERVICE: LazyLock<Service> = LazyLock::new(|| {
@@ -281,6 +286,7 @@ static SERVICE: LazyLock<Service> = LazyLock::new(|| {
         access: Mutex::new(Access::default()),
         runtime: Mutex::new(()),
         handoff: Mutex::new(()),
+        window_action: Mutex::new(()),
     }
 });
 
@@ -398,6 +404,8 @@ pub fn api_router() -> Router<Arc<crate::AppState>> {
         .route("/api/browser/sessions", post(start))
         .route("/api/browser/sessions/:id", get(inspect))
         .route("/api/browser/sessions/:id/viewer-grants", post(grant))
+        .route("/api/browser/sessions/:id/windows", post(windows::catalog))
+        .route("/api/browser/sessions/:id/windows/action", post(windows::action))
         .route(
             "/api/browser/sessions/:id/desktop-handoff",
             post(desktop_handoff),
@@ -431,6 +439,7 @@ async fn capabilities() -> ApiResult {
         Json(
             json!({"available":true,"transport":config.provider.transport(),"displayName":config.display_name,
         "sessionId":config.session_id,"viewerOrigin":config.public_origin,"viewerOrigins":viewer_origins(config),"session":state,
+        "windowManagement":config.provider==Provider::Kasmvnc && state["windowManagement"]==true,
         "httpPort":super::read_port_from_env("AGENTSHELL_HTTP_PORT",4010),
         "httpsPort":super::read_port_from_env("AGENTSHELL_HTTPS_PORT",4443),
         "desktopHandoff":config.provider==Provider::Kasmvnc,"mobileHandoff":true,"nativeHandoff":true,"profileSelection":true}),
@@ -556,6 +565,7 @@ async fn grant(Path(id): Path<String>, Json(request): Json<GrantRequest>) -> Api
     if generation != request.runtime_generation {
         return Err(error("RUNTIME_CHANGED"));
     }
+    let _window_action = SERVICE.window_action.lock().await;
     let mut access = SERVICE.access.lock().await;
     let now = Instant::now();
     access.expire_controller();
@@ -598,6 +608,7 @@ async fn release_viewer(Path(id): Path<String>, Json(request): Json<ReleaseReque
     }
     // Releasing the desktop's identity must never disconnect an unrelated
     // controller that has already taken over (for example, Android).
+    let _window_action = SERVICE.window_action.lock().await;
     SERVICE
         .access
         .lock()
@@ -1040,6 +1051,7 @@ async fn socket(
     }
     let connection = Uuid::new_v4();
     let cancel = CancellationToken::new();
+    let _window_action = SERVICE.window_action.lock().await;
     let mut access = SERVICE.access.lock().await;
     access.expire_controller();
     // authorize() invokes the runtime helper outside this lock. A handoff
@@ -1060,6 +1072,7 @@ async fn socket(
     }
     access.controller = Some(Controller {
         viewer,
+        generation: generation.clone(),
         connection,
         cancel: cancel.clone(),
         lease_expires: Instant::now() + Duration::from_secs(30),
@@ -1330,6 +1343,7 @@ mod tests {
         let mut access = Access::default();
         access.controller = Some(Controller {
             viewer: old,
+            generation: "current".into(),
             connection: Uuid::new_v4(),
             cancel: cancel.clone(),
             lease_expires: Instant::now() + Duration::from_secs(30),
@@ -1360,6 +1374,7 @@ mod tests {
         let mut access = Access::default();
         access.controller = Some(Controller {
             viewer: phone,
+            generation: "current".into(),
             connection: Uuid::new_v4(),
             cancel: cancel.clone(),
             lease_expires: Instant::now() + Duration::from_secs(30),
@@ -1418,6 +1433,7 @@ mod tests {
         let mut access = Access::default();
         access.controller = Some(Controller {
             viewer: Uuid::new_v4(),
+            generation: "current".into(),
             connection: Uuid::new_v4(),
             cancel: cancellation.clone(),
             lease_expires: Instant::now() - Duration::from_secs(1),

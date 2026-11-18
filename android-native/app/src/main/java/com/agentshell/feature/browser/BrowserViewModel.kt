@@ -24,7 +24,7 @@ import javax.inject.Inject
 data class BrowserUiState(val server: String = "", val title: String = "Chrome", val status: String = "loading",
     val error: String? = null, val launch: BrowserLaunch? = null, val canTakeControl: Boolean = false,
     val canSendToComputer: Boolean = false, val sessionId: String? = null, val generation: String? = null, val notice: String? = null,
-    val canNativeHandoff: Boolean = false)
+    val canNativeHandoff: Boolean = false, val canManageWindows: Boolean = false)
 
 @HiltViewModel
 class BrowserViewModel @Inject constructor(private val hosts: HostRepository, private val browser: BrowserRepository,
@@ -63,6 +63,26 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
     private var transcriptionContext: String? = null
     private var voiceDeliveryJob: Job? = null
     private var voiceDeliveryRequestId: String? = null
+    internal val windowManager = BrowserWindowManager(::invalidateVoice)
+    init {
+        viewModelScope.launch {
+            _ui.map { state ->
+                state.launch?.takeIf { state.status == "connected" && state.canManageWindows }?.let {
+                    Triple(it, state.generation, currentBrowserHost())
+                }
+            }.distinctUntilChanged().collectLatest { target ->
+                val (launch, generation, secure) = target ?: return@collectLatest
+                if (generation == null || secure == null) return@collectLatest
+                coroutineScope {
+                    windowManager.observe(this) { action, allowPairing ->
+                        if (_ui.value.launch != launch || _ui.value.status != "connected" || !active)
+                            throw BrowserFailure("CONTROLLER_CHANGED")
+                        browser.windows(secure, launch.sessionId, viewerId, generation, action, allowPairing)
+                    }
+                }
+            }
+        }
+    }
     init { viewModelScope.launch {
         hosts.getSelectedHost().collect { selected ->
             if (host != selected) {
@@ -146,7 +166,8 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
                         .apply { if(canTake) put("takeControl",takeControl);if(cancelHandoff!=null) put("cancelHandoffId",cancelHandoff) })
                 val tunnelAddress=browser.viewerTunnelAddress(secure)
                 if(current==attempt && host?.id==selected.id && active) _ui.value=BrowserUiState(selected.name,title,"connecting",launch=BrowserLaunch(origin,id,grant.getString("grant"),tunnelAddress),
-                    canTakeControl=canTake,canSendToComputer=canSend,sessionId=id,generation=session.getString("runtimeGeneration"),notice=notice,canNativeHandoff=canNative)
+                    canTakeControl=canTake,canSendToComputer=canSend,sessionId=id,generation=session.getString("runtimeGeneration"),notice=notice,
+                    canNativeHandoff=canNative,canManageWindows=capabilities.optBoolean("windowManagement"))
             } catch(cancelled:CancellationException) { throw cancelled }
             catch(error:Exception) {
                 val code=(error as? BrowserFailure)?.code ?: if(error is javax.net.ssl.SSLException) "CERTIFICATE_ERROR" else "CONNECTION_FAILED"
@@ -347,8 +368,9 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
 
     private fun voiceTarget(): BrowserVoiceTarget? {
         val state=_ui.value
+        val focus=windowManager.state.value.catalog?.focus
         return BrowserVoiceTarget(host?.id ?: return null,state.sessionId ?: return null,
-            state.generation ?: return null,viewerId)
+            state.generation ?: return null,viewerId,focus?.first,focus?.second)
     }
     private fun voiceConnected()=active && _ui.value.status=="connected" && _ui.value.launch!=null && transferJob?.isActive!=true
 
@@ -408,12 +430,24 @@ class BrowserViewModel @Inject constructor(private val hosts: HostRepository, pr
                 if(!voiceReceipt.accept(result.jobId)) return
                 val target=browserVoiceTarget(result.sourceSessionId)
                 val text=result.text
-                val auto=voiceGate.canInsert(result.sourceSessionId,voiceTarget(),_ui.value.launch,attempt,voiceConnected())
+                val auto=voiceGate.canInsert(result.sourceSessionId,voiceTarget(),_ui.value.launch,attempt,
+                    voiceConnected(),requireKnownTab=_ui.value.canManageWindows)
                 _voice.update { it.copy(isTranscribing=if(result.sourceSessionId==transcriptionContext) false else it.isTranscribing,
                     error=if(text.isBlank()) "No speech was detected. Try recording again." else null,failedJobId=null,failedContext=null,
                     transcripts=if(text.isBlank()) it.transcripts else it.transcripts+BrowserVoiceTranscript(result.jobId,text,target,
                         if(auto) null else "Transcript ready. Focus a field in the original browser, then paste.")) }
-                if(auto && target!=null && text.isNotBlank()) requestVoicePaste(result.jobId)
+                if(auto && target!=null && text.isNotBlank()) {
+                    if(target.tabId==null) requestVoicePaste(result.jobId)
+                    else viewModelScope.launch {
+                        val focus = windowManager.freshFocus()
+                        if(focus == (target.windowId to target.tabId) &&
+                            voiceGate.canInsert(result.sourceSessionId,voiceTarget(),_ui.value.launch,attempt,voiceConnected()))
+                            requestVoicePaste(result.jobId)
+                        else _voice.update { state -> state.copy(transcripts=state.transcripts.map {
+                            if(it.jobId==result.jobId) it.copy(message="Browser focus changed. Choose a field, then paste.") else it
+                        }) }
+                    }
+                }
             }
         }
     }

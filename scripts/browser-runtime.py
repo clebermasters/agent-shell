@@ -5,6 +5,7 @@ import contextlib
 import fcntl
 import json
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -212,6 +213,14 @@ def _runtime_module():
     # Tests may load this module with importlib without registering sys.modules.
     import types
     return types.SimpleNamespace(**globals())
+
+
+def window_manager():
+    # Load the installed sibling even when another helper imports this runner by path.
+    spec = importlib.util.spec_from_file_location('agentshell_browser_windows', Path(__file__).with_name('browser_windows.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def select_profile(value, path, identifier, confirmation_token=None):
@@ -483,6 +492,10 @@ def run(value):
             if value.get('isolateHostFfmpeg', False) and not shutil.which('bwrap'):
                 raise RuntimeErrorCode('RUNTIME_DEPENDENCY_MISSING')
             if os.getuid() == 0: raise RuntimeErrorCode('CHROME_MUST_RUN_AS_USER')
+            if value.get('windowExtension'):
+                window_manager().register_host(_runtime_module(), value)
+                record['windowProfileDirectory'] = (value.get('profileDirectory')
+                    or profile_metadata(value['userDataDir']).get('last_used') or 'Default')
             if Path(f'/tmp/.X11-unix/X{value["display"]}').exists(): raise RuntimeErrorCode('DISPLAY_IN_USE')
             # Check binding without inheriting a listening socket into Xvnc.
             check_port(value['port'])
@@ -552,16 +565,44 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config',type=Path,required=True)
     parser.add_argument('--profile-id'); parser.add_argument('--confirmation-token')
-    parser.add_argument('command',choices=['status','start','stop','run','profiles','select-profile'])
+    parser.add_argument('--generation')
+    parser.add_argument('--request')
+    parser.add_argument('command',choices=['status','start','stop','run','profiles','select-profile','windows','register-windows'])
     args=parser.parse_args()
     try:
         value=config(args.config)
         if args.command=='run': run(value);return
         if args.command == 'profiles': result = catalog(value)[0]
+        elif args.command == 'windows':
+            manager = window_manager()
+            try:
+                if not args.generation or not args.request or len(args.request) > 8192:
+                    raise manager.WindowError('WINDOW_ACTION_INVALID')
+                request = json.loads(args.request)
+                if not isinstance(request, dict):
+                    raise manager.WindowError('WINDOW_ACTION_INVALID')
+                allow_pairing = request.pop('allowPairing', False)
+                if type(allow_pairing) is not bool or (allow_pairing and request.get('action') != 'list'):
+                    raise manager.WindowError('WINDOW_ACTION_INVALID')
+                result = manager.query(_runtime_module(), args.config, args.generation, request, allow_pairing=allow_pairing)
+            except manager.WindowError as error:
+                result = {'ok':False, 'code':str(error)}
+            except (ValueError, KeyError, TypeError, OSError, EOFError):
+                result = {'ok':False, 'code':'WINDOW_ACTION_FAILED'}
+        elif args.command == 'register-windows':
+            manager = window_manager()
+            if not manager.configured(value):
+                raise RuntimeErrorCode('WINDOW_CONFIGURATION_INVALID')
+            manager.register_host(_runtime_module(), value)
+            result = {'registered': True}
         elif args.command == 'select-profile': result = select_profile(value, args.config, args.profile_id, args.confirmation_token)
-        else: result=status(value) if args.command=='status' else start(value,args.config) if args.command=='start' else stop(value)
+        elif args.command == 'status':
+            result = status(value)
+            if value.get('windowExtension'):
+                result['windowManagement'] = window_manager().configured(value)
+        else: result=start(value,args.config) if args.command=='start' else stop(value)
     except (RuntimeErrorCode,ValueError) as error:
         result={'state':'failed','code':error.code if isinstance(error,RuntimeErrorCode) else 'INVALID_RUNTIME_CONFIG'}
-    print(json.dumps(result))
+    print(json.dumps(result, ensure_ascii=False) if args.command == 'windows' else json.dumps(result))
 
 if __name__=='__main__':main()

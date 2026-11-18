@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Dvr
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Web
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Tune
@@ -77,6 +78,8 @@ fun ChatCompactHeader(
     onConfigureSplit: (() -> Unit)? = null,
     onOpenTerminal: (() -> Unit)? = null,
     onBrowseFiles: (() -> Unit)? = null,
+    onOpenDeployment: (() -> Unit)? = null,
+    embedded: Boolean = false,
 ) {
     var showMenu by remember(title) { mutableStateOf(false) }
     val themeControls = LocalThemeControls.current
@@ -86,11 +89,11 @@ fun ChatCompactHeader(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.statusBars)
+                .then(if (embedded) Modifier.padding(start = 8.dp) else Modifier.windowInsetsPadding(WindowInsets.statusBars))
                 .heightIn(min = 48.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onNavigateBack, modifier = Modifier.size(48.dp)) {
+            if (!embedded) IconButton(onClick = onNavigateBack, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(22.dp))
             }
             Row(
@@ -151,6 +154,13 @@ fun ChatCompactHeader(
                     Icon(Icons.Default.MoreVert, contentDescription = "Chat options", modifier = Modifier.size(22.dp))
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    if (onOpenDeployment != null && !embedded) {
+                        DropdownMenuItem(
+                            text = { Text("Deployment") },
+                            leadingIcon = { Icon(Icons.Default.Web, contentDescription = null) },
+                            onClick = { showMenu = false; onOpenDeployment() },
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text(if (detailsExpanded) "Hide connection & usage" else "Connection & usage") },
                         leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },

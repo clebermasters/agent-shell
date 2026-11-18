@@ -4,7 +4,8 @@ import org.json.JSONObject
 import java.util.UUID
 
 /** A transcript belongs to one browser runtime, even when its viewer reconnects. */
-data class BrowserVoiceTarget(val hostId: String, val sessionId: String, val generation: String, val viewerId: String) {
+data class BrowserVoiceTarget(val hostId: String, val sessionId: String, val generation: String, val viewerId: String,
+    val windowId: Int? = null, val tabId: Int? = null) {
     /** A deliberate paste may use a new viewer after reconnecting to the same running browser. */
     fun sameRuntime(other: BrowserVoiceTarget?) = other!=null && hostId==other.hostId &&
         sessionId==other.sessionId && generation==other.generation
@@ -31,6 +32,7 @@ internal class BrowserVoiceGate {
     fun begin(target: BrowserVoiceTarget, launch: BrowserLaunch, attempt: Long): BrowserVoiceCapture {
         val context = JSONObject().put("host", target.hostId).put("session", target.sessionId)
             .put("generation", target.generation).put("viewer", target.viewerId)
+            .put("window",target.windowId).put("tab",target.tabId)
             .put("recording", UUID.randomUUID().toString()).toString()
         return BrowserVoiceCapture(context, target, launch, attempt).also { capture = it }
     }
@@ -38,15 +40,17 @@ internal class BrowserVoiceGate {
     fun invalidate() { capture = null }
 
     fun canInsert(context: String?, target: BrowserVoiceTarget?, launch: BrowserLaunch?, attempt: Long,
-        connected: Boolean): Boolean = capture?.let {
-        connected && context == it.context && target == it.target && launch == it.launch && attempt == it.attempt
+        connected: Boolean, requireKnownTab: Boolean = false): Boolean = capture?.let {
+        connected && (!requireKnownTab || target?.tabId != null) && context == it.context &&
+            target == it.target && launch == it.launch && attempt == it.attempt
     } == true
 }
 
 internal fun browserVoiceTarget(context: String?): BrowserVoiceTarget? = runCatching {
     val data = JSONObject(context ?: return null)
     BrowserVoiceTarget(data.getString("host"), data.getString("session"), data.getString("generation"),
-        data.getString("viewer")).takeIf { listOf(it.hostId, it.sessionId, it.generation, it.viewerId).all(String::isNotBlank) }
+        data.getString("viewer"),data.optInt("window").takeIf { data.has("window") },
+        data.optInt("tab").takeIf { data.has("tab") }).takeIf { listOf(it.hostId, it.sessionId, it.generation, it.viewerId).all(String::isNotBlank) }
 }.getOrNull()
 
 /** JSON escaping is required: transcripts are data inside the trusted viewer, never source code. */

@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -111,6 +113,8 @@ fun ChatScreen(
     isSwipeNavigation: Boolean = false,
     viewModel: ChatViewModel = hiltViewModel(),
     layoutViewModel: ChatLayoutViewModel = hiltViewModel(),
+    onOpenDeployment: (() -> Unit)? = null,
+    embedded: Boolean = false,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val claudeUsage by viewModel.claudeUsage.collectAsStateWithLifecycle()
@@ -125,7 +129,7 @@ fun ChatScreen(
     val savedLayout by layoutViewModel.layout.collectAsStateWithLifecycle()
     val connectionStatus by layoutViewModel.connectionStatus.collectAsStateWithLifecycle()
     val splitLayout = savedLayout ?: ChatSplitPreferences()
-    val splitEnabled = !isAcp && splitLayout.enabled
+    val splitEnabled = !embedded && !isAcp && splitLayout.enabled
     var showDetails by rememberSaveable(chatKey) { mutableStateOf(false) }
     var showSplitOptions by rememberSaveable(chatKey) { mutableStateOf(false) }
     var terminalFocused by remember(chatKey) { mutableStateOf(false) }
@@ -290,7 +294,9 @@ fun ChatScreen(
                 onNavigateBack = onNavigateBack,
                 onClearChat = { showClearConfirm = true },
                 splitEnabled = splitEnabled,
-                splitAvailable = !isAcp && savedLayout != null,
+                embedded = embedded,
+                onOpenDeployment = onOpenDeployment,
+                splitAvailable = !embedded && !isAcp && savedLayout != null,
                 onToggleSplit = {
                     terminalFocused = false
                     layoutViewModel.toggleSplit()
@@ -305,12 +311,11 @@ fun ChatScreen(
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        modifier = Modifier
-            .navigationBarsPadding()
-            .imePadding(),
+        contentWindowInsets = if (embedded) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets,
+        modifier = if (embedded) Modifier else Modifier.navigationBarsPadding().imePadding(),
     ) { innerPadding ->
         SwipeableSessionContainer(
-            recentSessions = if (splitEnabled) emptyList() else recentChatSessions,
+            recentSessions = if (splitEnabled || embedded) emptyList() else recentChatSessions,
             currentSessionKey = chatKey,
             sessionLabel = { key ->
                 if (key.startsWith("acp:")) key.removePrefix("acp:")
@@ -326,14 +331,15 @@ fun ChatScreen(
                 }
             },
         ) {
-            ChatTerminalSplit(
+            ChatSplitPane(
                 preferences = splitLayout.copy(enabled = splitEnabled),
                 onResize = layoutViewModel::resize,
                 onSwap = layoutViewModel::swapPanes,
                 onConfigure = { showSplitOptions = true },
                 onChatInteraction = { terminalFocused = false },
                 modifier = Modifier.fillMaxSize().padding(innerPadding),
-                terminal = {
+                companionPaneName = "terminal",
+                companionPane = {
                     TerminalPanelContent(
                         panelId = "inline:$chatKey",
                         sessionName = sessionName,

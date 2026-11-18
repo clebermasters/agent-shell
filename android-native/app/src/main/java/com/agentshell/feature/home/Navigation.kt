@@ -27,9 +27,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.agentshell.feature.cron.CronViewModel
-import com.agentshell.feature.browser.BrowserScreen
+import com.agentshell.feature.deployment.DeploymentViewModel
 import com.agentshell.feature.alerts.AlertsScreen
-import com.agentshell.feature.chat.ChatScreen
 import com.agentshell.feature.cron.CronJobEditorScreen
 import com.agentshell.feature.cron.CronScreen
 import com.agentshell.feature.debug.DebugScreen
@@ -116,6 +115,7 @@ fun AgentShellNavHost(
     onChatIntentConsumed: (ChatTarget) -> Unit = {},
     viewModel: NavigationViewModel = hiltViewModel(),
     shareViewModel: ShareViewModel = hiltViewModel(),
+    deployment: DeploymentViewModel = hiltViewModel(),
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
@@ -126,8 +126,13 @@ fun AgentShellNavHost(
     var hasSwitchedServer by rememberSaveable { mutableStateOf(false) }
     val keepScreenOnEnabled by viewModel.keepScreenOn.collectAsStateWithLifecycle()
     val backStackEntry by navController.currentBackStackEntryAsState()
+    val deploymentState by deployment.state.collectAsStateWithLifecycle()
+    LaunchedEffect(deployment) {
+        deployment.saveErrors.collect { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+    }
     val keepScreenOn = keepScreenOnEnabled && when (backStackEntry?.destination?.route) {
         Routes.TERMINAL, Routes.CHAT, Routes.SPLIT_SCREEN -> true
+        Routes.BROWSER -> deploymentState?.layout?.enabled == true
         else -> false
     }
     val view = LocalView.current
@@ -172,7 +177,9 @@ fun AgentShellNavHost(
         navController = navController,
         startDestination = Routes.HOME,
     ) {
-        composable(Routes.BROWSER) { BrowserScreen(onBack = { navController.popBackStack() }) }
+        composable(Routes.BROWSER) {
+            DeploymentDestination(navController, viewModel, deployment)
+        }
         composable(Routes.SHARE) {
             ShareScreen(
                 viewModel = shareViewModel,
@@ -303,27 +310,9 @@ fun AgentShellNavHost(
             val isAcp = backStackEntry.arguments?.getBoolean("isAcp") ?: false
             val isSwipeNav = backStackEntry.arguments?.getBoolean("isSwipeNav") ?: false
             val cwd = Uri.decode(backStackEntry.arguments?.getString("cwd") ?: "")
-            ChatScreen(
-                sessionName = sessionName,
-                windowIndex = windowIndex,
-                isAcp = isAcp,
-                cwd = cwd,
-                isSwipeNavigation = isSwipeNav,
-                onNavigateBack = { navController.popBackStack() },
-                onSwitchToTerminal = { name ->
-                    navController.navigate(Routes.terminal(name, windowIndex = windowIndex)) { popUpTo(Routes.HOME) }
-                },
-                onNavigateToFileBrowser = { path ->
-                    navController.navigate(Routes.fileBrowser(path))
-                },
-                onOpenServerPath = { path ->
-                    navController.navigate(Routes.fileBrowser(path = "/", openPath = path))
-                },
-                onSwipeToChatSession = { name, idx, isAcpNav ->
-                    navController.navigate(Routes.chat(name, idx, isAcp = isAcpNav, isSwipeNav = true)) {
-                        popUpTo(Routes.HOME)
-                    }
-                },
+            DeploymentDestination(
+                navController, viewModel, deployment,
+                chat = DeploymentChatRoute(sessionName, windowIndex, isAcp, cwd, isSwipeNav),
             )
         }
 

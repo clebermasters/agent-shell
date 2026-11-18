@@ -87,16 +87,24 @@ private fun browserKeyboard(view: WebView?) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
+fun BrowserScreen(
+    onBack: () -> Unit,
+    viewModel: BrowserViewModel = hiltViewModel(),
+    onOpenDeployment: (() -> Unit)? = null,
+    embedded: Boolean = false,
+) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val voice by viewModel.voiceUiState.collectAsStateWithLifecycle()
     val profiles by viewModel.profileUiState.collectAsStateWithLifecycle()
+    val windows by viewModel.windowManager.state.collectAsStateWithLifecycle()
+    val showWindows = ui.canManageWindows && ui.status == "connected"
     val contentSize by viewModel.contentSize.collectAsStateWithLifecycle()
     var contentSizeDialog by remember { mutableStateOf(false) }
     var displayResizeSupported by remember(ui.launch) { mutableStateOf<Boolean?>(null) }
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     var view by remember { mutableStateOf<WebView?>(null) }
-    var expanded by rememberSaveable { mutableStateOf(false) }
+    var fullscreenRequested by rememberSaveable { mutableStateOf(false) }
+    val expanded = fullscreenRequested && !embedded
     var fullscreenTools by remember { mutableStateOf(false) }
     var confirmStop by remember { mutableStateOf(false) }
     var transferMenu by remember { mutableStateOf(false) }
@@ -112,11 +120,13 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
         else viewModel.voicePermissionDenied()
         permissionTarget=null
     }
-    LaunchedEffect(grantedVoiceTarget,ui.launch,ui.status) {
+    LaunchedEffect(grantedVoiceTarget,ui.launch,ui.status,windows.catalog?.focus,windows.readError) {
         val target=grantedVoiceTarget ?: return@LaunchedEffect
         // Permission dialogs may pause and reconnect the viewer. Start only after
         // it returns to the exact browser runtime for which permission was requested.
         if(ui.status=="connected") {
+            if(target.tabId!=null && windows.catalog==null && windows.readError==null && ui.canManageWindows)
+                return@LaunchedEffect
             grantedVoiceTarget=null
             viewModel.startVoiceRecording(target)
         }
@@ -155,8 +165,8 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
         if(ui.status=="on-native") confirmNative=false else viewModel.useOnPhone()
     }
     fun requestNative() { transferMenu=false;fullscreenTools=false;confirmNative=true }
-    BackHandler(enabled=expanded){expanded=false;fullscreenTools=false}
-    DisposableEffect(window,lifecycle,expanded) {
+    BackHandler(enabled=expanded){fullscreenRequested=false;fullscreenTools=false}
+    if (!embedded) DisposableEffect(window,lifecycle,expanded) {
         val controller=window?.let{WindowCompat.getInsetsController(it,it.decorView)}
         val previousBehavior=controller?.systemBarsBehavior
         fun applyBars() {
@@ -186,11 +196,7 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer);viewModel.pause() }
     }
-    Scaffold(contentWindowInsets=WindowInsets(0,0,0,0),topBar={if(!expanded) TopAppBar(title={Column{
-        Text(ui.title,style=MaterialTheme.typography.titleMedium)
-        Text(listOfNotNull(profiles.current?.name,ui.server).joinToString(" · "),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
-    }},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Filled.ArrowBack,"Back")}},actions={
-        ThemeToggleButton()
+    val browserSessionActions: @Composable () -> Unit = {
         if(profiles.available) IconButton(onClick={viewModel.showProfiles()},enabled=!transferring) {
             Icon(Icons.Default.AccountCircle,"Chrome profiles")
         }
@@ -205,21 +211,29 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
                     enabled=ui.status=="connected",onClick={requestNative()})
             }
         }
-        IconButton(onClick={expanded=true}){Icon(Icons.Default.OpenInFull,"Expand browser")}
+    }
+    Scaffold(contentWindowInsets=WindowInsets(0,0,0,0),topBar={if(!expanded && !embedded) TopAppBar(title={Column{
+        Text(ui.title,style=MaterialTheme.typography.titleMedium)
+        Text(listOfNotNull(profiles.current?.name,ui.server).joinToString(" · "),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+    }},navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Filled.ArrowBack,"Back")}},actions={
+        ThemeToggleButton()
+        browserSessionActions()
+        IconButton(onClick={fullscreenRequested=true}){Icon(Icons.Default.OpenInFull,"Expand browser")}
         IconButton(onClick={viewModel.connect()},enabled=!transferring){Icon(Icons.Default.Refresh,"Reconnect browser")}
     })}) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
+        val screenInsets = if (embedded) Modifier else Modifier
             .windowInsetsPadding(if(expanded) WindowInsets.displayCutout else WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal+WindowInsetsSides.Bottom))
-            .imePadding()) {
+            .imePadding()
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).then(screenInsets)) {
             if(ui.status in listOf("connecting","loading","stopping","sending-to-computer","switching-native","switching-profile")) LinearProgressIndicator(Modifier.fillMaxWidth())
             ui.notice?.takeIf{ui.launch!=null && !expanded}?.let { Text(it,Modifier.padding(horizontal=16.dp,vertical=8.dp),style=MaterialTheme.typography.bodySmall) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val launch=ui.launch
                 if(launch!=null) key(launch){BrowserViewer(launch,{viewModel.connection(launch,it)},{view=it},
                     onDisplaySupport={displayResizeSupported=it})}
-                else Column(Modifier.align(Alignment.Center).padding(28.dp),horizontalAlignment=Alignment.CenterHorizontally,
+                else Column(Modifier.align(Alignment.Center).verticalScroll(rememberScrollState()).padding(if (embedded) 12.dp else 28.dp),horizontalAlignment=Alignment.CenterHorizontally,
                     verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                    Icon(Icons.Default.Language,contentDescription=null,Modifier.size(48.dp),tint=MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Default.Language,contentDescription=null,Modifier.size(if (embedded) 28.dp else 48.dp),tint=MaterialTheme.colorScheme.primary)
                     Text(when(ui.status){"on-native"->"Native Chrome on your computer";"on-computer"->"Browsing on your computer";"profile-in-use"->"Chrome is already open";else->"Your computer's browser"},style=MaterialTheme.typography.titleLarge)
                     Text(ui.error ?: ui.notice ?: "Open Chrome on this server and reconnect to the same browser from your phone.",style=MaterialTheme.typography.bodyMedium)
                     if(ui.canTakeControl) Button(onClick={useOnPhone()},enabled=!transferring && ui.status !in listOf("connecting","loading","stopping")){Text("Use on this phone")}
@@ -276,11 +290,27 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
                                 Icon(if(voice.isRecording) Icons.Default.Stop else Icons.Default.Mic,
                                     if(voice.isRecording) "Stop voice transcription" else "Dictate at browser cursor")
                             }
-                            IconButton(onClick={fullscreenTools=true}){Icon(Icons.Default.Tune,"Fullscreen controls")}
-                            IconButton(onClick={expanded=false;fullscreenTools=false}){Icon(Icons.Default.CloseFullscreen,"Exit fullscreen")}
+                            IconButton(onClick={fullscreenTools=true}) {
+                                val count = windows.catalog?.windows?.size ?: 0
+                                BadgedBox(badge = { if(showWindows && count > 1) Badge { Text(count.toString()) } }) {
+                                    Icon(Icons.Default.Tune,"Fullscreen controls")
+                                }
+                            }
+                            IconButton(onClick={fullscreenRequested=false;fullscreenTools=false}){Icon(Icons.Default.CloseFullscreen,"Exit fullscreen")}
                         }
                     }
                     DropdownMenu(expanded=fullscreenTools,onDismissRequest={fullscreenTools=false}) {
+                        if (onOpenDeployment != null) DropdownMenuItem(
+                            text = { Text("Deployment") },
+                            leadingIcon = { Icon(Icons.Default.Web, null) },
+                            onClick = {
+                                fullscreenTools = false
+                                fullscreenRequested = false
+                                onOpenDeployment()
+                            },
+                        )
+                        if(showWindows) DropdownMenuItem(text={Text(windows.label)},
+                            onClick={fullscreenTools=false;viewModel.windowManager.open()})
                         if(profiles.available) DropdownMenuItem(text={Text("Chrome profiles")},enabled=!transferring,
                             onClick={fullscreenTools=false;viewModel.showProfiles()})
                         if(ui.canTakeControl) DropdownMenuItem(text={Text("Use on this phone")},enabled=!transferring,
@@ -312,26 +342,43 @@ fun BrowserScreen(onBack:()->Unit,viewModel:BrowserViewModel=hiltViewModel()) {
                     }
                 }
             }
-            if(ui.launch!=null && !expanded && !transferring) {
+            if (!expanded && !transferring && (ui.launch != null || onOpenDeployment != null || embedded)) {
                 HorizontalDivider()
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),verticalAlignment=Alignment.CenterVertically) {
-                    TextButton(onClick={voicePressed()},enabled=voice.isRecording || canRecord) {
-                        Icon(if(voice.isRecording) Icons.Default.Stop else Icons.Default.Mic,null,Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp));Text(if(voice.isRecording) "Stop" else "Dictate")
+                    if (!embedded && onOpenDeployment != null) TextButton(onClick = onOpenDeployment) {
+                        Icon(Icons.Default.Web, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Deployment")
                     }
-                    TextButton(onClick={browserKeyboard(view)}){Icon(Icons.Default.Keyboard,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text("Keyboard")}
-                    TextButton(onClick={contentSizeDialog=true},enabled=displayResizeSupported==true) {
-                        Icon(Icons.Default.AspectRatio,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text("Content size")
+                    if (ui.launch != null) {
+                        if(showWindows) TextButton(onClick={viewModel.windowManager.open()}) {
+                            Icon(Icons.Default.FilterNone,null,Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp)); Text(windows.label)
+                        }
+                        TextButton(onClick={voicePressed()},enabled=voice.isRecording || canRecord) {
+                            Icon(if(voice.isRecording) Icons.Default.Stop else Icons.Default.Mic,null,Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp));Text(if(voice.isRecording) "Stop" else "Dictate")
+                        }
+                        TextButton(onClick={browserKeyboard(view)}){Icon(Icons.Default.Keyboard,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text("Keyboard")}
+                        TextButton(onClick={contentSizeDialog=true},enabled=displayResizeSupported==true) {
+                            Icon(Icons.Default.AspectRatio,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text("Content size")
+                        }
+                        for((label,code) in listOf("Esc" to 65307,"Tab" to 65289,"Enter" to 65293)) TextButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.key($code)",null)}){Text(label)}
+                        IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.zoom(1.25)",null)}){Icon(Icons.Default.ZoomIn,"Zoom browser view in")}
+                        IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.fit()",null)}){Icon(Icons.Default.ZoomOut,"Fit browser to screen")}
+                        IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.controls()",null)}){Icon(Icons.Default.Tune,"Browser interaction options")}
                     }
-                    for((label,code) in listOf("Esc" to 65307,"Tab" to 65289,"Enter" to 65293)) TextButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.key($code)",null)}){Text(label)}
-                    IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.zoom(1.25)",null)}){Icon(Icons.Default.ZoomIn,"Zoom browser view in")}
-                    IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.fit()",null)}){Icon(Icons.Default.ZoomOut,"Fit browser to screen")}
-                    IconButton(onClick={view?.evaluateJavascript("window.AgentShellViewer?.controls()",null)}){Icon(Icons.Default.Tune,"Browser interaction options")}
-                    IconButton(onClick={confirmStop=true}){Icon(Icons.Default.StopCircle,"Stop remote Chrome")}
+                    if (embedded) {
+                        browserSessionActions()
+                        IconButton(onClick = { viewModel.connect() }) { Icon(Icons.Default.Refresh, "Reconnect browser") }
+                    }
+                    if (ui.launch != null) IconButton(onClick={confirmStop=true}){Icon(Icons.Default.StopCircle,"Stop remote Chrome")}
                 }
             }
         }
     }
+    if(showWindows && windows.visible) BrowserWindowsSheet(windows,viewModel.windowManager::perform,
+        viewModel.windowManager::reload,viewModel.windowManager::close)
     if(contentSizeDialog) BrowserContentSizeDialog(contentSize,
         onSelect={viewModel.setContentSize(it)},onDismiss={contentSizeDialog=false})
     if(profiles.visible && profiles.confirmation==null) AlertDialog(

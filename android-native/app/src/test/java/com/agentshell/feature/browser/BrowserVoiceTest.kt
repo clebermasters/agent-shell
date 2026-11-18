@@ -53,6 +53,19 @@ class BrowserVoiceTest {
         }
     }
 
+    @Test fun automaticPasteRequiresKnownUnchangedTabOnWindowManagementHosts() {
+        val gate=BrowserVoiceGate()
+        val unknown=gate.begin(target,launch,3)
+        assertFalse(gate.canInsert(unknown.context,target,launch,3,true,requireKnownTab=true))
+        assertTrue(gate.canInsert(unknown.context,target,launch,3,true,requireKnownTab=false))
+        val known=target.copy(windowId=42,tabId=37)
+        val capture=gate.begin(known,launch,3)
+        assertEquals(known,browserVoiceTarget(capture.context))
+        assertTrue(gate.canInsert(capture.context,known,launch,3,true,requireKnownTab=true))
+        assertFalse(gate.canInsert(capture.context,known.copy(tabId=38),launch,3,true,requireKnownTab=true))
+        assertTrue(known.sameRuntime(known.copy(tabId=38)))
+    }
+
     @Test fun delayedResultFromAnOlderRecordingCannotAutopasteDuringANewerRecording() {
         val gate=BrowserVoiceGate()
         val old=gate.begin(target,launch,3)

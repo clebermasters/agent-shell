@@ -35,7 +35,6 @@ import com.agentshell.data.remote.acpResumeSession
 import com.agentshell.data.remote.clearChatLog
 import com.agentshell.data.remote.loadMoreChatHistory
 import com.agentshell.data.remote.selectBackend
-import com.agentshell.data.remote.unwatchChatLog
 import com.agentshell.data.remote.watchAcpChatLog
 import com.agentshell.data.remote.watchChatLog
 import com.agentshell.data.repository.ChatRepository
@@ -556,6 +555,7 @@ class ChatViewModel @Inject constructor(
         oldestCachedPosition = null // Resolve the next page from its stable message ID after a refresh.
         _uiState.update { it.copy(error = null, isLoadingMore = false) }
 
+        chatRepository.claimWatch(readOwner)
         if (state.isAcp) {
             val rawSessionId = rawAcpSessionId(state.sessionName)
             val backend = directBackendForSession(rawSessionId)
@@ -839,7 +839,7 @@ class ChatViewModel @Inject constructor(
         val state = _uiState.value
         logDebug("Stopping chat watch session=${state.sessionName} window=${state.windowIndex} isAcp=${state.isAcp}")
         connectionRecovery.pending = false
-        webSocketService.unwatchChatLog()
+        chatRepository.releaseWatch(readOwner)
     }
 
     fun refreshActiveChat(reason: String = "manual-refresh") {

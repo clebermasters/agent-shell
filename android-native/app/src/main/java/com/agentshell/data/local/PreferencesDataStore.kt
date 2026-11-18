@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.agentshell.data.model.BrowserContentSize
 import com.agentshell.data.model.ChatSplitPreferences
 import com.agentshell.data.model.ChatTarget
+import com.agentshell.data.model.DeploymentPreferences
 import com.agentshell.core.power.ConnectionMode
 import com.agentshell.core.power.ConnectionModeState
 import com.agentshell.core.power.ConnectionModeCodec
@@ -282,9 +283,35 @@ class PreferencesDataStore @Inject constructor(
         dataStore.edit { it[browserContentSizeKey(hostId)] = size.densityPercent }
     }
 
-    // ─── chat / terminal split ───────────────────────────────────────────────
-
     private val splitJson = Json { ignoreUnknownKeys = true }
+
+    // ─── chat / browser deployment ────────────────────────────────────────────
+
+    private fun deploymentKey(hostId: String) = stringPreferencesKey("deployment_workspace_$hostId")
+
+    private fun readDeployment(hostId: String, prefs: Preferences): DeploymentPreferences =
+        prefs[deploymentKey(hostId)]?.let { raw ->
+            runCatching { splitJson.decodeFromString<DeploymentPreferences>(raw) }.getOrNull()
+                ?.takeIf { it.hostId == hostId }?.normalized()
+        } ?: DeploymentPreferences(hostId)
+
+    fun deploymentPreferences(hostId: String): Flow<DeploymentPreferences> =
+        dataStore.data.map { readDeployment(hostId, it) }
+
+    /** Merge each pane edit with the latest persisted state, even when two destinations overlap. */
+    suspend fun updateDeploymentPreferences(
+        hostId: String,
+        transform: (DeploymentPreferences) -> DeploymentPreferences,
+    ) {
+        require(hostId.isNotBlank())
+        dataStore.edit { prefs ->
+            val next = transform(readDeployment(hostId, prefs))
+            require(next.hostId == hostId)
+            prefs[deploymentKey(hostId)] = splitJson.encodeToString(next.normalized())
+        }
+    }
+
+    // ─── chat / terminal split ───────────────────────────────────────────────
 
     private fun chatSplitKey(hostId: String, sessionName: String, windowIndex: Int) =
         stringPreferencesKey("chat_split_${ChatTarget.create(hostId, sessionName, windowIndex).key}")

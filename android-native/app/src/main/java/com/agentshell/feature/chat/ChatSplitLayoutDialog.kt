@@ -35,6 +35,8 @@ internal fun ChatSplitLayoutDialog(
     onSwap: () -> Unit,
     onReset: () -> Unit,
     onDismiss: () -> Unit,
+    companionPaneName: String = "Terminal",
+    savedFor: String = "Saved for this chat",
 ) {
     val config = LocalConfiguration.current
     val sideBySide = resolveChatSplitOrientation(preferences.orientation, config.screenWidthDp, config.screenHeightDp) == ChatSplitOrientation.SIDE_BY_SIDE
@@ -46,7 +48,7 @@ internal fun ChatSplitLayoutDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text("Saved for this chat", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(savedFor, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 listOf(
                     ChatSplitOrientation.AUTO to "Auto · follow screen",
                     ChatSplitOrientation.STACKED to "Top / bottom",
@@ -71,16 +73,16 @@ internal fun ChatSplitLayoutDialog(
                 }
                 Text(
                     if (sideBySide) {
-                        if (preferences.chatFirst) "Chat left · Terminal right" else "Terminal left · Chat right"
+                        if (preferences.chatFirst) "Chat left · $companionPaneName right" else "$companionPaneName left · Chat right"
                     } else {
-                        if (preferences.chatFirst) "Chat top · Terminal bottom" else "Terminal top · Chat bottom"
+                        if (preferences.chatFirst) "Chat top · $companionPaneName bottom" else "$companionPaneName top · Chat bottom"
                     },
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.padding(top = 8.dp),
                 )
                 FilledTonalButton(onClick = onSwap, modifier = Modifier.fillMaxWidth()) {
                     Icon(if (sideBySide) Icons.Default.SwapHoriz else Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
-                    Text("Swap chat and terminal")
+                    Text("Swap chat and ${companionPaneName.lowercase()}")
                 }
                 Text("Drag the divider to resize. Tap it for layout options.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextButton(onClick = onReset) { Text("Reset pane sizes") }

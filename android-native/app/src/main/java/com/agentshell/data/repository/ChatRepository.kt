@@ -10,13 +10,29 @@ import javax.inject.Singleton
  * Exposes a filtered view of the WebSocket message stream containing only
  * chat-related and ACP-related server→client messages.
  *
- * All actual command sending is performed by the extension functions in
- * WebSocketCommands.kt; this repository only provides the receive side.
+ * The primary socket has one foreground chat watch across all navigation entries.
  */
 @Singleton
 class ChatRepository @Inject constructor(
     val webSocketService: WebSocketService,
 ) {
+
+    private var watchOwner: String? = null
+    private var watchUrl: String? = null
+
+    fun claimWatch(owner: String) {
+        watchOwner = owner
+        watchUrl = webSocketService.currentWebSocketUrl
+    }
+
+    /** A fading destination may finish after another chat has already claimed the primary socket. */
+    fun releaseWatch(owner: String) {
+        if (watchOwner != owner) return
+        watchOwner = null
+        val url = watchUrl
+        watchUrl = null
+        if (url != null) webSocketService.sendIfConnected(mapOf("type" to "unwatch-chat-log"), url)
+    }
 
     companion object {
         /** Message types that belong to the chat/ACP domain. */

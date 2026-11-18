@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "AgentShell Browser Windows",
+  "version": "1.0.0",
+  "description": "Manage windows and tabs in your AgentShell browser.",
+  "incognito": "not_allowed",
+  "permissions": ["tabs", "tabGroups", "storage", "nativeMessaging", "alarms"],
+  "background": {"service_worker": "worker.js"}
+}

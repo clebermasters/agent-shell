@@ -3,6 +3,7 @@ package com.agentshell.data.repository
 import com.agentshell.core.config.BuildConfig
 import com.agentshell.data.model.Host
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -52,20 +53,44 @@ open class BrowserRepository @Inject constructor(private val client: OkHttpClien
                 ?: throw BrowserFailure("LAN_DNS_ROUTING_UNAVAILABLE")
         }
     }
+    internal suspend fun windows(host: Host, sessionId: String, viewerId: String, generation: String,
+        action: JSONObject?, allowPairing: Boolean): JSONObject {
+        val body = action ?: JSONObject()
+        body.put("viewerId", viewerId).put("runtimeGeneration", generation)
+        if (action == null && allowPairing) body.put("allowPairing", true)
+        val route = if (action == null) "windows" else "windows/action"
+        return request(host, "/api/browser/sessions/$sessionId/$route", body)
+    }
     open suspend fun request(host: Host, path: String, body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
         if (!host.isSecure) throw BrowserFailure("HTTPS_REQUIRED")
         val request = Request.Builder().url(host.httpUrl + path).header("X-Auth-Token", BuildConfig.AUTH_TOKEN)
         if (body != null) request.post(body.toString().toRequestBody("application/json".toMediaType()))
-        val transport = if(path.endsWith("/native-handoff") || path.endsWith("/profiles/open")) client.newBuilder()
+        val transport = if(path.endsWith("/native-handoff") || path.endsWith("/profiles/open") || path.endsWith("/windows/action")) client.newBuilder()
             .readTimeout(115,TimeUnit.SECONDS).callTimeout(120,TimeUnit.SECONDS).build()
         else if (path.endsWith("/desktop-handoff")) client.newBuilder()
             .readTimeout(60, TimeUnit.SECONDS).callTimeout(65, TimeUnit.SECONDS).build() else client
-        transport.newCall(request.build()).execute().use { response ->
-            val data = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrNull()
-            if (!response.isSuccessful) throw BrowserFailure(data?.optString("code")?.takeIf { it.isNotBlank() } ?: "CONNECTION_FAILED", data?.optBoolean("phonePreserved") == true, data?.optBoolean("computerClosed") == true)
-            data ?: throw BrowserFailure("INVALID_SERVER_RESPONSE")
-        }
+        val call = transport.newCall(request.build())
+        if (path.endsWith("/windows") || path.endsWith("/windows/action")) call.awaitWindowReply()
+        else call.execute().use(::readBrowserReply)
     }
+}
+
+private fun readBrowserReply(response: Response): JSONObject {
+    val data = runCatching { JSONObject(response.body?.string().orEmpty()) }.getOrNull()
+    if (!response.isSuccessful) throw BrowserFailure(data?.optString("code")?.takeIf { it.isNotBlank() }
+        ?: "CONNECTION_FAILED", data?.optBoolean("phonePreserved") == true, data?.optBoolean("computerClosed") == true)
+    return data ?: throw BrowserFailure("INVALID_SERVER_RESPONSE")
+}
+
+/** Release an old viewer's polling and action requests immediately on handoff or host change. */
+private suspend fun Call.awaitWindowReply(): JSONObject = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) = continuation.resumeWith(Result.failure(e))
+        override fun onResponse(call: Call, response: Response) {
+            continuation.resumeWith(runCatching { response.use(::readBrowserReply) })
+        }
+    })
 }
 
 private fun privateBrowserAddress(address:String):InetAddress? {

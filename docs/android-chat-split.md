@@ -5,6 +5,9 @@ split button, and options menu. Tap the title or choose **Connection & usage**
 to expand connection controls, detailed activity, and provider usage. Terminal,
 file browser, theme, and clear-history actions are in the options menu.
 
+For the remote browser and chat together, open **Chat options → Deployment**.
+See [Use Chrome and chat together](remote-browser.md#use-chrome-and-chat-together).
+
 Choose **Open terminal** in that menu for terminal-only view. It keeps the
 chat's exact tmux window, and the terminal's chat button returns to that same
 window. Opening a terminal from Home or by swiping resolves the session's active

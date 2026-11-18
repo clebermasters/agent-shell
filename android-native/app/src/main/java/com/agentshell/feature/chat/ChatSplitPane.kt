@@ -63,17 +63,18 @@ internal fun calculateChatSplitSizes(availablePx: Int, chatFraction: Float, minP
     return chat to available - chat
 }
 
-/** Fixed composition order keeps chat scroll/input and the terminal WebView alive during swaps. */
+/** Fixed composition order keeps chat scroll/input and the companion WebView alive during swaps. */
 @Composable
-internal fun ChatTerminalSplit(
+internal fun ChatSplitPane(
     preferences: ChatSplitPreferences,
     onResize: (ChatSplitOrientation, Float) -> Unit,
     onSwap: () -> Unit,
     onConfigure: () -> Unit,
+    companionPaneName: String,
     onChatInteraction: () -> Unit,
     modifier: Modifier = Modifier,
     chat: @Composable () -> Unit,
-    terminal: @Composable () -> Unit,
+    companionPane: @Composable () -> Unit,
 ) {
     val configuration = LocalConfiguration.current
     // Screen configuration, rather than the IME-reduced viewport, determines Auto layout.
@@ -120,7 +121,7 @@ internal fun ChatTerminalSplit(
                             onDragStopped = { commitResize() },
                         )
                         .semantics {
-                            contentDescription = "Resize chat and terminal"
+                            contentDescription = "Resize chat and $companionPaneName"
                             stateDescription = "Chat ${(fraction * 100).roundToInt()} percent"
                             progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0.2f..0.8f)
                             onClick(label = "Split layout options") { onConfigure(); true }
@@ -132,7 +133,7 @@ internal fun ChatTerminalSplit(
                                 } else false
                             }
                             customActions = listOf(
-                                CustomAccessibilityAction("Swap chat and terminal") { onSwap(); true },
+                                CustomAccessibilityAction("Swap chat and $companionPaneName") { onSwap(); true },
                                 CustomAccessibilityAction("Split layout options") { onConfigure(); true },
                             )
                         },
@@ -144,7 +145,7 @@ internal fun ChatTerminalSplit(
                             .background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(2.dp)),
                     )
                 }
-                Box(Modifier.fillMaxSize().clipToBounds()) { terminal() }
+                Box(Modifier.fillMaxSize().clipToBounds()) { companionPane() }
             }
         },
     ) { measurables, constraints ->
@@ -156,17 +157,17 @@ internal fun ChatTerminalSplit(
         } else {
             val axis = if (sideBySide) width else height
             val divider = dividerPx.coerceAtMost(axis)
-            val (chatSize, terminalSize) = calculateChatSplitSizes(axis - divider, fraction, minimumPx)
+            val (chatSize, companionSize) = calculateChatSplitSizes(axis - divider, fraction, minimumPx)
             val chatPane = measurables[0].measure(Constraints.fixed(if (sideBySide) chatSize else width, if (sideBySide) height else chatSize))
             val handle = measurables[1].measure(Constraints.fixed(if (sideBySide) divider else width, if (sideBySide) height else divider))
-            val terminalPane = measurables[2].measure(Constraints.fixed(if (sideBySide) terminalSize else width, if (sideBySide) height else terminalSize))
-            val firstSize = if (preferences.chatFirst) chatSize else terminalSize
+            val secondPane = measurables[2].measure(Constraints.fixed(if (sideBySide) companionSize else width, if (sideBySide) height else companionSize))
+            val firstSize = if (preferences.chatFirst) chatSize else companionSize
             val chatOffset = if (preferences.chatFirst) 0 else firstSize + divider
-            val terminalOffset = if (preferences.chatFirst) firstSize + divider else 0
+            val companionOffset = if (preferences.chatFirst) firstSize + divider else 0
             layout(width, height) {
                 chatPane.place(if (sideBySide) chatOffset else 0, if (sideBySide) 0 else chatOffset)
                 handle.place(if (sideBySide) firstSize else 0, if (sideBySide) 0 else firstSize)
-                terminalPane.place(if (sideBySide) terminalOffset else 0, if (sideBySide) 0 else terminalOffset)
+                secondPane.place(if (sideBySide) companionOffset else 0, if (sideBySide) 0 else companionOffset)
             }
         }
     }

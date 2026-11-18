@@ -28,6 +28,7 @@
   ],
   "files": [
     {"source": "scripts/browser-runtime.py", "destination": "browser/browser-runtime.py", "mode": "755"},
+    {"source": "scripts/browser_windows.py", "destination": "browser/browser_windows.py", "mode": "644"},
     {"source": "scripts/browser-desktop.py", "destination": "browser/browser-desktop.py", "mode": "755"},
     {"source": "scripts/browser-desktop-agent.py", "destination": "browser/browser-desktop-agent.py", "mode": "755"},
     {"source": "scripts/browser-native.py", "destination": "browser/browser-native.py", "mode": "755"},

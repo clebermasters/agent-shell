@@ -81,6 +81,7 @@ class SplitAndroid(Android):
         remote = "/data/local/tmp/agentshell-chat-split.xml"
         for attempt in range(4):
             try:
+                await self.adb("shell", "rm", "-f", remote)
                 await self.adb("shell", "uiautomator", "dump", remote)
                 return ET.fromstring(await self.adb("shell", "cat", remote))
             except subprocess.CalledProcessError:
@@ -117,7 +118,7 @@ class SplitAndroid(Android):
         ET.ElementTree(await self.root()).write(self.output/f"{name}.xml")
         print(f"Screenshot: {self.output/name}.png", flush=True)
 
-    async def open_chat(self, session=SESSION, window=0):
+    async def open_chat(self, session=SESSION, window=0, deployment=False):
         await self.find(session)
         root = await self.root()
         matches = [n for n in root.iter("node") if any(c.get("text") == session for c in n.iter("node")) and
@@ -135,7 +136,8 @@ class SplitAndroid(Android):
         deadline = time.monotonic()+15
         while True:
             root = await self.root()
-            if any(n.get("content-desc") in ["Split chat and terminal", "Close terminal split"] for n in root.iter("node")): break
+            expected = {"Close split"} if deployment else {"Split chat and terminal", "Close terminal split"}
+            if any(n.get("content-desc") in expected for n in root.iter("node")): break
             assert time.monotonic() < deadline, "Did not enter the fixture chat"
             await asyncio.sleep(.3)
 

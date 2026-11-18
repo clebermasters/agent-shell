@@ -56,6 +56,8 @@ def version(text):
 class Installer:
     def __init__(self, args):
         self.args = args
+        release = dotenv(Path('/etc/os-release'))
+        self.family = 'arch' if 'arch' in (release.get('ID', '') + ' ' + release.get('ID_LIKE', '')).split() else 'debian'
         self.manifest = json.loads((PROJECT / 'deployment/backend-dependencies.json').read_text())
         self.account = pwd.getpwnam(args.service_user)
         self.user_home = Path(self.account.pw_dir)
@@ -111,12 +113,27 @@ class Installer:
 
     def missing_packages(self, packages=None):
         result = []
-        requested = self.manifest['aptPackages'] if packages is None else packages
+        requested = self.system_packages(self.manifest) if packages is None else packages
         for package in requested:
-            found = subprocess.run(['dpkg-query', '-W', '-f=${Status}', package], text=True, capture_output=True)
-            if found.returncode or found.stdout != 'install ok installed':
+            arch = getattr(self, 'family', 'debian') == 'arch'
+            command = ['pacman', '-Q', package] if arch else ['dpkg-query', '-W', '-f=${Status}', package]
+            found = subprocess.run(command, text=True, capture_output=True)
+            if found.returncode or (not arch and found.stdout != 'install ok installed'):
                 result.append(package)
         return result
+
+    def system_packages(self, specification):
+        return specification['pacmanPackages' if getattr(self, 'family', 'debian') == 'arch' else 'aptPackages']
+
+    def install_packages(self, packages):
+        if not packages:
+            return
+        if getattr(self, 'family', 'debian') == 'arch':
+            # Use the host's synchronized repositories; never perform a partial -Sy upgrade.
+            self.run(['pacman', '-S', '--needed', '--noconfirm', *packages], root=True)
+        else:
+            self.run(['apt-get', '-o', 'DPkg::Lock::Timeout=120', 'install', '-y', '--no-install-recommends', *packages],
+                     root=True, env={'DEBIAN_FRONTEND': 'noninteractive'})
 
     def validate_sources(self):
         for entry in self.manifest['files']:
@@ -131,17 +148,17 @@ class Installer:
         if self.args.skip_dependencies:
             print('Dependency bootstrap skipped explicitly.', flush=True)
             return
-        packages = list(self.manifest['aptPackages'])
+        packages = list(self.system_packages(self.manifest))
         if getattr(self.args, 'lan_hostname', None):
-            packages += self.manifest['lanHttps']['aptPackages']
+            packages += self.system_packages(self.manifest['lanHttps'])
         missing = self.missing_packages(packages)
         if missing:
             print('Installing missing system packages: ' + ', '.join(missing), flush=True)
-            refreshed = self.run(['apt-get', 'update'], root=True, check=False)
-            if refreshed.returncode:
-                print('APT index refresh reported an error; trying required packages from the available indexes with normal signature checks.', flush=True)
-            self.run(['apt-get', '-o', 'DPkg::Lock::Timeout=120', 'install', '-y', '--no-install-recommends', *missing], root=True,
-                     env={'DEBIAN_FRONTEND': 'noninteractive'})
+            if getattr(self, 'family', 'debian') != 'arch':
+                refreshed = self.run(['apt-get', 'update'], root=True, check=False)
+                if refreshed.returncode:
+                    print('APT index refresh reported an error; trying required packages from the available indexes with normal signature checks.', flush=True)
+            self.install_packages(missing)
         self.ensure_python_runtime()
         if getattr(self.args, 'with_browser', 'none') == 'kasmvnc':
             self.browser_dependencies()
@@ -205,7 +222,19 @@ class Installer:
         release = dotenv(Path('/etc/os-release'))
         codename = release.get('UBUNTU_CODENAME', release.get('VERSION_CODENAME', ''))
         architecture = {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(platform.machine(), '')
+        if getattr(self, 'family', 'debian') == 'arch':
+            return 'arch-' + architecture
         return codename + '-' + architecture
+
+    def browser_executable(self, name):
+        alternatives = {'google-chrome': ['google-chrome', 'google-chrome-stable'], 'Xvnc': ['Xvnc', 'Xkasmvnc']}
+        return next((candidate for candidate in alternatives.get(name, [name])
+                     if shutil.which(candidate, path=self.user_env.get('PATH', os.defpath))), None)
+
+    def desktop_viewer_available(self):
+        # WebKit 4.1 uses Soup 3; Pop!_OS retains the WebKit 4.0/Soup 2 path.
+        code = 'import importlib.util;s=importlib.util.spec_from_file_location("desktop",' + repr(str(PROJECT / 'scripts/browser-desktop.py')) + ');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);m.load_webkit()'
+        return self.run(['/usr/bin/python3', '-c', code], user=True, capture=True, check=False).returncode == 0
 
     def browser_asset_report(self, spec):
         return {name: (BROWSER_ASSETS / name).is_file() and
@@ -215,22 +244,22 @@ class Installer:
     def browser_dependency_report(self):
         spec = self.browser_specification()
         target = self.browser_platform()
-        current = self.run(['dpkg-query', '-W', '-f=${Version}', 'kasmvncserver'], capture=True, check=False)
-        expected_version = spec['version'] + '-1'
-        missing = self.missing_packages(spec['aptPackages'])
-        commands = {name: bool(shutil.which(name, path=self.user_env.get('PATH', os.defpath)))
-                    for name in spec['executables']}
+        arch = getattr(self, 'family', 'debian') == 'arch'
+        command = ['pacman', '-Q', 'agentshell-kasmvnc'] if arch else ['dpkg-query', '-W', '-f=${Version}', 'kasmvncserver']
+        current = self.run(command, capture=True, check=False)
+        expected_version = spec['version'] + ('-2' if arch else '-1')
+        installed = current.stdout.strip().split()[-1] if current.returncode == 0 and current.stdout.strip() else None
+        missing = self.missing_packages(self.system_packages(spec))
+        commands = {name: bool(self.browser_executable(name)) for name in spec['executables']}
         assets = self.browser_asset_report(spec)
-        chrome = self.usable('google-chrome')
-        desktop = self.run(['/usr/bin/python3', '-c',
-            'import gi;gi.require_version("Gtk","3.0");gi.require_version("WebKit2","4.0");gi.require_version("Soup","2.4");from gi.repository import Gtk,WebKit2,Soup'],
-            user=True, capture=True, check=False).returncode == 0
+        chrome = self.usable(self.browser_executable('google-chrome') or 'google-chrome')
+        desktop = self.desktop_viewer_available()
         ready = (target in spec['packages'] and not missing and current.returncode == 0 and
-                 current.stdout.strip() == expected_version and all(commands.values()) and
+                 installed == expected_version and all(commands.values()) and
                  all(assets.values()) and chrome and desktop)
         return {'platform': target, 'supported': target in spec['packages'],
                 'missingSystemPackages': missing, 'executables': commands,
-                'runtimeVersion': current.stdout.strip() if current.returncode == 0 else None,
+                'runtimeVersion': installed,
                 'expectedRuntimeVersion': expected_version, 'clientAssets': assets,
                 'chromeAvailable': chrome, 'desktopViewerAvailable': desktop, 'softwareReady': ready}
 
@@ -238,7 +267,22 @@ class Installer:
         spec = self.browser_specification()
         package = spec['packages'].get(self.browser_platform())
         if not package:
-            raise ValueError('The pinned browser component currently supports Ubuntu/Pop!_OS 22.04 amd64')
+            raise ValueError('No pinned browser package for ' + self.browser_platform())
+        if getattr(self, 'family', 'debian') == 'arch':
+            self.install_packages(self.missing_packages(self.system_packages(spec)))
+            if not self.usable(self.browser_executable('google-chrome') or 'google-chrome'):
+                # Omarchy supplies this signed package. Plain Arch users must provide Chrome first.
+                self.install_packages(['google-chrome'])
+            if not self.browser_dependency_report()['softwareReady']:
+                build = self.install_dir / 'cache/kasmvnc-build'
+                self.mkdir(build)
+                self.copy(PROJECT / 'deployment/browser/PKGBUILD', build / 'PKGBUILD')
+                self.run(['makepkg', '--dir', str(build), '--force', '--noconfirm'], user=True)
+                archive = build / ('agentshell-kasmvnc-' + spec['version'] + '-2-x86_64.pkg.tar.zst')
+                self.run(['pacman', '-U', '--noconfirm', str(archive)], root=True)
+            if not self.browser_dependency_report()['softwareReady']:
+                raise ValueError('Arch browser dependency verification failed')
+            return
         missing = self.missing_packages(spec['aptPackages'])
         with tempfile.TemporaryDirectory(prefix='agentshell-browser-deps-') as directory:
             directory = Path(directory)
@@ -253,7 +297,7 @@ class Installer:
                 missing.append(str(archive))
             if not self.usable('google-chrome'):
                 archive = directory / 'google-chrome.deb'
-                self.download(spec['chromeIfMissing'], archive)
+                self.download(package['chrome'], archive)
                 missing.append(str(archive))
             if missing:
                 self.run(['apt-get', '-o', 'DPkg::Lock::Timeout=120', 'install', '-y', '--no-install-recommends',
@@ -303,6 +347,8 @@ class Installer:
             port=previous.get('port', 18996), password=previous.get('password', secrets.token_urlsafe(48)),
             publicOrigin=origin, runner=str(runner), supervision='systemd-user', requireSecretService=True,
             displayName=previous.get('displayName', 'Chrome'), allowInsecureLoopback=False)
+        if getattr(self, 'family', 'debian') == 'arch':
+            value['isolateHostFfmpeg'] = True
         if getattr(self.args, 'lan_hostname', None):
             lan_origin = 'https://' + self.args.lan_hostname.lower() + (':' + str(self.args.https_port) if self.args.https_port != 443 else '')
             value['additionalOrigins'] = list(dict.fromkeys([*previous.get('additionalOrigins', []), lan_origin]))
@@ -523,7 +569,8 @@ class Installer:
             self.copy(PROJECT / 'deployment/templates' / name, self.args.unit_dir / name, system=True)
         if not self.args.no_start:
             self.run(['systemctl', 'daemon-reload'], root=True)
-            self.run(['systemctl', 'enable', '--now', 'certbot.timer', 'agentshell-lan-dns.timer'], root=True)
+            timer = 'certbot-renew.timer' if getattr(self, 'family', 'debian') == 'arch' else 'certbot.timer'
+            self.run(['systemctl', 'enable', '--now', timer, 'agentshell-lan-dns.timer'], root=True)
         print('Trusted LAN HTTPS configured; certificates renew automatically and LAN DNS tracks address changes.', flush=True)
 
     def build(self):
@@ -682,8 +729,9 @@ finally:Path(temp).unlink(missing_ok=True)
         if sys.version_info < (3, 9):
             raise ValueError('Python 3.9+ is required; use Ubuntu 22.04+/Debian 12+ or their derivatives')
         self.validate_sources()
-        if not shutil.which('apt-get') or not shutil.which('dpkg-query'):
-            raise ValueError('This installer supports Debian/Ubuntu and derivatives with apt-get')
+        required = ['pacman'] if self.family == 'arch' else ['apt-get', 'dpkg-query']
+        if not all(shutil.which(command) for command in required):
+            raise ValueError('This installer requires Debian/Ubuntu or Arch/Omarchy')
         if self.args.check:
             python = self.venv / 'bin/python'
             python_versions = None
@@ -698,7 +746,7 @@ finally:Path(temp).unlink(missing_ok=True)
                   'managedPythonPackages': python_versions,
                   'browser': self.browser_dependency_report() if self.args.with_browser == 'kasmvnc' else None,
                   'lanHttps': {'hostname': self.args.lan_hostname,
-                      'missingSystemPackages': self.missing_packages(self.manifest['lanHttps']['aptPackages'])} if self.args.lan_hostname else None,
+                      'missingSystemPackages': self.missing_packages(self.system_packages(self.manifest['lanHttps']))} if self.args.lan_hostname else None,
                   'repositoryFilesPresent': True}, indent=2))
             return
         self.dependencies()

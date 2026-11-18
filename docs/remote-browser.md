@@ -7,13 +7,41 @@ provides keyboard shortcuts, fullscreen, viewer zoom and connection recovery.
 
 ## Install
 
-The first runtime supports Ubuntu 22.04 and Pop!_OS 22.04 on amd64. Use the same
+The runtime supports Ubuntu/Pop!_OS 22.04 on amd64/arm64 and Omarchy/Arch on
+x86_64. Use the same
 backend installer, opting into the browser component:
 
 ```bash
 ./install.sh --with-browser kasmvnc \
   --browser-origin https://your-agentshell-host \
   --browser-user-data-dir "$HOME/.local/share/agentshell/chrome"
+```
+
+On Omarchy, the installer uses Pacman and its configured Chrome repository. It
+builds a local `agentshell-kasmvnc` package as the service user from the same
+checksum-pinned KasmVNC release and verifies the viewer assets before use. Plain
+Arch needs a working Google Chrome installation or a configured package source
+providing `google-chrome`; the installer does not execute AUR build scripts.
+The desktop viewer accepts WebKit 4.1/Soup 3 on Arch and WebKit 4.0/Soup 2 on
+Pop!_OS. The virtual browser explicitly uses X11, independently of the desktop's
+Wayland session. The WebKit 4.1 viewer disables its DMA-BUF renderer to avoid
+Wayland protocol failures on Omarchy/NVIDIA. On Arch, Bubblewrap hides incompatible optional host FFmpeg
+libraries from KasmVNC only; built-in encoders remain available. Host FFmpeg and
+desktop Chrome are unaffected. Arch certificate renewal uses
+`certbot-renew.timer`.
+
+The same installation includes the native desktop browser and the graphical
+session broker. Native Chrome uses the logged-in desktop session (Wayland on
+Omarchy); the X11 override applies only to the virtual display. Moving the same
+managed profile between native Chrome and VNC keeps the existing normal-close,
+profile-lock, keyring and process-generation checks. An unacknowledged prior
+Chrome crash can block a handoff with `UNCLEAN_CHROME_EXIT`; the installer does
+not rewrite profile exit markers to bypass that check.
+
+Check the selected dependencies before installation:
+
+```bash
+./install.sh --check --with-browser kasmvnc --agents installed
 ```
 
 The origin must match the HTTPS server address selected in Android, with no
@@ -227,6 +255,14 @@ selection until you choose a profile explicitly.
 An unrelated ordinary desktop Chrome with a different data directory is left
 alone. The native browser runs under the same user and original credential
 store; the service and its launcher are installed by the same backend installer.
+
+On Hyprland, a native handoff also raises the mapped window belonging to the
+verified Chrome process and checks that it received focus before acknowledging
+success. This handles restored floating windows that would otherwise remain
+behind a terminal. The helper detects Lua-capable `hyprctl` versions and uses
+the supported activation command, while older versions retain their dispatcher
+path. If activation fails, a live native Chrome is left running; the helper does
+not kill it or reopen the phone browser merely to obtain focus.
 
 The graphical-session broker starts `agentshell-browser-native.service` on demand
 using the real desktop environment. The native and VNC runtimes cannot own the

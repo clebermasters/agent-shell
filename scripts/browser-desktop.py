@@ -251,6 +251,22 @@ def call(config, command, handoff=None, generation=None):
         return receive(client)
 
 
+def load_webkit():
+    import gi
+    gi.require_version('Gtk', '3.0')
+    try:
+        gi.require_version('WebKit2', '4.1')
+        gi.require_version('Soup', '3.0')
+        # WebKit's DMA-BUF renderer can terminate GTK's Wayland connection on
+        # Omarchy/NVIDIA. Keep the browser sandbox and use the compatible renderer.
+        os.environ.setdefault('WEBKIT_DISABLE_DMABUF_RENDERER', '1')
+    except ValueError:
+        gi.require_version('WebKit2', '4.0')
+        gi.require_version('Soup', '2.4')
+    from gi.repository import Gtk, WebKit2, Soup, GLib, Gio
+    return Gtk, WebKit2, Soup, GLib, Gio
+
+
 def serve(config):
     if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
         raise Failure('NO_DESKTOP')
@@ -260,11 +276,7 @@ def serve(config):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         return
-    import gi
-    gi.require_version('Gtk', '3.0')
-    gi.require_version('WebKit2', '4.0')
-    gi.require_version('Soup', '2.4')
-    from gi.repository import Gtk, WebKit2, Soup, GLib, Gio
+    Gtk, WebKit2, Soup, GLib, Gio = load_webkit()
     if not Gtk.init_check()[0]:
         raise Failure('NO_DESKTOP')
     api = Api(config)
@@ -372,7 +384,9 @@ window.AgentShellViewportOptions={adaptive:true,fullscreen:true,keyboardVisible:
         url, header, certificate = launch
         if certificate:
             context.allow_tls_certificate_for_host(Gio.TlsCertificate.new_from_pem(certificate, -1), config.host)
-        cookie = Soup.Cookie.parse(header, Soup.URI.new(config.origin))
+        uri = (GLib.Uri.parse(config.origin, GLib.UriFlags.NONE)
+               if Soup.MAJOR_VERSION >= 3 else Soup.URI.new(config.origin))
+        cookie = Soup.Cookie.parse(header, uri)
         def added(cookie_manager, result, *_):
             try:
                 cookie_manager.add_cookie_finish(result)

@@ -344,7 +344,7 @@ def status(value, ignore_switch=False):
 
 def fingerprint(value):
     identity = {name:value.get(name) for name in ['sessionId','userDataDir','profileDirectory','display','port',
-                'password','privateBus','requireSecretService']}
+                'password','privateBus','requireSecretService','isolateHostFfmpeg']}
     return hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
 
 
@@ -436,7 +436,8 @@ def check_port(port):
         except OSError: raise RuntimeErrorCode('PORT_IN_USE')
 
 def chrome_command(value, restore=False):
-    command = ['google-chrome', '--user-data-dir='+value['userDataDir']]
+    executable = next((name for name in ['google-chrome', 'google-chrome-stable'] if shutil.which(name)), 'google-chrome')
+    command = [executable, '--user-data-dir='+value['userDataDir']]
     # Omitting the switch lets Chrome select its own default/last-used profile.
     # Only an explicitly configured selection pins a profile directory.
     if value.get('profileDirectory') is not None:
@@ -446,10 +447,25 @@ def chrome_command(value, restore=False):
     return [*command, '--no-first-run', '--no-default-browser-check', value.get('startUrl','about:blank')]
 
 
+def display_command(value, arguments):
+    executable = next((name for name in ['Xvnc', 'Xkasmvnc'] if shutil.which(name)), 'Xvnc')
+    command = [executable, *arguments]
+    if value.get('isolateHostFfmpeg', False):
+        # The pinned Ubuntu binary dynamically loads host FFmpeg without checking
+        # its ABI. Arch's newer libraries crash its encoder probe. Hide only the
+        # optional FFmpeg loader entry point from this process; built-in Kasm
+        # encoders remain available and no system libraries are modified.
+        command = ['bwrap', '--bind', '/', '/']
+        for target in sorted({str(path.resolve()) for path in Path('/usr/lib').glob('libavformat.so*')}):
+            command.extend(['--ro-bind', '/dev/null', target])
+        command.extend([executable, *arguments])
+    return command
+
+
 def run(value):
     directory = Path(value['runtimeDir']); directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(directory,0o700)
-    children = []; stopped = False
+    children = []; stopped = False; display_process = None
     def terminate(*_):
         nonlocal stopped
         stopped = True
@@ -462,8 +478,10 @@ def run(value):
         write_json(directory/'runtime.json',record)
         try:
             if profile_owner(value['userDataDir']) is not None: raise RuntimeErrorCode('PROFILE_IN_USE')
-            for binary in ['Xvnc','openbox','google-chrome','xauth','kasmvncpasswd']:
-                if not shutil.which(binary): raise RuntimeErrorCode('RUNTIME_DEPENDENCY_MISSING')
+            for alternatives in [('Xvnc','Xkasmvnc'), ('openbox',), ('google-chrome','google-chrome-stable'), ('xauth',), ('kasmvncpasswd',)]:
+                if not any(shutil.which(binary) for binary in alternatives): raise RuntimeErrorCode('RUNTIME_DEPENDENCY_MISSING')
+            if value.get('isolateHostFfmpeg', False) and not shutil.which('bwrap'):
+                raise RuntimeErrorCode('RUNTIME_DEPENDENCY_MISSING')
             if os.getuid() == 0: raise RuntimeErrorCode('CHROME_MUST_RUN_AS_USER')
             if Path(f'/tmp/.X11-unix/X{value["display"]}').exists(): raise RuntimeErrorCode('DISPLAY_IN_USE')
             # Check binding without inheriting a listening socket into Xvnc.
@@ -484,9 +502,10 @@ def run(value):
             (directory/'openbox.xml').write_text(OPENBOX)
             with (directory/'display.log').open('ab') as log:
                 if not value.get('privateBus', False): credential_bus(env, directory, children, log)
-                x = subprocess.Popen(['Xvnc',env['DISPLAY'],'-auth',str(authority),'-nolisten','tcp','-geometry','960x1200','-depth','24',
+                x = subprocess.Popen(display_command(value, [env['DISPLAY'],'-auth',str(authority),'-nolisten','tcp','-geometry','960x1200','-depth','24',
                     '-interface','127.0.0.1','-websocketPort',str(value['port']),'-httpd','/usr/share/kasmvnc/www',
-                    '-KasmPasswordFile',str(passwd),'-SecurityTypes','None','-FrameRate','30','-MaxDisconnectionTime','0'],env=env,stdout=log,stderr=log)
+                    '-KasmPasswordFile',str(passwd),'-SecurityTypes','None','-FrameRate','30','-MaxDisconnectionTime','0']),env=env,stdout=log,stderr=log,start_new_session=True)
+                display_process = x
                 children.append(x)
                 for _ in range(50):
                     if stopped or x.poll() is not None: raise RuntimeErrorCode('DISPLAY_START_FAILED')
@@ -496,7 +515,7 @@ def run(value):
                 wm=subprocess.Popen(['openbox','--config-file',str(directory/'openbox.xml')],env=env,stdout=log,stderr=log);children.append(wm)
                 # Preserve the installed Chrome version, sandbox and credential-store behavior.
                 restore = read_json(directory/'restore-next.json').get('restore') is True
-                chrome=subprocess.Popen(chrome_command(value, restore=restore),env=env,stdout=log,stderr=log);children.append(chrome)
+                chrome=subprocess.Popen([*chrome_command(value, restore=restore), '--ozone-platform=x11'],env=env,stdout=log,stderr=log);children.append(chrome)
                 for _ in range(100):
                     if stopped or chrome.poll() is not None: raise RuntimeErrorCode('CHROME_START_FAILED')
                     owner=profile_owner(value['userDataDir'])
@@ -518,7 +537,12 @@ def run(value):
         finally:
             for child in reversed(children):
                 if child.poll() is None:
-                    child.terminate()
+                    if child is display_process:
+                        # Bubblewrap adds a supervisor. Signal its private process
+                        # group so Xvnc can remove its own X socket/lock normally.
+                        os.killpg(child.pid, signal.SIGTERM)
+                    else:
+                        child.terminate()
                     try: child.wait(timeout=10)
                     except subprocess.TimeoutExpired: child.kill();child.wait(timeout=5)
             record['state']='stopped';write_json(directory/'runtime.json',record)

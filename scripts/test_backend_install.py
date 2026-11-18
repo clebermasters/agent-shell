@@ -57,6 +57,34 @@ class JsoncTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_arch_dependencies_use_pacman_and_arch_certificate_packages(self):
+        value=installer.Installer.__new__(installer.Installer)
+        value.family='arch'
+        value.args=SimpleNamespace(skip_dependencies=False,lan_hostname='lan.example.test',with_browser='none')
+        value.manifest=json.loads((installer.PROJECT/'deployment/backend-dependencies.json').read_text())
+        value.agents=[];value.usable=lambda name:True;value.ensure_python_runtime=lambda:None
+        calls=[]
+        value.missing_packages=lambda packages:list(packages)
+        value.run=lambda command,**kwargs:calls.append(command) or subprocess.CompletedProcess(command,0,stdout='rustc 1.95.0')
+        value.dependencies()
+        self.assertEqual(calls[0][:4],['pacman','-S','--needed','--noconfirm'])
+        self.assertIn('certbot-dns-cloudflare',calls[0])
+        self.assertIn('cronie',calls[0])
+        self.assertFalse(any(c[0]=='apt-get' or '-Sy' in c for c in calls))
+
+    def test_arch_package_query_uses_exit_status(self):
+        value=installer.Installer.__new__(installer.Installer);value.family='arch'
+        with patch.object(installer.subprocess,'run',side_effect=[subprocess.CompletedProcess([],0,stdout='openbox 3.6.1'),subprocess.CompletedProcess([],1)]) as run:
+            self.assertEqual(value.missing_packages(['openbox','bubblewrap']),['bubblewrap'])
+            self.assertEqual(run.call_args_list[0].args[0],['pacman','-Q','openbox'])
+
+    def test_arch_package_keeps_the_pinned_runtime_and_viewer_release(self):
+        spec=json.loads((installer.PROJECT/'deployment/browser/dependencies.json').read_text())
+        build=(installer.PROJECT/'deployment/browser/PKGBUILD').read_text()
+        self.assertIn('pkgver='+spec['version'],build)
+        self.assertIn(spec['packages']['arch-amd64']['sha256'],build)
+        self.assertEqual(spec['packages']['arch-amd64']['sha256'],spec['packages']['jammy-amd64']['sha256'])
+
     def test_fresh_lan_host_bootstraps_dns_and_certificate_dependencies(self):
         value=installer.Installer.__new__(installer.Installer)
         value.args=SimpleNamespace(skip_dependencies=False,lan_hostname='lan.example.test',with_browser='none')
@@ -113,6 +141,42 @@ class InstallerTests(unittest.TestCase):
                 report=value.browser_dependency_report()
                 self.assertFalse(report['softwareReady'])
                 self.assertFalse(report['clientAssets']['vnc.html'])
+
+    def test_browser_spec_pins_runtime_and_chrome_for_each_architecture(self):
+        specification=json.loads((installer.PROJECT/'deployment/browser/dependencies.json').read_text())
+        for architecture in ['amd64','arm64']:
+            package=specification['packages']['jammy-'+architecture]
+            self.assertTrue(package['url'].endswith('_'+architecture+'.deb'))
+            self.assertRegex(package['sha256'],'^[0-9a-f]{64}$')
+            self.assertTrue(package['chrome'].startswith('https://dl.google.com/linux/direct/'))
+            self.assertTrue(package['chrome'].endswith('_'+architecture+'.deb'))
+
+    def test_missing_chrome_downloads_the_build_for_this_platform(self):
+        specification={'version':'1.5.0','aptPackages':[],'clientHashes':{},
+                       'packages':{'jammy-amd64':{'chrome':'https://dl.google.com/linux/direct/chrome_amd64.deb'},
+                                   'jammy-arm64':{'chrome':'https://dl.google.com/linux/direct/chrome_arm64.deb'}}}
+        value=installer.Installer.__new__(installer.Installer)
+        value.browser_specification=lambda:specification
+        value.browser_platform=lambda:'jammy-arm64'
+        value.missing_packages=lambda packages=None:[]
+        value.usable=lambda name:False
+        value.browser_dependency_report=lambda:{'softwareReady':True}
+        downloads,commands=[],[]
+        value.download=lambda url,target:downloads.append(url)
+        def run(command,**kwargs):
+            commands.append(command)
+            return subprocess.CompletedProcess(command,0,stdout='1.5.0-1')
+        value.run=run
+        value.browser_dependencies()
+        self.assertEqual(downloads,['https://dl.google.com/linux/direct/chrome_arm64.deb'])
+        self.assertTrue(commands[-1][-1].endswith('google-chrome.deb'))
+
+    def test_unpinned_browser_platform_is_rejected(self):
+        value=installer.Installer.__new__(installer.Installer)
+        value.browser_specification=lambda:{'packages':{'jammy-amd64':{}}}
+        value.browser_platform=lambda:'noble-arm64'
+        with self.assertRaisesRegex(ValueError,'No pinned browser package for noble-arm64'):
+            value.browser_dependencies()
 
     def test_node_prefix_and_agent_versions(self):
         self.assertEqual(installer.version('v24.15.0\n'), (24, 15, 0))

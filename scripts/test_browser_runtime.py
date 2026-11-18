@@ -14,6 +14,21 @@ spec=importlib.util.spec_from_file_location('browser_runtime',Path(__file__).wit
 runtime=importlib.util.module_from_spec(spec);spec.loader.exec_module(runtime)
 
 class BrowserRuntimeTests(unittest.TestCase):
+    def test_arch_uses_chrome_stable_without_forcing_native_display(self):
+        with patch.object(runtime.shutil,'which',side_effect=lambda name:'/usr/bin/'+name if name=='google-chrome-stable' else None):
+            command=runtime.chrome_command({'userDataDir':'/tmp/fixture-profile'})
+        self.assertEqual(command[0],'google-chrome-stable')
+        self.assertNotIn('--ozone-platform=x11',command)
+
+    def test_ffmpeg_isolation_is_opt_in_and_only_masks_optional_loader(self):
+        with tempfile.TemporaryDirectory() as d:
+            library=Path(d)/'libavformat.so.63';library.touch()
+            with patch.object(runtime.Path,'glob',return_value=[library]),patch.object(runtime.shutil,'which',return_value='/usr/bin/Xvnc'):
+                self.assertEqual(runtime.display_command({},[':93']),['Xvnc',':93'])
+                command=runtime.display_command({'isolateHostFfmpeg':True},[':93'])
+            self.assertEqual(command,['bwrap','--bind','/','/','--ro-bind','/dev/null',str(library),'Xvnc',':93'])
+            self.assertEqual(library.read_bytes(),b'')
+
     def test_default_profile_is_delegated_to_chrome_without_changing_local_state(self):
         with tempfile.TemporaryDirectory() as d:
             value=self.fixture(d);value.pop('profileDirectory')

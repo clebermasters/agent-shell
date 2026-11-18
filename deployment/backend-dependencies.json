@@ -1,9 +1,10 @@
 {
   "schemaVersion": 1,
-  "supportedLinuxFamilies": ["debian", "ubuntu"],
+  "supportedLinuxFamilies": ["debian", "ubuntu", "arch", "omarchy"],
+  "pacmanPackages": ["base-devel", "pkgconf", "openssl", "ca-certificates", "curl", "python", "python-pip", "tmux", "git", "cronie", "ffmpeg", "ripgrep", "xz", "systemd"],
   "aptPackages": ["build-essential", "pkg-config", "libssl-dev", "ca-certificates", "curl", "python3", "python3-venv", "tmux", "git", "cron", "ffmpeg", "ripgrep", "xz-utils", "openssl", "systemd"],
   "pythonPackages": {"websockets": "14.2"},
-  "lanHttps": {"aptPackages": ["certbot", "python3-certbot-dns-cloudflare", "iproute2"], "renewalTimer": "certbot.timer", "dnsTimer": "agentshell-lan-dns.timer"},
+  "lanHttps": {"aptPackages": ["certbot", "python3-certbot-dns-cloudflare", "iproute2"], "pacmanPackages": ["certbot", "certbot-dns-cloudflare", "iproute2"], "renewalTimer": "certbot.timer", "dnsTimer": "agentshell-lan-dns.timer"},
   "rust": {"version": "1.95.0", "minimum": "1.85.0", "installer": "https://sh.rustup.rs"},
   "node": {"version": "24.21.0", "minimumMajor": 22, "distribution": "https://nodejs.org/dist"},
   "agents": {
@@ -22,6 +23,7 @@
     "scripts/jsonc_config.py",
     "deployment/templates/agentshell.service",
     "deployment/templates/agentshell-path.sh",
+    "deployment/browser/PKGBUILD",
     "backend-rust/Cargo.lock"
   ],
   "files": [

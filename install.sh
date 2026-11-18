@@ -31,16 +31,23 @@ if ! command -v python3 >/dev/null 2>&1; then
                 ;;
         esac
     done
-    if ! command -v apt-get >/dev/null 2>&1; then
-        echo "Automatic dependency installation requires Debian/Ubuntu (apt-get)." >&2
-        exit 1
-    fi
-    if [[ "$EUID" -eq 0 ]]; then
-        apt-get update
-        apt-get install -y python3
+    if command -v pacman >/dev/null 2>&1; then
+        if [[ "$EUID" -eq 0 ]]; then
+            pacman -S --needed --noconfirm python
+        else
+            sudo pacman -S --needed --noconfirm python
+        fi
+    elif command -v apt-get >/dev/null 2>&1; then
+        if [[ "$EUID" -eq 0 ]]; then
+            apt-get update
+            apt-get install -y python3
+        else
+            sudo apt-get update
+            sudo apt-get install -y python3
+        fi
     else
-        sudo apt-get update
-        sudo apt-get install -y python3
+        echo "Automatic dependency installation requires Debian/Ubuntu or Arch/Omarchy." >&2
+        exit 1
     fi
 fi
 exec python3 "$PROJECT_DIR/scripts/install-backend.py" "$@"

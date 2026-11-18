@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -100,6 +101,80 @@ def start_native(value, path, runtime):
     raise runtime.RuntimeErrorCode('NATIVE_START_FAILED')
 
 
+def focus_native(value, runtime, expected, timeout=5):
+    # Hyprland may map a restored Chrome behind the window that initiated the
+    # handoff. Other desktops retain Chrome's normal activation behavior.
+    desktop=os.environ.get('XDG_CURRENT_DESKTOP','').lower().split(':')
+    if 'hyprland' not in desktop and not os.environ.get('HYPRLAND_INSTANCE_SIGNATURE'):
+        return
+    record=runtime.read_json(Path(value['runtimeDir'])/'native.json')
+    identity={key:record.get(key) for key in ['pid','processGeneration','chromePid',
+        'chromeGeneration','runtimeGeneration','configFingerprint']}
+    if not expected or identity['runtimeGeneration']!=expected:
+        raise runtime.RuntimeErrorCode('RUNTIME_CHANGED')
+    pid=identity['chromePid']
+    def verify_owner():
+        current=runtime.read_json(Path(value['runtimeDir'])/'native.json')
+        if (type(pid) is not int or pid<=0 or current.get('state')!='ready'
+                or any(current.get(key)!=expected for key,expected in identity.items())
+                or identity['configFingerprint']!=runtime.fingerprint(value)
+                or not identity['chromeGeneration'] or not identity['processGeneration']
+                or runtime.generation(pid)!=identity['chromeGeneration']
+                or runtime.generation(identity['pid'])!=identity['processGeneration']
+                or runtime.profile_owner(value['userDataDir'])!=pid):
+            raise runtime.RuntimeErrorCode('PROFILE_OWNER_MISMATCH')
+    expires=time.monotonic()+timeout
+    def control(*arguments):
+        remaining=expires-time.monotonic()
+        if remaining<=0:raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED')
+        try:
+            result=subprocess.run(['hyprctl',*arguments],capture_output=True,text=True,
+                timeout=min(1,remaining))
+        except (OSError,subprocess.TimeoutExpired):
+            raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED') from None
+        # hyprctl 0.56 prints valid --help output with exit status 1. Only
+        # recognize that usage response; queries/actions fail closed.
+        valid_help=(arguments==('--help',) and result.returncode==1
+            and re.search(r'(?im)^usage:\s*hyprctl\b',result.stdout)
+            and re.search(r'(?m)^\s*(?:eval|dispatch)(?:\s|$)',result.stdout))
+        if result.returncode and not valid_help:raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED')
+        return result.stdout
+    verify_owner()
+    help_text=control('--help')
+    lua=bool(re.search(r'(?m)^\s*eval(?:\s|$)',help_text))
+    if not lua and not re.search(r'(?m)^\s*dispatch(?:\s|$)',help_text):
+        raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED')
+    address=None
+    while time.monotonic()<expires:
+        verify_owner()
+        try:clients=json.loads(control('-j','clients'))
+        except (ValueError,TypeError):raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED') from None
+        if not isinstance(clients,list):raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED')
+        for client in clients:
+            if not isinstance(client,dict) or client.get('pid')!=pid or client.get('mapped') is not True or client.get('hidden') is True:
+                continue
+            candidate=client.get('address')
+            if not isinstance(candidate,str) or not re.fullmatch(r'0x[0-9a-fA-F]{1,16}',candidate):
+                continue
+            address=candidate
+            break
+        if address:break
+        time.sleep(.1)
+    if not address:raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED')
+    verify_owner()
+    if lua:control('eval','hl.dispatch(hl.dsp.focus({window="address:'+address+'"}))')
+    else:control('dispatch','focuswindow','address:'+address)
+    while time.monotonic()<expires:
+        verify_owner()
+        try:active=json.loads(control('-j','activewindow'))
+        except (ValueError,TypeError):raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED') from None
+        if isinstance(active,dict) and active.get('pid')==pid and active.get('address')==address:
+            verify_owner()
+            return
+        time.sleep(.1)
+    raise runtime.RuntimeErrorCode('NATIVE_FOCUS_FAILED')
+
+
 def start_virtual(value, path, runtime):
     runtime.write_json(Path(value['runtimeDir'])/'restore-next.json',{'restore':True})
     state=runtime.start(value,path,ignore_switch=True)
@@ -125,6 +200,12 @@ def move(value, path, destination, expected, runtime):
         source_native=current.get('state') in ('native','native-closed')
         already_closed=current.get('state')=='native-closed'
         if (destination=='desktop' and source_native) or (destination=='phone' and current.get('state')=='ready'):
+            if destination=='desktop':
+                if already_closed:
+                    return {'code':'BROWSER_NOT_READY','connected':False,'session':current,'phonePreserved':False}
+                try:focus_native(value,runtime,current.get('runtimeGeneration'))
+                except runtime.RuntimeErrorCode as error:
+                    return {'code':error.code,'connected':False,'session':current,'phonePreserved':False}
             return {'code':'CONNECTED','connected':True,'destination':'native' if source_native else 'phone','session':current}
         if current.get('state') not in ('ready','native','native-closed'):
             raise runtime.RuntimeErrorCode('BROWSER_NOT_READY')
@@ -143,6 +224,7 @@ def move(value, path, destination, expected, runtime):
                 unit='agentshell-browser-native.service' if source_native else 'agentshell-browser.service'
                 if runtime.user_systemctl('stop',unit).returncode:raise runtime.RuntimeErrorCode('USER_SERVICE_UNAVAILABLE')
             state=start_native(value,path,runtime) if destination=='desktop' else start_virtual(value,path,runtime)
+            if destination=='desktop':focus_native(value,runtime,state.get('runtimeGeneration'))
             return {'code':'CONNECTED','connected':True,'normalExit':True,'destination':'native' if destination=='desktop' else 'phone','session':state}
         except Exception as error:
             code=error.code if isinstance(error,runtime.RuntimeErrorCode) else 'NATIVE_HANDOFF_FAILED'

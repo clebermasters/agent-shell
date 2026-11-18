@@ -44,8 +44,9 @@ RUN $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
     "build-tools;35.0.0" \
     "ndk;27.0.12077973"
 
-# Clone and setup Flutter SDK
-RUN git clone https://github.com/flutter/flutter.git -b stable --depth 1 $FLUTTER_ROOT
+# Keep the legacy client's SDK compatible with its Gradle wrapper.
+RUN git clone --branch 3.41.6 --depth 1 https://github.com/flutter/flutter.git "$FLUTTER_ROOT" && \
+    test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = "db50e20168db8fee486b9abf32fc912de3bc5b6a"
 
 # Pre-cache Flutter dependencies (Android, Web, Linux)
 RUN flutter precache --android --web --linux --no-tree-shake-icons || true

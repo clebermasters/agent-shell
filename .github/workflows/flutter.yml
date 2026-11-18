@@ -3,12 +3,13 @@ name: Build Flutter
 on:
   push:
     branches: [main]
-    paths: [flutter/**, docker/flutter/**, docker/flutter-base/**]
+    paths: [flutter/**, docker/flutter/**, docker/flutter-base/**, .github/workflows/flutter.yml]
   pull_request:
-    paths: [flutter/**, docker/flutter/**, docker/flutter-base/**]
+    paths: [flutter/**, docker/flutter/**, docker/flutter-base/**, .github/workflows/flutter.yml]
   release:
     types: [published]
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   base-image:
@@ -69,6 +70,7 @@ jobs:
         with:
           name: agentshell-flutter-release
           path: agentshell-flutter-release.apk
+          if-no-files-found: error
 
       - name: Upload to release
         if: github.event_name == 'release'
@@ -108,6 +110,7 @@ jobs:
         with:
           name: agentshell-web
           path: agentshell-web.zip
+          if-no-files-found: error
 
       - name: Upload to release
         if: github.event_name == 'release'
@@ -147,6 +150,7 @@ jobs:
         with:
           name: agentshell-linux
           path: agentshell-linux.tar.gz
+          if-no-files-found: error
 
       - name: Upload to release
         if: github.event_name == 'release'

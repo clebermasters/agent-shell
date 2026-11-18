@@ -9,6 +9,7 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   unit-tests:
@@ -22,6 +23,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android SDK for tests
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
@@ -95,6 +98,7 @@ jobs:
         with:
           name: agentshell-native-release
           path: agentshell-native-release.apk
+          if-no-files-found: error
 
       - name: Upload to release
         if: github.event_name == 'release'

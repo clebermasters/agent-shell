@@ -1,0 +1,108 @@
+name: Publish stable release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify stable tag and release notes
+        run: |
+          number='(0|[1-9][0-9]*)'
+          [[ $GITHUB_REF_NAME =~ ^v$number\.$number\.$number$ ]]
+          test -s "docs/releases/$GITHUB_REF_NAME.md"
+
+  android:
+    needs: prepare
+    uses: ./.github/workflows/android-native.yml
+    permissions:
+      contents: write
+      packages: write
+
+  backend:
+    needs: prepare
+    uses: ./.github/workflows/backend.yml
+    permissions:
+      contents: write
+
+  flutter:
+    needs: prepare
+    uses: ./.github/workflows/flutter.yml
+    permissions:
+      contents: write
+      packages: write
+
+  publish:
+    needs: [android, backend, flutter]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: 'agentshell-{native-release,flutter-release,web,linux,backend-*}'
+          path: artifacts
+
+      - name: Verify and publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$GITHUB_REF_NAME
+          notes="docs/releases/$tag.md"
+          remote_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+          if [[ "$remote_commit" != "$(git rev-parse HEAD)" ]]; then
+            echo "::error::$tag no longer points to the commit that passed CI"
+            exit 1
+          fi
+          files=(
+            artifacts/agentshell-native-release/agentshell-native-release.apk
+            artifacts/agentshell-flutter-release/agentshell-flutter-release.apk
+            artifacts/agentshell-web/agentshell-web.zip
+            artifacts/agentshell-linux/agentshell-linux.tar.gz
+            artifacts/agentshell-backend-linux-x86_64/agentshell-backend
+            artifacts/agentshell-backend-macos-arm64/agentshell-backend-macos-arm64
+            artifacts/agentshell-backend-macos-x86_64/agentshell-backend-macos-x86_64
+            artifacts/agentshell-backend-macos-arm64-browser-helper/AgentShellBrowser-macos-arm64.app.zip
+            artifacts/agentshell-backend-macos-x86_64-browser-helper/AgentShellBrowser-macos-x86_64.app.zip
+          )
+          for file in "${files[@]}"; do
+            if [[ ! -s "$file" ]]; then
+              echo "::error::Missing or empty release asset $file"
+              exit 1
+            fi
+          done
+          expected=$(jq -cn --args '$ARGS.positional | sort' "${files[@]##*/}")
+          verify_assets() {
+            gh release view "$tag" --json assets | jq -e --argjson expected "$expected" '
+              ([.assets[].name] | sort) == $expected and
+              all(.assets[]; .state == "uploaded" and .size > 0)
+            '
+          }
+
+          # A failed API request must not be treated as a missing release.
+          existing=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" |
+            jq -r --arg tag "$tag" '.[][] | select(.tag_name == $tag) |
+              if .draft then "draft" elif .prerelease then "prerelease" else "published" end')
+          case "$existing" in
+            published) verify_assets; exit 0 ;;
+            prerelease) echo "::error::$tag already exists as a prerelease"; exit 1 ;;
+            draft) ;; # Resume an interrupted upload.
+            '') gh release create "$tag" --verify-tag --draft --title "AgentShell $tag" --notes-file "$notes" ;;
+            *) exit 1 ;;
+          esac
+
+          gh release upload "$tag" "${files[@]}" --clobber
+          verify_assets
+          gh release edit "$tag" --tag "$tag" --verify-tag --draft=false --prerelease=false --latest --notes-file "$notes"

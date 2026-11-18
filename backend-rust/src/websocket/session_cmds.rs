@@ -317,6 +317,7 @@ mod tests {
             )),
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
             codex_app_client: Arc::new(tokio::sync::RwLock::new(None)),
+            acp_startup_retry: Arc::new(crate::acp::StartupRetry::default()),
             notification_store: Arc::new(
                 crate::notification_store::NotificationStore::new(dir.to_path_buf()).unwrap(),
             ),

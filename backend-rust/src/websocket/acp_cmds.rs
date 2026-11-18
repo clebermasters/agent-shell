@@ -219,7 +219,18 @@ pub(crate) async fn ensure_acp_client(app_state: &Arc<AppState>) -> Result<(), S
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<crate::acp::AcpEvent>(100);
     let mut client = crate::acp::AcpClient::new(event_tx);
-    let init_result = client.start().await?;
+    let init_result = app_state
+        .acp_startup_retry
+        .attempt(|| async {
+            match client.start().await {
+                Ok(result) => Ok(result),
+                Err(error) => {
+                    client.close().await;
+                    Err(error)
+                }
+            }
+        })
+        .await?;
     info!("ACP client initialized: {:?}", init_result.agent_info);
 
     let broadcast_tx = app_state.broadcast_tx.clone();
@@ -1461,6 +1472,7 @@ mod tests {
             notification_store,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
             codex_app_client: Arc::new(tokio::sync::RwLock::new(None)),
+            acp_startup_retry: Arc::new(crate::acp::StartupRetry::default()),
             favorite_store,
             tag_store,
             shutdown_token: tokio_util::sync::CancellationToken::new(),
@@ -1517,11 +1529,41 @@ mod tests {
             notification_store,
             acp_client: Arc::new(tokio::sync::RwLock::new(Some(acp_client))),
             codex_app_client: Arc::new(tokio::sync::RwLock::new(None)),
+            acp_startup_retry: Arc::new(crate::acp::StartupRetry::default()),
             favorite_store,
             tag_store,
             shutdown_token: tokio_util::sync::CancellationToken::new(),
         });
         (ws_state, rx, app_state)
+    }
+
+    #[tokio::test]
+    async fn test_ensure_acp_client_respects_shared_startup_cooldown() {
+        let dir = TempDir::new().unwrap();
+        let (_, _, app_state) = make_state(dir.path());
+        app_state
+            .acp_startup_retry
+            .attempt(|| async { Err::<(), _>("synthetic startup failure".to_string()) })
+            .await
+            .unwrap_err();
+
+        let error = ensure_acp_client(&app_state).await.unwrap_err();
+        assert!(error.contains("OpenCode startup paused"));
+        assert!(app_state.acp_client.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_initialized_acp_client_ignores_startup_cooldown() {
+        let dir = TempDir::new().unwrap();
+        let (_, _, app_state) = make_state_with_acp_client(dir.path());
+        app_state
+            .acp_startup_retry
+            .attempt(|| async { Err::<(), _>("synthetic startup failure".to_string()) })
+            .await
+            .unwrap_err();
+
+        assert!(ensure_acp_client(&app_state).await.is_ok());
+        assert!(app_state.acp_client.read().await.is_some());
     }
 
     #[test]

@@ -93,6 +93,7 @@ pub struct AppState {
     pub chat_event_store: Arc<chat_event_store::ChatEventStore>,
     pub chat_clear_store: Arc<chat_clear_store::ChatClearStore>,
     pub acp_client: Arc<tokio::sync::RwLock<Option<acp::AcpClient>>>,
+    pub acp_startup_retry: Arc<acp::StartupRetry>,
     pub codex_app_client: Arc<tokio::sync::RwLock<Option<codex_app::CodexAppClient>>>,
     pub notification_store: Arc<notification_store::NotificationStore>,
     pub favorite_store: Arc<favorite_store::FavoriteStore>,
@@ -170,6 +171,7 @@ async fn run_backend(args: Args) -> Result<()> {
         favorite_store: Arc::new(favorite_store::FavoriteStore::new(base_dir.clone())?),
         tag_store: Arc::new(tag_store::TagStore::new(base_dir.clone())?),
         acp_client: Arc::new(tokio::sync::RwLock::new(None)),
+        acp_startup_retry: Arc::new(acp::StartupRetry::default()),
         codex_app_client: Arc::new(tokio::sync::RwLock::new(None)),
         shutdown_token: CancellationToken::new(),
     };

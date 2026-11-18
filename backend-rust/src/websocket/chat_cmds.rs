@@ -2175,6 +2175,7 @@ mod tests {
             notification_store,
             acp_client: Arc::new(tokio::sync::RwLock::new(None)),
             codex_app_client: Arc::new(tokio::sync::RwLock::new(None)),
+            acp_startup_retry: Arc::new(crate::acp::StartupRetry::default()),
             favorite_store,
             tag_store,
             shutdown_token: tokio_util::sync::CancellationToken::new(),

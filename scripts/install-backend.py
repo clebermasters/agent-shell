@@ -77,14 +77,15 @@ class Installer:
                  *login.stdout.strip().split(':'), '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
         self.service_path = ':'.join(dict.fromkeys(str(path) for path in paths if str(path)))
         self.user_env['PATH'] = self.service_path
+        supported_agents = [*self.manifest['agents'], 'agy']
         if args.agents == 'installed':
-            self.agents = [name for name in self.manifest['agents'] if self.usable(name)]
+            self.agents = [name for name in supported_agents if self.usable(name)]
         elif args.agents == 'none':
             self.agents = []
         else:
             self.agents = list(dict.fromkeys(args.agents.split(',')))
-            if any(name not in self.manifest['agents'] for name in self.agents):
-                raise ValueError('--agents must be codex,claude,opencode, installed, or none')
+            if any(name not in supported_agents for name in self.agents):
+                raise ValueError('--agents must be installed, none, or a comma-separated subset of ' + ','.join(supported_agents))
 
     def run(self, command, *, root=False, user=False, capture=False, env=None, check=True):
         environment = dict(self.user_env if user else os.environ)
@@ -174,13 +175,15 @@ class Installer:
                 os.chmod(path, 0o644)
                 self.run(['sh', str(path), '-y', '--profile', 'minimal', '--no-modify-path',
                           '--default-toolchain', rust['version']], user=True)
-        if self.agents:
+        if any(name != 'agy' for name in self.agents):
             self.ensure_node()
         for name in self.agents:
             if self.usable(name):
                 print('Keeping working ' + name + ' installation.', flush=True)
                 continue
-            specification = self.manifest['agents'][name]
+            specification = self.manifest['agents'].get(name)
+            if specification is None:
+                raise ValueError('Install the Antigravity CLI before selecting agy')
             print('Installing missing/unusable ' + name + ' in the managed user directory.', flush=True)
             self.mkdir(self.tools)
             self.mkdir(self.install_dir / 'cache/npm')

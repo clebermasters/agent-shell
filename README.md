@@ -52,6 +52,7 @@ The **maintained and feature-complete client is the native Android app** (`andro
 
 ### AI Sessions
 - **Claude Code**: run Claude inside tmux and control it like any terminal session
+- **Antigravity CLI** (`agy`) supports tmux chat with saved history, live replies, and tool calls and results.
 - **OpenCode ACP**: direct chat sessions with permission-based tool calls
 - **Codex direct mode**: app-server based sessions via the same ACP transport shape
 - Kiro session detection and parsing in tmux chat logs
@@ -131,6 +132,12 @@ Also uses the same direct-chat websocket message family (`acp-*`) with provider-
 
 If you want the full flow and edge cases, read:
 - [CODEX_APP_SERVER_INTEGRATION.md](CODEX_APP_SERVER_INTEGRATION.md)
+
+### 4) Antigravity CLI (tmux mode)
+
+Run `agy` in a tmux pane, or choose `agy` as the startup command for an Android favorite. Send the first prompt in Terminal, or resume a conversation with `/resume`, then open Chat for that window. AgentShell follows the conversation held open by that CLI process, including switches made with `/resume`. Two terminals in the same project can have independent chats.
+
+This integration uses the presence lock and native JSONL transcript under `~/.gemini/antigravity-cli/`. It was verified with Antigravity CLI 1.5.14. To also register the AgentShell tools for publishing files and interactive messages, select the installed CLI with `--agents agy` or `--agents installed` during backend installation.
 
 ## Prerequisites
 

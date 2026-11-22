@@ -14,7 +14,7 @@ def owner():
  pid=int(os.environ.get('AGENTSHELL_UI_AGENT_PID',os.getppid()))
  for _ in range(40):
   info=process_info(pid)
-  if info['name'] in ['codex','claude','opencode']:
+  if info['name'] in ['codex','claude','agy','opencode']:
    return pid,info['generation']
   pid=info['parentPid']
   if pid<=1:raise ValueError('No owning native agent')

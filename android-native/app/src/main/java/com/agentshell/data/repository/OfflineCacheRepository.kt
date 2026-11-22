@@ -82,7 +82,7 @@ class OfflineCacheRepository @Inject constructor(
     @kotlinx.serialization.Serializable
     private data class LegacyArchiveCursor(val conversationKey: String? = null, val totalCount: Int? = null,
         val newestMessageId: String? = null, val reconcile: Boolean = false)
-    private data class HistoryWrite(val target: ChatTarget, val messages: List<ChatMessage>, val complete: Boolean, val conversationKey: String?, val tool: String?)
+    private data class HistoryWrite(val target: ChatTarget, val messages: List<ChatMessage>, val complete: Boolean, val conversationKey: String?, val tool: String?, val generation: Long, val beforeMessageId: String? = null)
     private data class PendingHistoryWrite(var authoritative: HistoryWrite? = null, var latest: HistoryWrite? = null)
     private val pendingWriteLock = Any()
     private val pendingWrites = linkedMapOf<String, PendingHistoryWrite>()
@@ -112,7 +112,7 @@ class OfflineCacheRepository @Inject constructor(
                         pendingWrites.entries.firstOrNull()?.let { entry -> pendingWrites.remove(entry.key) }
                     } ?: break
                     for (write in listOfNotNull(pending.authoritative, pending.latest)) {
-                        try { saveHistory(write.target, write.messages, write.complete, write.conversationKey, write.tool) }
+                        try { commitHistory(write) }
                         catch (error: Exception) {
                             if (error is CancellationException) throw error
                             Log.w("OfflineCache", "Could not save chat history", error)
@@ -232,13 +232,33 @@ class OfflineCacheRepository @Inject constructor(
         conversationKey: String? = null,
         tool: String? = null,
     ) {
-        recordHistoryUpdate(target.key, complete, conversationKey)
-        saveHistoryWindow(target, messages, complete, conversationKey, tool)
+        val generation = recordHistoryUpdate(target.key, complete, conversationKey)
+        commitHistory(HistoryWrite(target, messages, complete, conversationKey, tool, generation))
+    }
+
+    /** A rewritten native transcript supersedes cached rows outside its latest page. */
+    suspend fun saveAgyHistoryHead(target: ChatTarget, messages: List<ChatMessage>, complete: Boolean,
+        conversationKey: String?, revision: String?): Boolean {
+        val generation = recordHistoryUpdate(target.key, true, conversationKey)
+        return try {
+            commitHistory(HistoryWrite(target, messages, complete, conversationKey, "agy", generation),
+                headRevision = revision.orEmpty())?.complete == true
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            Log.w("OfflineCache", "Could not save the latest Antigravity history", error)
+            false
+        }
+    }
+
+    private suspend fun commitHistory(write: HistoryWrite, headRevision: String? = null): CachedConversation? {
+        val saved = saveHistoryWindow(write.target, write.messages, write.complete, write.conversationKey, write.tool,
+            beforeMessageId = write.beforeMessageId, expectedRevision = write.generation, headRevision = headRevision) ?: return null
         // A live write that exposes a gap needs only this target's catch-up.
-        if (complete || dao.conversation(target.key)?.complete == false) {
-            syncScheduler.invalidate(target.key)
+        if (write.complete || !saved.complete) {
+            syncScheduler.invalidate(write.target.key)
             syncRequests.trySend(Unit)
         }
+        return saved
     }
 
     private suspend fun saveHistoryWindow(
@@ -249,16 +269,31 @@ class OfflineCacheRepository @Inject constructor(
         tool: String?,
         beforeMessageId: String? = null,
         expectedRevision: Long? = null,
-    ) = withContext(cacheDispatcher) {
+        headRevision: String? = null,
+    ): CachedConversation? = withContext(cacheDispatcher) {
         val incoming = messages.distinctBy { it.id }
         // Serialize only the supplied window, outside the Room transaction. Never
         // deserialize the entire stored conversation to append one streamed reply.
         val payloads = incoming.associate { it.id to json.encodeToString(it.copy(isStreaming = false)) }
         val saved = database.withTransaction {
-            if (expectedRevision != null && historyRevision(target.key) != expectedRevision) return@withTransaction false
+            if (expectedRevision != null && historyRevision(target.key) != expectedRevision) return@withTransaction null
             val old = dao.conversation(target.key)
             val sameConversation = conversationKey == null || old == null || old.conversationKey == conversationKey
             if (!sameConversation) dao.deleteMessages(target.key)
+            var preserveComplete = sameConversation && old?.complete == true
+            if (headRevision != null) {
+                val sync = dao.historySync(target.key)
+                if (headRevision.isEmpty()) {
+                    dao.deleteMessages(target.key)
+                    dao.deleteHistorySync(target.key)
+                    preserveComplete = false
+                } else {
+                    dao.removeUnsyncedMessages(target.key, headRevision)
+                    val cursorValid = sync != null && sync.revision == headRevision && dao.messageCount(target.key) == sync.offset
+                    preserveComplete = cursorValid && sync?.complete == true
+                    if (!cursorValid) dao.saveHistorySync(CachedHistorySync(target.key, headRevision))
+                }
+            }
             val tail = if (sameConversation) dao.latestMessageId(target.key) else null
             val existing = incoming.map { it.id }.chunked(400).flatMap { dao.messagesByIds(target.key, it) }
                 .associateBy { it.messageId }
@@ -272,23 +307,24 @@ class OfflineCacheRepository @Inject constructor(
                 for (ids in obsolete.chunked(400)) dao.deleteMessagesByIds(target.key, ids)
             }
             val next = CachedConversation(target.key, conversationKey ?: old?.conversationKey.orEmpty(), tool ?: old?.tool,
-                target.cwd.ifBlank { old?.cwd.orEmpty() }, complete || (sameConversation && old?.complete == true && continuous))
+                target.cwd.ifBlank { old?.cwd.orEmpty() }, complete || (preserveComplete && continuous))
             if (next != old) dao.insertConversation(next)
-            true
+            next
         }
-        if (!saved) return@withContext
+        if (saved == null) return@withContext null
         if (expectedRevision != null && conversationKey != null) synchronized(pendingWriteLock) {
             if ((historyRevisions[target.key] ?: 0) == expectedRevision) knownConversationKeys[target.key] = conversationKey
         }
         hosts.getHosts().first().firstOrNull { it.id == target.hostId }?.let { host ->
             attachments.enqueue("${host.httpUrl}/api/chat/files", messages)
         }
+        saved
     }
 
-    fun saveHistoryAsync(target: ChatTarget, messages: List<ChatMessage>, complete: Boolean, conversationKey: String? = null, tool: String? = null) {
-        recordHistoryUpdate(target.key, complete, conversationKey)
-        val write = HistoryWrite(target, messages, complete, conversationKey, tool)
+    fun saveHistoryAsync(target: ChatTarget, messages: List<ChatMessage>, complete: Boolean, conversationKey: String? = null, tool: String? = null, beforeMessageId: String? = null) {
         synchronized(pendingWriteLock) {
+            val generation = recordHistoryUpdate(target.key, complete, conversationKey)
+            val write = HistoryWrite(target, messages, complete, conversationKey, tool, generation, beforeMessageId)
             val pending = pendingWrites.getOrPut(target.key) { PendingHistoryWrite() }
             if (complete) {
                 // An authoritative clear/replacement is a barrier: a later
@@ -300,15 +336,15 @@ class OfflineCacheRepository @Inject constructor(
         historyWriteSignals.trySend(Unit)
     }
 
-    private fun recordHistoryUpdate(key: String, authoritative: Boolean, conversationKey: String?) {
+    private fun recordHistoryUpdate(key: String, authoritative: Boolean, conversationKey: String?): Long =
         synchronized(pendingWriteLock) {
             val previousKey = knownConversationKeys[key]
             if (authoritative || (conversationKey != null && previousKey != null && previousKey != conversationKey)) {
                 historyRevisions[key] = (historyRevisions[key] ?: 0) + 1
             }
             if (conversationKey != null) knownConversationKeys[key] = conversationKey
+            historyRevisions[key] ?: 0L
         }
-    }
 
     private fun historyRevision(key: String): Long = synchronized(pendingWriteLock) { historyRevisions[key] ?: 0 }
 
@@ -499,6 +535,7 @@ class OfflineCacheRepository @Inject constructor(
 
     /** Fetch finite disk-backed snapshots; never establish live archive watchers. */
     internal suspend fun syncHistoryIncremental(socket: SessionSocket, target: ChatTarget): ArchiveSyncResult {
+        val localRevision = historyRevision(target.key)
         val session = if (target.isAcp) "acp_${target.sessionName}" else target.sessionName
         val requestId = java.util.UUID.randomUUID().toString()
         val state = request(socket, mapOf("type" to "get-history-state", "requestId" to requestId,
@@ -513,7 +550,6 @@ class OfflineCacheRepository @Inject constructor(
             ?: CachedHistorySync(target.key, currentRevision,
                 baseRevision = existing.first?.takeIf { it.complete && it.keyed }?.revision)
         val revision = progress.revision
-        val localRevision = historyRevision(target.key)
         val conversationKey = state["conversationKey"] as? String
         repeat(4) {
             if (historyRevision(target.key) != localRevision) return ArchiveSyncResult.Continue

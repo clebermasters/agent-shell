@@ -698,6 +698,16 @@ fn large_transcript(file: &Path, tool: &AiTool) -> Result<Option<ChatMessage>> {
     };
     let kind: String = json.decode(kind)?;
     let (keep, role) = match tool {
+        AiTool::Agy => {
+            let Some(source) = json.field(root, "source")? else {
+                return Ok(None);
+            };
+            let source: String = json.decode(source)?;
+            let Some(role) = crate::chat_log::agy_parser::message_role(&source, &kind) else {
+                return Ok(None);
+            };
+            (true, role)
+        }
         AiTool::Claude => (
             matches!(
                 kind.as_str(),
@@ -740,11 +750,18 @@ fn large_transcript(file: &Path, tool: &AiTool) -> Result<Option<ChatMessage>> {
     if !keep {
         return Ok(None);
     }
-    let timestamp = if let Some(span) = json.field(root, "timestamp")? {
+    let timestamp_key = if matches!(tool, AiTool::Agy) { "created_at" } else { "timestamp" };
+    let timestamp = if let Some(span) = json.field(root, timestamp_key)? {
         json.decode::<Option<chrono::DateTime<chrono::Utc>>>(span)?
     } else {
         None
     };
+    if matches!(tool, AiTool::Agy) && role == "user" {
+        return match json.field(root, "content")? {
+            Some(content) => crate::chat_log::agy_parser::large_user_message(file, content, timestamp),
+            None => Ok(None),
+        };
+    }
     Ok(Some(archive_large(
         File::open(file)?,
         &attachment_directory()?,
@@ -769,6 +786,7 @@ fn parsed_record(record: Record, tool: &AiTool) -> Result<Option<Option<ChatMess
                 Err(error) => return Err(error.into()),
             };
             match tool {
+                AiTool::Agy => crate::chat_log::agy_parser::parse_line(line),
                 AiTool::Claude => crate::chat_log::claude_parser::parse_line(line),
                 AiTool::Codex => crate::chat_log::codex_parser::parse_line(line),
                 _ => bail!("Unsupported transcript provider"),
@@ -869,7 +887,9 @@ pub fn transcript_page(
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        let append = previous
+        // Antigravity materializes its transcript from trajectory steps.
+        // A larger file can also contain edits to already indexed steps.
+        let append = !matches!(tool, AiTool::Agy) && previous
             .as_ref()
             .is_some_and(|(id, _, len)| id == &identity && meta.len() > *len as u64);
         let position = if append {
@@ -1009,7 +1029,7 @@ pub fn bound_page_at(
         index.replace_with_overlay(&key, &revision, |sink| {
             if !binding.transcript_path.as_os_str().is_empty() {
                 match binding.pane.tool.as_str() {
-                    "claude" | "codex" => {
+                    "agy" | "claude" | "codex" => {
                         let tool = binding.ai_tool();
                         transcript_page(&binding.transcript_path, &tool, None, 0, 1)?;
                         let transcript = Index::open(&transcript_cache_path()?)?;

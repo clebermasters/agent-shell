@@ -126,8 +126,8 @@ class MacInstaller:
             raise ValueError('Automatic LAN DNS/certbot provisioning is currently Linux-specific; supply an existing TLS pair on macOS. No files changed')
         if self.args.agents not in ('installed', 'none'):
             names = self.args.agents.split(',')
-            if any(name not in ('codex', 'claude', 'opencode') for name in names):
-                raise ValueError('--agents must be installed, none, or a comma-separated subset of codex,claude,opencode')
+            if any(name not in ('codex', 'claude', 'opencode', 'agy') for name in names):
+                raise ValueError('--agents must be installed, none, or a comma-separated subset of codex,claude,opencode,agy')
 
     def settings(self):
         previous = runtime_module.dotenv(self.runtime)
@@ -166,7 +166,7 @@ class MacInstaller:
 
     def check(self):
         report = self.plan()
-        commands = ['brew', 'tmux', 'python3', 'cargo', 'openssl', 'codex', 'claude', 'opencode']
+        commands = ['brew', 'tmux', 'python3', 'cargo', 'openssl', 'codex', 'claude', 'opencode', 'agy']
         report['commands'] = {name: shutil.which(name, path=self.environment['PATH']) is not None for name in commands}
         report['commandLineTools'] = self.run(['xcode-select', '-p'], check=False, capture_output=True).returncode == 0 if sys.platform == 'darwin' else False
         return report
@@ -361,7 +361,7 @@ class MacInstaller:
 
     def configure_agents(self, settings):
         if self.args.agents == 'none': return
-        selected = [name for name in ('codex', 'claude', 'opencode') if shutil.which(name, path=self.environment['PATH'])]
+        selected = [name for name in ('codex', 'claude', 'opencode', 'agy') if shutil.which(name, path=self.environment['PATH'])]
         if self.args.agents != 'installed':
             requested = self.args.agents.split(',')
             missing = set(requested) - set(selected)
@@ -369,7 +369,7 @@ class MacInstaller:
             selected = requested
         if not selected: return
         for name in ['.codex/hooks.json', '.codex/config.toml', '.claude/settings.json', '.claude.json',
-                     '.config/opencode/opencode.json', '.config/opencode/opencode.jsonc',
+                     '.config/opencode/opencode.json', '.config/opencode/opencode.jsonc', '.gemini/config/mcp_config.json',
                      '.config/agentshell/chat-binding-hook.json', '.config/agentshell/interactive-ui.json']:
             self.remember(self.home / name)
         environment = dict(self.environment, **settings)
@@ -444,7 +444,7 @@ def arguments(argv=None):
     parser.add_argument('--check', action='store_true'); parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--skip-dependencies', action='store_true'); parser.add_argument('--no-start', action='store_true')
     parser.add_argument('--no-tls', action='store_true'); parser.add_argument('--binary', type=Path)
-    parser.add_argument('--agents', default='installed', help='Reuse/configure installed CLIs; installed, none, or codex,claude,opencode')
+    parser.add_argument('--agents', default='installed', help='Reuse installed CLIs. Choose installed, none, or a comma-separated subset of codex,claude,opencode,agy')
     parser.add_argument('--with-browser', choices=['none', 'native-macos', 'native', 'kasmvnc', 'vm'], default='none')
     parser.add_argument('--browser-origin', help='Trusted HTTPS origin for the native Chrome viewer')
     parser.add_argument('--lan-hostname', help='Linux provisioning option; rejected before changes on macOS')

@@ -10,6 +10,8 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
+mod agy;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PaneIdentity {
@@ -72,6 +74,7 @@ impl ChatBinding {
     }
     pub fn ai_tool(&self) -> crate::chat_log::AiTool {
         match self.pane.tool.as_str() {
+            "agy" => crate::chat_log::AiTool::Agy,
             "claude" => crate::chat_log::AiTool::Claude,
             "opencode" => crate::chat_log::AiTool::OpencodeBound {
                 session_id: self.conversation_id.clone(),
@@ -272,6 +275,14 @@ impl BindingStore {
                     && process_start(existing.pane.agent_pid).ok()
                         == Some(existing.pane.agent_start)
                 {
+                    // A still-running Antigravity process can release a
+                    // conversation and another terminal can resume it.
+                    if existing.pane.tool == "agy"
+                        && !exact_open_transcript(&existing.pane)?
+                            .is_some_and(|active| active.id == binding.conversation_id)
+                    {
+                        continue;
+                    }
                     bail!("This conversation is already linked to another live terminal. Start or fork a separate conversation");
                 }
             }
@@ -290,6 +301,37 @@ impl BindingStore {
         mut pane: PaneIdentity,
         terminal_id: Option<String>,
     ) -> Result<BindingState> {
+        if pane.tool == "agy" {
+            // The same TUI process can switch or close conversations. Require
+            // its current presence descriptor on every lookup, including sends.
+            if let Some(conversation) = exact_open_transcript(&pane)? {
+                let cached = self.current(&pane)?.filter(|b| {
+                    b.pane == pane
+                        && b.conversation_id == conversation.id
+                        && b.source == "process"
+                        && b.transcript_path == conversation.path
+                });
+                let binding = match cached {
+                    Some(binding) => {
+                        remember(&binding);
+                        binding
+                    }
+                    None => self.bind(pane.clone(), conversation, "process")?,
+                };
+                return Ok(bound_state(pane, binding));
+            }
+            if let Ok(mut sources) = SOURCES.get_or_init(Mutex::default).lock() {
+                sources.remove(&pane.root_pid);
+            }
+            return Ok(BindingState {
+                status: "required".into(),
+                pane_token: pane.token(),
+                tool: pane.tool,
+                binding: None,
+                candidates: vec![],
+                detail: "Start or resume a conversation in the Antigravity terminal to link this chat".into(),
+            });
+        }
         if let Some(id) = terminal_id {
             // The terminal's current native ID takes precedence over cached hooks,
             // including when /new or /resume changes threads in the same TUI process.
@@ -741,6 +783,7 @@ fn native_tool(pid: u32) -> Option<String> {
 
 fn native_tool_name(name: &str) -> Option<String> {
     match name.trim() {
+        "agy" => Some("agy".into()),
         "codex" => Some("codex".into()),
         "claude" => Some("claude".into()),
         "opencode" => Some("opencode".into()),
@@ -902,6 +945,8 @@ fn home() -> Result<PathBuf> {
 pub fn conversation_candidates(tool: &str, cwd: &str) -> Result<Vec<Conversation>> {
     let home = home()?;
     let mut result = match tool {
+        // Antigravity's presence descriptor identifies the active transcript.
+        "agy" => vec![],
         "codex" => {
             let path = home.join(".codex/state_5.sqlite");
             let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -988,6 +1033,9 @@ pub fn conversation_by_id(
         bail!("Invalid conversation identifier");
     }
     let home = home()?;
+    if tool == "agy" {
+        bail!("Resume the conversation in the Antigravity terminal to link it");
+    }
     if tool == "codex" && home.join(".codex/state_5.sqlite").exists() {
         let conn = Connection::open_with_flags(
             home.join(".codex/state_5.sqlite"),
@@ -1083,6 +1131,11 @@ pub(crate) fn exact_open_transcript(pane: &PaneIdentity) -> Result<Option<Conver
         Ok(paths) => paths,
         Err(_) => return Ok(None),
     };
+    if pane.tool == "agy" {
+        let conversation = agy::from_open_files(&home()?.join(".gemini/antigravity-cli"), &paths)?;
+        return Ok(conversation
+            .filter(|_| process_start(pane.agent_pid).ok() == Some(pane.agent_start)));
+    }
     let mut candidates = Vec::new();
     for path in paths {
         let text = path.to_string_lossy();
@@ -1414,6 +1467,21 @@ mod tests {
             store.current(&pane("%2")).unwrap().unwrap().conversation_id,
             "conversation-B"
         );
+    }
+
+    #[test]
+    fn agy_does_not_reuse_a_cached_binding_without_live_presence() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(&dir);
+        let mut pane = pane("%3");
+        pane.tool = "agy".into();
+        let mut stale = conversation("stale-identifier");
+        stale.tool = "agy".into();
+        store.bind(pane.clone(), stale, "process").unwrap();
+        let state = store.resolve_pane(pane).unwrap();
+        assert_eq!(state.status, "required");
+        assert!(state.binding.is_none());
+        assert!(state.candidates.is_empty());
     }
 
     #[test]

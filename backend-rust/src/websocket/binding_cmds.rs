@@ -147,7 +147,9 @@ pub(crate) async fn start_watch(
                             .filter(|b| b.transcript_path.as_os_str().is_empty())
                         {
                             let cleared=clears.get_cleared_at(binding.storage_key(),0).await;
-                            let page=match read_bound_page(events.clone(),binding.clone(),cleared,0,limit.unwrap_or(30)).await{Ok(page)=>page,Err(_)=>return};
+                            let Ok((page, history_revision)) =
+                                read_bound_head(&events, binding, cleared, limit.unwrap_or(30)).await
+                            else { return };
                             let _ = send_bound(
                                 &tx,
                                 ServerMessage::ChatHistory {
@@ -155,6 +157,7 @@ pub(crate) async fn start_watch(
                                     window_index: window,
                                     messages: page.messages,
                                     tool: Some(binding.ai_tool()),
+                                    history_revision,
                                     has_more: page.has_more,
                                     total_count: page.total,
                                     context_window_usage: None,
@@ -165,7 +168,12 @@ pub(crate) async fn start_watch(
                             .await;
                         }
                         if resolved.status == "required" {
-                            let _ = send_message(&tx, ServerMessage::ChatLogError { error: "Waiting for this terminal's conversation to be identified automatically. Start or resume the agent in the terminal if it has not reported a conversation yet".into() }).await;
+                            let detail = if resolved.tool == "agy" {
+                                &resolved.detail
+                            } else {
+                                "Waiting for this terminal's conversation to be identified automatically. Start or resume the agent in the terminal if it has not reported a conversation yet"
+                            };
+                            let _ = send_message(&tx, ServerMessage::ChatLogError { error: detail.into() }).await;
                         }
                         last = signature;
                     }
@@ -215,7 +223,7 @@ pub(crate) async fn start_watch(
                                             context_window_usage,
                                             model_name,
                                         } => {
-                                            let page=match read_bound_page(events.clone(),binding.clone(),cleared,0,limit.unwrap_or(30)).await {
+                                            let (page, history_revision) = match read_bound_head(&events, &binding, cleared, limit.unwrap_or(30)).await {
                                                 Ok(page)=>page,
                                                 Err(error)=>{let _=send_bound(&tx,ServerMessage::ChatLogError{error:error.to_string()},&binding).await;return;}
                                             };
@@ -224,6 +232,7 @@ pub(crate) async fn start_watch(
                                                 window_index: window,
                                                 messages: page.messages,
                                                 tool: Some(tool),
+                                                history_revision,
                                                 has_more: page.has_more,
                                                 total_count: page.total,
                                                 context_window_usage,
@@ -520,6 +529,21 @@ async fn handle_untracked(
     Ok(())
 }
 
+async fn read_bound_head(
+    events: &Arc<crate::chat_event_store::ChatEventStore>,
+    binding: &ChatBinding,
+    cleared: Option<i64>,
+    limit: usize,
+) -> Result<(crate::history::Page, Option<String>)> {
+    let revision = || super::chat_cmds::bound_sync_revision(events, binding, cleared);
+    let before = (binding.pane.tool == "agy").then(revision).transpose()?;
+    let page = read_bound_page(events.clone(), binding.clone(), cleared, 0, limit).await?;
+    // Only certify the Android offline archive if the native file and overlay
+    // remained at the same revision throughout the page read.
+    let stable = before.filter(|before| revision().as_ref().ok() == Some(before));
+    Ok((page, stable))
+}
+
 async fn read_bound_page(events:Arc<crate::chat_event_store::ChatEventStore>,binding:ChatBinding,cleared:Option<i64>,offset:usize,limit:usize)->Result<crate::history::Page>{
     let cached=crate::history::cached_bound_page(&events,&binding,cleared,offset,limit)?;
     if let Some(page)=cached{return Ok(page);}
@@ -600,6 +624,7 @@ async fn run_kiro(
             window_index: window,
             messages: page.messages,
             tool: Some(binding.ai_tool()),
+            history_revision: None,
             has_more: page.has_more,
             total_count: page.total,
             context_window_usage: None,

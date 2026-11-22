@@ -158,6 +158,26 @@ struct HistorySource {
     cleared: Option<i64>,
     binding: Option<crate::chat_binding::ChatBinding>,
 }
+
+pub(super) fn bound_sync_revision(
+    events: &crate::chat_event_store::ChatEventStore,
+    binding: &crate::chat_binding::ChatBinding,
+    cleared: Option<i64>,
+) -> anyhow::Result<String> {
+    let source = if binding.transcript_path.as_os_str().is_empty() || binding.pane.tool == "kiro" {
+        "overlay".to_owned()
+    } else if binding.pane.tool == "opencode" {
+        opencode_revision(&binding.transcript_path, &binding.conversation_id)?
+    } else {
+        crate::history::fingerprint(&binding.transcript_path)?
+    };
+    Ok(format!(
+        "sync-v2:{}:{source}:{}:{cleared:?}",
+        binding.conversation_key,
+        events.history_revision(binding.storage_key(), 0)?
+    ))
+}
+
 async fn history_source(
     app: &Arc<AppState>,
     session: &str,
@@ -192,24 +212,11 @@ async fn history_source(
         let binding = resolution
             .binding
             .ok_or_else(|| anyhow::anyhow!("Conversation binding is unavailable"))?;
-        let source =
-            if binding.transcript_path.as_os_str().is_empty() || binding.pane.tool == "kiro" {
-                "overlay".to_owned()
-            } else if binding.pane.tool == "opencode" {
-                opencode_revision(&binding.transcript_path, &binding.conversation_id)?
-            } else {
-                crate::history::fingerprint(&binding.transcript_path)?
-            };
         let cleared = app
             .chat_clear_store
             .get_cleared_at(binding.storage_key(), 0)
             .await;
-        let revision = format!(
-            "sync-v2:{}:{source}:{}:{cleared:?}",
-            binding.conversation_key,
-            app.chat_event_store
-                .history_revision(binding.storage_key(), 0)?
-        );
+        let revision = bound_sync_revision(&app.chat_event_store, &binding, cleared)?;
         Ok(HistorySource {
             revision,
             cleared,
@@ -493,6 +500,7 @@ pub(crate) async fn handle(
                                     window_index,
                                     messages,
                                     tool: Some(crate::chat_log::AiTool::Codex),
+                                    history_revision: None,
                                     has_more,
                                     total_count,
                                     context_window_usage: None,
@@ -568,6 +576,7 @@ pub(crate) async fn handle(
                             cwd: std::path::PathBuf::from("/"),
                             pid: 0,
                         }),
+                        history_revision: None,
                         has_more,
                         total_count,
                         context_window_usage: None,
@@ -937,6 +946,7 @@ pub(crate) async fn handle(
                                         window_index: window_index_owned,
                                         messages: merged_messages,
                                         tool: Some(tool),
+                                        history_revision: None,
                                         has_more,
                                         total_count,
                                         context_window_usage,

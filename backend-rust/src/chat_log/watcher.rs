@@ -6,6 +6,7 @@ use std::process::Stdio;
 
 use anyhow::{bail, Context, Result};
 use notify::{RecursiveMode, Watcher};
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -23,7 +24,15 @@ use super::{
 pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(PathBuf, AiTool)> {
     let target = format!("{session_name}:{window_index}");
     let pane = crate::chat_binding::inspect_pane(&target).await?;
-    if let Some((_, path, tool, _)) = crate::chat_binding::registered_source(pane.root_pid) {
+    if pane.tool == "agy" {
+        let active = crate::chat_binding::exact_open_transcript(&pane)?
+            .filter(|c| !c.path.as_os_str().is_empty())
+            .context("Waiting for this Antigravity conversation's transcript")?;
+        return Ok((active.path, AiTool::Agy));
+    }
+    if let Some((_, path, tool, _)) = crate::chat_binding::registered_source(pane.root_pid)
+        .filter(|(pid, _, tool, _)| *pid == pane.agent_pid && tool == &pane.tool)
+    {
         return Ok((path, if tool == "claude" { AiTool::Claude } else { AiTool::Codex }));
     }
     if let Some(conversation) = crate::chat_binding::exact_open_transcript(&pane)? {
@@ -34,7 +43,7 @@ pub async fn detect_log_file(session_name: &str, window_index: u32) -> Result<(P
 
 /// Detect which AI tool (if any) is running in any pane of the given tmux session.
 /// Active panes are prioritized first.
-/// Returns a short string identifier: "claude", "codex", "opencode", or "kiro".
+/// Returns the short provider identifier used in session list messages.
 pub async fn detect_tool_name(session_name: &str) -> Option<String> {
     detect_tool_name_checked(session_name).await.ok().flatten()
 }
@@ -42,20 +51,20 @@ pub async fn detect_tool_name(session_name: &str) -> Option<String> {
 /// Distinguish a successful scan with no agent from a failed process/pane scan.
 /// Monitor refreshes must not report a transient collection error as an agent exit.
 pub async fn detect_tool_name_checked(session_name: &str) -> Result<Option<String>> {
-    let pane_pids = list_session_panes(session_name).await?;
-    tokio::task::spawn_blocking(move || detect_tool_name_from_pane_pids(pane_pids))
+    let panes = list_session_panes(session_name).await?;
+    tokio::task::spawn_blocking(move || detect_tool_name_from_panes(panes))
         .await
         .context("failed to inspect tmux pane processes")
 }
 
-async fn list_session_panes(session_name: &str) -> Result<Vec<u32>> {
+async fn list_session_panes(session_name: &str) -> Result<Vec<(u32, String)>> {
     let output = Command::new("tmux")
         .args([
             "list-panes",
             "-t",
             session_name,
             "-F",
-            "#{pane_active}:#{pane_pid}",
+            "#{pane_active}:#{pane_pid}:#{pane_current_command}",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -72,15 +81,16 @@ async fn list_session_panes(session_name: &str) -> Result<Vec<u32>> {
     let mut inactive = Vec::new();
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let mut parts = line.split(':');
+        let mut parts = line.splitn(3, ':');
         let is_active = parts.next().unwrap_or("");
         let pid = parts.next().and_then(|pid| pid.trim().parse::<u32>().ok());
+        let command = parts.next().unwrap_or_default().to_owned();
 
         if let Some(pid) = pid {
             if is_active == "1" {
-                active.push(pid);
+                active.push((pid, command));
             } else {
-                inactive.push(pid);
+                inactive.push((pid, command));
             }
         }
     }
@@ -93,9 +103,12 @@ async fn list_session_panes(session_name: &str) -> Result<Vec<u32>> {
     Ok(active)
 }
 
-fn detect_tool_name_from_pane_pids(mut pane_pids: Vec<u32>) -> Option<String> {
-    pane_pids.retain(|pid| *pid > 0);
-    for pane_pid in pane_pids {
+fn detect_tool_name_from_panes(panes: Vec<(u32, String)>) -> Option<String> {
+    for (pane_pid, foreground) in panes.into_iter().filter(|(pid, _)| *pid > 0) {
+        // An interactive shell remains the root PID after it starts an agent.
+        if let Some(tool) = detect_tool_from_name(&foreground) {
+            return Some(tool.to_owned());
+        }
         if let Some((tool_name, _)) = detect_tool_for_pid(pane_pid) {
             return Some(tool_name);
         }
@@ -154,6 +167,10 @@ async fn watch_log_file_inner(
     limit: Option<usize>,
     use_notifications: bool,
 ) -> Result<LogWatcher> {
+    if tool == AiTool::Agy {
+        File::open(path).context("Waiting for the Antigravity transcript")?;
+        return Ok(watch_agy(path.to_owned(), event_tx, cleared_at, limit.unwrap_or(30)));
+    }
     if let AiTool::OpencodeBound { session_id } = &tool {
         return watch_opencode_session(path, session_id, event_tx, cleared_at, limit).await;
     }
@@ -302,6 +319,158 @@ async fn watch_log_file_inner(
     });
 
     Ok(match watcher { Some(watcher) => LogWatcher::File(watcher,task), None => LogWatcher::Task(task) })
+}
+
+#[derive(Clone)]
+struct AgyCursor {
+    revision: String,
+    offset: u64,
+    hash: Sha256,
+    more: bool,
+}
+
+/// Antigravity materializes JSONL snapshots. Even a longer file can contain an
+/// edited earlier step. Keep a digest of precisely the bytes already delivered.
+fn read_agy_update(
+    path: &Path,
+    revision: String,
+    previous: Option<&AgyCursor>,
+    cleared_at: Option<i64>,
+    limit: usize,
+) -> Result<Option<(AgyCursor, Vec<ChatLogEvent>)>> {
+    use std::io::{copy, Read};
+
+    let mut file = File::open(path)?;
+    let mut hash = Sha256::new();
+    let append = if let Some(old) = previous {
+        if old.revision == revision {
+            // Continuation of a bounded batch from the same snapshot.
+            file.seek(SeekFrom::Start(old.offset))?;
+            hash = old.hash.clone();
+            true
+        } else {
+            copy(&mut (&mut file).take(old.offset), &mut hash)? == old.offset
+                && hash.clone().finalize() == old.hash.clone().finalize()
+        }
+    } else {
+        false
+    };
+    let start = file.stream_position()?;
+    let (offset, more, events) = if append {
+        let mut offset = start;
+        let messages = read_new_lines(path, &mut offset, &AiTool::Agy)?;
+        let more = messages.len() == crate::history::LIVE_BATCH;
+        let events = messages
+            .into_iter()
+            .filter(|message| {
+                cleared_at.is_none_or(|cutoff| {
+                    message.timestamp.map(|time| time.timestamp_millis()).unwrap_or(0) > cutoff
+                })
+            })
+            .map(|message| ChatLogEvent::NewMessage { message })
+            .collect();
+        (offset, more, events)
+    } else {
+        let page = crate::history::transcript_page(path, &AiTool::Agy, cleared_at, 0, limit)?;
+        let offset = crate::history::transcript_offset(path, &AiTool::Agy)?;
+        file.rewind()?;
+        hash = Sha256::new();
+        (
+            offset,
+            false,
+            vec![ChatLogEvent::History {
+                messages: page.messages,
+                tool: AiTool::Agy,
+                has_more: page.has_more,
+                total_count: page.total,
+                context_window_usage: None,
+                model_name: None,
+            }],
+        )
+    };
+    let start = file.stream_position()?;
+    let Some(bytes) = offset.checked_sub(start) else {
+        return Ok(None);
+    };
+    if copy(&mut file.take(bytes), &mut hash)? != bytes
+        || crate::history::fingerprint(path)? != revision
+    {
+        // Discard a mixed observation. Retry against the next stable snapshot.
+        return Ok(None);
+    }
+    Ok(Some((
+        AgyCursor {
+            revision,
+            offset,
+            hash,
+            more,
+        },
+        events,
+    )))
+}
+
+fn watch_agy(
+    path: PathBuf,
+    event_tx: mpsc::Sender<ChatLogEvent>,
+    cleared_at: Option<i64>,
+    limit: usize,
+) -> LogWatcher {
+    let task = tokio::spawn(async move {
+        let mut cursor: Option<AgyCursor> = None;
+        let mut immediate = false;
+        let mut poll = tokio::time::interval(std::time::Duration::from_millis(500));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            if !immediate {
+                tokio::select! { _ = event_tx.closed() => return, _ = poll.tick() => {} }
+            }
+            immediate = false;
+            let Ok(revision) = crate::history::fingerprint(&path) else {
+                continue;
+            };
+            if cursor
+                .as_ref()
+                .is_some_and(|old| old.revision == revision && !old.more)
+            {
+                continue;
+            }
+            let Ok(permit) = crate::history::permit().await else {
+                return;
+            };
+            let file = path.clone();
+            let previous = cursor.clone();
+            let update = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                read_agy_update(&file, revision, previous.as_ref(), cleared_at, limit)
+            })
+            .await;
+            match update {
+                Ok(Ok(Some((next, events)))) => {
+                    for event in events {
+                        if event_tx.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                    immediate = next.more;
+                    cursor = Some(next);
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(error)) => {
+                    if event_tx
+                        .send(ChatLogEvent::Error {
+                            error: error.to_string(),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    });
+    LogWatcher::Task(task)
 }
 
 async fn watch_opencode_db(
@@ -475,6 +644,7 @@ fn read_new_lines(path:&Path,pos:&mut u64,tool:&AiTool)->Result<Vec<ChatMessage>
 /// Dispatch a single line to the appropriate parser.
 fn parse_line(line: &str, tool: &AiTool) -> Option<ChatMessage> {
     match tool {
+        AiTool::Agy => super::agy_parser::parse_line(line),
         AiTool::Claude => claude_parser::parse_line(line),
         AiTool::Codex => codex_parser::parse_line(line),
         AiTool::Opencode { .. } | AiTool::OpencodeBound { .. } => None, // Opencode parser is handled by DB polling
@@ -545,6 +715,7 @@ fn process_cmdline(pid: u32) -> Option<String> {
 
 fn detect_tool_from_name(name: &str) -> Option<&'static str> {
     match name.trim() {
+        "agy" => Some("agy"),
         "claude" => Some("claude"),
         "codex" => Some("codex"),
         "opencode" => Some("opencode"),
@@ -975,6 +1146,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agy_snapshot_detects_revisions_and_keeps_pure_appends_incremental() {
+        use super::super::ContentBlock;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript_full.jsonl");
+        let step = |text| {
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "source": "MODEL", "type": "PLANNER_RESPONSE", "content": text
+                })
+            )
+        };
+        let replace = |text: &str| {
+            let temp = dir.path().join("next");
+            std::fs::write(&temp, text).unwrap();
+            std::fs::rename(temp, &path).unwrap();
+        };
+        let texts = |event| {
+            let ChatLogEvent::History { messages, .. } = event else {
+                panic!("expected refreshed history")
+            };
+            messages
+                .into_iter()
+                .map(|message| match &message.blocks[..] {
+                    [ContentBlock::Text { text }] => text.clone(),
+                    _ => panic!("expected text"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = step("draft");
+        let second = step("next");
+        replace(&first);
+        let (tx, mut rx) = mpsc::channel(32);
+        let _watcher = watch_log_file(&path, AiTool::Agy, tx, None, Some(30))
+            .await
+            .unwrap();
+        async fn event(rx: &mut mpsc::Receiver<ChatLogEvent>) -> ChatLogEvent {
+            tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        }
+        let new_text = |event| {
+            let ChatLogEvent::NewMessage { message } = event else {
+                panic!("expected one appended message")
+            };
+            match &message.blocks[..] {
+                [ContentBlock::Text { text }] => text.clone(),
+                _ => panic!("expected text"),
+            }
+        };
+        assert_eq!(texts(event(&mut rx).await), ["draft"]);
+        replace(&first);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(650), rx.recv())
+                .await
+                .is_err()
+        );
+        // An atomic replacement preserves earlier bytes when it appends a turn.
+        replace(&(first.clone() + &second));
+        assert_eq!(new_text(event(&mut rx).await), "next");
+        assert_no_tail_duplicate(&mut rx, std::time::Duration::from_millis(550)).await;
+        // A growing rewrite of the same inode changes a previously seen step.
+        let edited = step("final answer with more detail");
+        std::fs::write(&path, edited.clone() + &second).unwrap();
+        assert_eq!(
+            texts(event(&mut rx).await),
+            ["final answer with more detail", "next"]
+        );
+        // Truncating also removes the stale step from the authoritative page.
+        replace(&edited);
+        assert_eq!(
+            texts(event(&mut rx).await),
+            ["final answer with more detail"]
+        );
+        replace(&(edited + &step("last")));
+        assert_eq!(new_text(event(&mut rx).await), "last");
+    }
+
+    #[tokio::test]
     async fn poll_only_tail_recovers_appends_and_partial_lines_without_duplicates() {
         use std::io::Write;
         let mut file = tempfile::NamedTempFile::new().unwrap();
@@ -1255,6 +1506,13 @@ mod tests {
         let mut reader = std::io::BufReader::new(file);
         let messages = read_all_messages(&mut reader, &AiTool::Claude);
         assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn agy_badge_uses_the_foreground_cli_in_a_shell_pane() {
+        assert_eq!(detect_tool_name_from_panes(vec![(1, "agy".into())]).as_deref(), Some("agy"));
+        assert_eq!(detect_tool_from_name("antigravity"), None);
+        assert_eq!(detect_tool_from_cmdline("echo agy"), None);
     }
 
     #[test]

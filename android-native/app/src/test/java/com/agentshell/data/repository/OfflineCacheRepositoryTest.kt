@@ -115,6 +115,33 @@ class OfflineCacheRepositoryTest {
         assertEquals(listOf(message("different", 4)), repo.history(target)?.messages)
     }
 
+    @Test fun agyHeadRetainsVerifiedOfflinePagesAndDiscardsRewoundRows() = runBlocking {
+        val db = database()
+        val dao = db.offlineCacheDao()
+        val repo = repository(db)
+        val saved = (0..5).map { message("old$it", it.toLong()) }
+        repo.saveHistory(target, saved, true, "conversation", "agy")
+        saved.forEachIndexed { position, row ->
+            dao.assignSyncedMessage(target.key, row.id, row.id, position, "v1")
+        }
+        dao.saveHistorySync(CachedHistorySync(target.key, "v1", offset = saved.size, complete = true, keyed = true))
+        assertTrue(repo.saveAgyHistoryHead(target, saved.takeLast(2), false, "conversation", "v1"))
+        assertEquals(saved, repo.history(target)?.messages)
+
+        repo.saveHistoryAsync(target, saved + message("pending", 6), false, "conversation", "agy")
+        val head = listOf(saved[1], message("new branch", 7))
+        assertFalse(repo.saveAgyHistoryHead(target, head, false, "conversation", "v2"))
+        val refreshed = repo.history(target)!!
+        assertEquals(head, refreshed.messages)
+        assertFalse(refreshed.conversation.complete)
+        assertEquals(CachedHistorySync(target.key, "v2"), dao.historySync(target.key))
+        val older = listOf(saved.first())
+        repo.saveHistoryAsync(target, older, false, "conversation", "agy", beforeMessageId = head.first().id)
+        withTimeout(5_000) {
+            while (repo.history(target)?.messages != older + head) delay(10)
+        }
+    }
+
     @Test fun authoritativeEmptyHistoryClearsMessagesWithoutDeletingOtherServers() = runTest {
         val db = database()
         val repo = repository(db)

@@ -1047,6 +1047,8 @@ pub enum ServerMessage {
         window_index: u32,
         messages: Vec<crate::chat_log::ChatMessage>,
         tool: Option<crate::chat_log::AiTool>,
+        #[serde(rename = "historyRevision", skip_serializing_if = "Option::is_none")]
+        history_revision: Option<String>,
         #[serde(rename = "hasMore")]
         has_more: bool,
         #[serde(rename = "totalCount")]
@@ -1672,6 +1674,7 @@ mod tests {
             window_index: 0,
             messages: vec![],
             tool: None,
+            history_revision: None,
             has_more: false,
             total_count: 0,
             context_window_usage: None,

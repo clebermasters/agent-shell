@@ -118,6 +118,9 @@ abstract class OfflineCacheDao {
     @Query("SELECT * FROM cached_history_sync WHERE targetKey = :key")
     abstract suspend fun historySync(key: String): CachedHistorySync?
 
+    @Query("DELETE FROM cached_history_sync WHERE targetKey = :key")
+    abstract suspend fun deleteHistorySync(key: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun saveHistorySync(state: CachedHistorySync)
 

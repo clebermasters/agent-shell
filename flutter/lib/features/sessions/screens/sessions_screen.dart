@@ -584,6 +584,8 @@ class _SessionTile extends StatelessWidget {
         return Colors.blue;
       case 'codex':
         return Colors.purple;
+      case 'agy':
+        return Colors.cyan;
       case 'opencode':
         return Colors.teal;
       case 'kiro':

@@ -57,6 +57,7 @@ pub(crate) fn name(pid: u32) -> Option<String> {
 pub(crate) fn agent_tool(pid: u32) -> Option<String> {
     let observed = name(pid)?;
     let known = match observed.as_str() {
+        "agy" => Some("agy"),
         "claude" => Some("claude"),
         "codex" => Some("codex"),
         "opencode" => Some("opencode"),

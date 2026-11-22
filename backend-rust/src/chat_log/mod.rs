@@ -1,3 +1,4 @@
+pub mod agy_parser;
 pub mod claude_parser;
 pub mod codex_parser;
 pub mod kiro_parser;
@@ -74,6 +75,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum AiTool {
+    Agy,
     Claude,
     Codex,
     Opencode {

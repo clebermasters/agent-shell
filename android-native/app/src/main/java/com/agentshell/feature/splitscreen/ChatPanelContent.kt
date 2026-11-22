@@ -373,21 +373,33 @@ fun ChatPanelContent(
                     history.pagingVersion += 1
                     history.loadingOlder = false
                     history.oldestCachedPosition = null
-                    val previousMessages = messages.toList()
+                    val tool = message["tool"] as? String ?: bindingState?.tool
+                    val replaceHead = tool == "agy"
+                    val previousMessages = if (replaceHead) emptyList() else messages.toList()
                     val incomingIds = parsed.mapTo(hashSetOf()) { it.id }
                     val overlaps = previousMessages.any { it.id in incomingIds }
                     history.remoteHasMore = message["hasMore"] == true
+                    if (replaceHead) {
+                        history.hasOlderCachedMessages = false
+                        history.cacheComplete = false
+                    }
                     history.remoteGapIds = if (history.remoteHasMore && previousMessages.isNotEmpty() && !overlaps) previousMessages.mapTo(hashSetOf()) { it.id } else emptySet()
                     if (!history.remoteHasMore) { history.hasOlderCachedMessages = false; history.oldestCachedPosition = null; history.cacheComplete = true }
-                    history.remoteOffset = remoteChatHistoryOffset(parsed.size, com.agentshell.data.repository.mergeCachedMessages(previousMessages, parsed).size, history.cacheComplete, overlaps)
+                    val merged = if (history.remoteHasMore) com.agentshell.data.repository.mergeCachedMessages(previousMessages, parsed) else parsed
+                    history.remoteOffset = remoteChatHistoryOffset(parsed.size, merged.size, history.cacheComplete, overlaps)
                     history.cacheDirty = false
                     withContext(Dispatchers.Main) {
                         messages.clear()
-                        messages.addAll(if (message["hasMore"] == true) com.agentshell.data.repository.mergeCachedMessages(previousMessages, parsed) else parsed)
+                        messages.addAll(merged)
                     }
                     target?.let {
                         activityRepository.history(it, parsed)
-                        offlineCache.saveHistoryAsync(it, parsed, message["hasMore"] != true, history.cachedConversationKey, message["tool"] as? String)
+                        if (replaceHead) {
+                            history.cacheComplete = offlineCache.saveAgyHistoryHead(it, parsed, !history.remoteHasMore, history.cachedConversationKey, message["historyRevision"] as? String)
+                            history.hasOlderCachedMessages = history.remoteHasMore && history.cacheComplete
+                        } else {
+                            offlineCache.saveHistoryAsync(it, parsed, !history.remoteHasMore, history.cachedConversationKey, tool)
+                        }
                     }
                     historyReady = true
                 }
@@ -400,11 +412,12 @@ fun ChatPanelContent(
                     val previousRemoteOffset = history.remoteOffset
                     history.remoteHasMore = message["hasMore"] == true
                     if (parsed.any { it.id in history.remoteGapIds }) history.remoteGapIds = emptySet()
+                    val beforeMessageId = if (bindingState?.tool == "agy") messages.firstOrNull()?.id else null
                     val merged = com.agentshell.data.repository.mergeCachedMessages(messages.toList(), parsed)
                     messages.clear()
                     messages.addAll(merged)
                     history.remoteOffset = advanceRemoteChatHistoryOffset(previousRemoteOffset, parsed.size, merged.size, history.cacheComplete && history.remoteGapIds.isEmpty())
-                    target?.let { offlineCache.saveHistoryAsync(it, parsed, false, history.cachedConversationKey) }
+                    target?.let { offlineCache.saveHistoryAsync(it, parsed, false, history.cachedConversationKey, beforeMessageId = beforeMessageId) }
                     history.loadingOlder = false
                 }
                 "chat-log-cleared" -> {

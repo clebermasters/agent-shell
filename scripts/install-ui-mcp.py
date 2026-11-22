@@ -53,7 +53,7 @@ def server_environment(script,config):
     return environment
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--script',type=Path,required=True);parser.add_argument('--url',default='http://127.0.0.1:4010');parser.add_argument('--user-home',type=Path,default=Path.home());parser.add_argument('--tools',default='codex,claude,opencode');parser.add_argument('--python');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--script',type=Path,required=True);parser.add_argument('--url',default='http://127.0.0.1:4010');parser.add_argument('--user-home',type=Path,default=Path.home());parser.add_argument('--tools',default='codex,claude,opencode,agy');parser.add_argument('--python');args=parser.parse_args()
     token=os.environ.get('AUTH_TOKEN')
     if not token:raise ValueError('AUTH_TOKEN is required')
     script=str(args.script.resolve());config=args.user_home/'.config/agentshell/interactive-ui.json'
@@ -71,6 +71,11 @@ def main():
         elif tool=='claude':
             path=args.user_home/'.claude.json';old=json.loads(path.read_text()) if path.exists() else {}
             write_json(path,merge_entry(old,'mcpServers',{'type':'stdio','command':command[0],'args':command[1:],'env':server_env}))
+        elif tool=='agy':
+            path=args.user_home/'.gemini/config/mcp_config.json'
+            # A fresh Antigravity profile can contain a zero-byte config.
+            old=json.loads(path.read_text().strip() or '{}') if path.exists() else {}
+            write_json(path,merge_entry(old,'mcpServers',{'command':command[0],'args':command[1:],'env':server_env,'disabled':False}))
         elif tool=='opencode':
             path=args.user_home/'.config/opencode/opencode.json'
             entry={'type':'local','command':command,'enabled':True,'environment':server_env}

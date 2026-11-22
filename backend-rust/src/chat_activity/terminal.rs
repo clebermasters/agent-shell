@@ -61,6 +61,8 @@ pub(super) fn activity_fingerprint(text: &str) -> u64 {
 
 // Restrict recognition to the active footer; transcript text is not a runtime status.
 pub(super) fn classify(text: &str, command: &str) -> Signal {
+    // Antigravity may pad the screen with blank lines below its inline UI.
+    let text = if command == "agy" { text.trim_end() } else { text };
     let lines: Vec<_> = text.lines().rev().take(12).map(str::trim).collect();
     for line in &lines {
         if is_failure_line(line) {
@@ -119,8 +121,12 @@ pub(super) fn classify(text: &str, command: &str) -> Signal {
         .iter()
         .any(|line| line.contains("context left") || line.contains("? for shortcuts"));
     let claude_prompt = command == "claude" && lines.iter().any(|line| line.starts_with('❯'));
+    let agy_prompt = command == "agy"
+        && lines.first().is_some_and(|line| line.starts_with("? for shortcuts"))
+        && lines.iter().any(|line| *line == ">");
     if (codex_prompt && codex_footer && matches!(command, "codex" | "node"))
         || (claude_prompt && codex_footer)
+        || agy_prompt
     {
         return signal(ActivityStatus::Idle, "Ready for a message");
     }
@@ -157,6 +163,13 @@ fn elapsed_ms(text: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn idle_agy_uses_its_visible_prompt_and_footer() {
+        let screen = format!("───\n>\n───\n? for shortcuts    auto · Gemini · medium{}", "\n".repeat(30));
+        assert_eq!(classify(&screen, "agy").status, ActivityStatus::Idle);
+        assert_eq!(classify(&screen, "bash").status, ActivityStatus::Unknown);
+        assert_eq!(classify(">\n───\nGenerating", "agy").status, ActivityStatus::Unknown);
+    }
     #[test]
     fn codex_timer_is_working_and_has_elapsed_time() {
         let s = classify(

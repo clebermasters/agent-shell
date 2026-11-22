@@ -692,12 +692,13 @@ private fun FavoriteDialog(
         }
     }
 
-    val presets = listOf("None", "claude", "codex", "opencode", "Custom")
+    val startupCommands = listOf("claude", "codex", "agy", "opencode")
+    val presets = listOf("None") + startupCommands + "Custom"
     var selectedPreset by rememberSaveable {
         mutableStateOf(
             when {
                 initialStartupCommand.isNullOrBlank() -> "None"
-                initialStartupCommand in listOf("claude", "codex", "opencode") -> initialStartupCommand
+                initialStartupCommand in startupCommands -> initialStartupCommand
                 else -> "Custom"
             }
         )
@@ -705,7 +706,7 @@ private fun FavoriteDialog(
     var customCommand by rememberSaveable {
         mutableStateOf(
             if (!initialStartupCommand.isNullOrBlank() &&
-                initialStartupCommand !in listOf("claude", "codex", "opencode")
+                initialStartupCommand !in startupCommands
             ) initialStartupCommand else ""
         )
     }
@@ -955,6 +956,7 @@ private fun TmuxSessionCard(
                 val dotColor = when (tool) {
                     "claude" -> Color(0xFFFF8C00)
                     "codex" -> Color(0xFF2196F3)
+                    "agy" -> Color(0xFF00BCD4)
                     "opencode" -> Color(0xFF4CAF50)
                     "kiro" -> Color(0xFF9C27B0)
                     else -> Color(0xFF9E9E9E)

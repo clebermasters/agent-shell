@@ -1432,8 +1432,24 @@ class ChatViewModel @Inject constructor(
                 modelName = model ?: it.modelName,
             )
         }
-        applyRemoteHistory(parsed, hasMore)
-        saveRemoteHistory(parsed, !hasMore, tool)
+        if (tool == "agy") {
+            cacheSaveJob?.cancel()
+            cacheDirty = false
+            resetHistoryPaging()
+            replaceMessages(parsed)
+            remoteLoadedCount = parsed.size
+            remoteHasMoreMessages = hasMore
+            val complete = readTarget?.let {
+                offlineCache.saveAgyHistoryHead(it, parsed, !hasMore, cachedConversationKey, message["historyRevision"] as? String)
+            } == true
+            if (generation != cacheLoadGeneration || expectedConversation != cachedConversationKey) return
+            cachedHistoryComplete = complete
+            hasOlderCachedMessages = hasMore && complete
+            _uiState.update { it.copy(hasMoreMessages = canLoadOlderMessages(), isLoadingMore = false) }
+        } else {
+            applyRemoteHistory(parsed, hasMore)
+            saveRemoteHistory(parsed, !hasMore, tool)
+        }
         reconcileReadHistory(parsed)
 
         when (tool) {
@@ -1465,10 +1481,11 @@ class ChatViewModel @Inject constructor(
         val previousRemoteOffset = remoteLoadedCount
         remoteHasMoreMessages = hasMore
         if (newMessages.any { it.id in remoteGapBoundaryIds }) remoteGapBoundaryIds = emptySet()
+        val beforeMessageId = if (state.detectedTool == "agy") state.messages.firstOrNull()?.id else null
         val merged = com.agentshell.data.repository.mergeCachedMessages(state.messages.toList(), newMessages)
         replaceMessages(merged)
         remoteLoadedCount = advanceRemoteChatHistoryOffset(previousRemoteOffset, newMessages.size, merged.size, cachedHistoryComplete && remoteGapBoundaryIds.isEmpty())
-        readTarget?.let { offlineCache.saveHistoryAsync(it, newMessages, false, cachedConversationKey, state.detectedTool) }
+        readTarget?.let { offlineCache.saveHistoryAsync(it, newMessages, false, cachedConversationKey, state.detectedTool, beforeMessageId) }
         _uiState.update { it.copy(readTrackingReady = false) }
         viewModelScope.launch {
             readTarget?.let { target ->

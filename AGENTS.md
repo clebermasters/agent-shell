@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **AgentShell** — a native Android app (Kotlin/Jetpack Compose) + Rust backend. The backend manages TMUX sessions, terminal I/O, chat history (SQLite), cron jobs, dotfiles, and bridges to AI agents (ACP/OpenCode). The Android app provides a terminal UI, chat interface, session manager, and real-time system monitoring over WebSocket. A legacy Flutter app exists in `flutter/` but the primary client is now `android-native/`.
 
+For Codex browser discovery failures or Chrome handoff issues on Cleber's workstation, use the global [browser-recovery skill](/home/cleber_rodrigues/.codex/skills/browser-recovery/SKILL.md). Record whether the failing session came through AgentShell or the desktop owner. Test from that same launch path after recovery.
+
 ## Build Commands
 
 ```bash

@@ -236,5 +236,65 @@ class ProfileSelectionTests(unittest.TestCase):
             self.assertEqual(runtime.config(path)['userDataDir'], value['userDataDir'])
             self.assertFalse((Path(value['runtimeDir'])/'native-switch.json').exists())
 
+    def resolve(self, path):
+        import contextlib, io, sys
+        output = io.StringIO()
+        with patch.object(sys, 'argv', ['browser-runtime.py', '--config', str(path), 'resolve-profile']), \
+                contextlib.redirect_stdout(output):
+            runtime.main()
+        return json.loads(output.getvalue())
+
+    def test_resolve_profile_reports_configured_root_without_runtime_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value, path = self.fixture(temporary)
+            result = self.resolve(path)
+            self.assertEqual(result, {'code': 'PROFILE_RESOLVED', 'userDataDir': value['userDataDir'],
+                                      'profileDirectory': 'Default', 'chromePid': None})
+            self.assertNotIn('synthetic-only', json.dumps(result))
+
+    def test_resolve_profile_follows_a_valid_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value, path = self.fixture(temporary); target = self.target(value)
+            with patch.object(runtime, 'start', return_value={'state': 'ready', 'runtimeGeneration': 'test-generation'}):
+                runtime.select_profile(value, path, target['id'])
+            result = self.resolve(path)
+            self.assertEqual(result['userDataDir'], str(Path(temporary)/'computer'))
+            self.assertEqual(result['profileDirectory'], 'Profile 2')
+
+    def test_resolve_profile_ignores_a_stale_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value, path = self.fixture(temporary)
+            runtime.write_json(Path(value['runtimeDir'])/'selected-profile.json', {
+                'sessionId': value['sessionId'], 'configuredUserDataDir': str(Path(temporary)/'old-root'),
+                'userDataDir': str(Path(temporary)/'computer'), 'profileDirectory': 'Profile 2'})
+            result = self.resolve(path)
+            self.assertEqual(result['userDataDir'], value['userDataDir'])
+            self.assertEqual(result['profileDirectory'], 'Default')
+
+    def test_resolve_profile_uses_chrome_last_used_only_when_unpinned(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value, path = self.fixture(temporary)
+            self.add_profile(Path(value['userDataDir']), 'Profile 7', 'Recent')
+            result = self.resolve(path)
+            self.assertEqual(result['profileDirectory'], 'Profile 7')
+            pinned = dict(runtime.read_json(path), profileDirectory='Default'); pinned_path = Path(temporary)/'pinned.json'
+            runtime.write_json(pinned_path, pinned)
+            self.assertEqual(self.resolve(pinned_path)['profileDirectory'], 'Default')
+            metadata = runtime.read_json(Path(value['userDataDir'])/'Local State')
+            metadata['profile']['last_used'] = '../computer'
+            runtime.write_json(Path(value['userDataDir'])/'Local State', metadata)
+            self.assertIsNone(self.resolve(path)['profileDirectory'])
+
+    def test_resolve_profile_reports_only_a_verified_owner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _, path = self.fixture(temporary)
+            with patch.object(runtime, 'verified_chrome_owner', return_value={'chromePid': 4242, 'chromeGeneration': 'g'}):
+                self.assertEqual(self.resolve(path)['chromePid'], 4242)
+
+    def test_resolve_profile_fails_closed_without_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'missing.json'
+            self.assertEqual(self.resolve(path), {'state': 'failed', 'code': 'BROWSER_NOT_CONFIGURED'})
+
 
 if __name__ == '__main__': unittest.main()

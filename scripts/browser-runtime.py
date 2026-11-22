@@ -191,6 +191,17 @@ def profile_exit_type(root, directory):
     return prefs.get('exit_type') if isinstance(prefs, dict) else None
 
 
+def resolved_profile(value):
+    """Read-only handoff for local launchers. It never includes runtime secrets."""
+    directory = value.get('profileDirectory')
+    if directory is None:
+        last_used = profile_metadata(value['userDataDir']).get('last_used')
+        directory = last_used if safe_profile(value['userDataDir'], last_used) else None
+    owner = verified_chrome_owner(value)
+    return {'code': 'PROFILE_RESOLVED', 'userDataDir': value['userDataDir'], 'profileDirectory': directory,
+            'chromePid': owner['chromePid'] if owner else None}
+
+
 def chrome_exit_evidence(value):
     # Sample before Popen: Chrome sets exit_type to Crashed on every launch.
     return {'chromeExitCode': None, 'crashedProfilesAtLaunch': [
@@ -618,12 +629,13 @@ def main():
     parser.add_argument('--profile-id'); parser.add_argument('--confirmation-token')
     parser.add_argument('--generation')
     parser.add_argument('--request')
-    parser.add_argument('command',choices=['status','start','stop','run','profiles','select-profile','windows','register-windows'])
+    parser.add_argument('command',choices=['status','start','stop','run','profiles','resolve-profile','select-profile','windows','register-windows'])
     args=parser.parse_args()
     try:
         value=config(args.config)
         if args.command=='run': run(value);return
         if args.command == 'profiles': result = catalog(value)[0]
+        elif args.command == 'resolve-profile': result = resolved_profile(value)
         elif args.command == 'windows':
             manager = window_manager()
             try:

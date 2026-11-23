@@ -358,6 +358,16 @@ impl Index {
     }
 }
 
+/// Bump when transcript parsing changes which messages are shown. Cached rows,
+/// bound pages and phone archives all key on `transcript_revision`, so each
+/// rebuilds from the source file instead of keeping rows the parser now hides.
+/// t2: Claude Code compaction summaries are hidden.
+const TRANSCRIPT_FORMAT: &str = "t2";
+
+pub fn transcript_revision(path: &Path) -> Result<String> {
+    Ok(format!("{TRANSCRIPT_FORMAT}:{}", fingerprint(path)?))
+}
+
 pub fn fingerprint(path: &Path) -> Result<String> {
     use std::os::unix::fs::MetadataExt;
     let m = std::fs::metadata(path)?;
@@ -708,13 +718,26 @@ fn large_transcript(file: &Path, tool: &AiTool) -> Result<Option<ChatMessage>> {
             };
             (true, role)
         }
-        AiTool::Claude => (
-            matches!(
-                kind.as_str(),
-                "user" | "assistant" | "tool_use" | "tool_result"
-            ),
-            if kind == "user" { "user" } else { "assistant" },
-        ),
+        AiTool::Claude => {
+            let mut flag = |name: &str| -> Result<bool> {
+                Ok(match json.field(root, name)? {
+                    Some(span) => json.decode::<Option<bool>>(span)?.unwrap_or(false),
+                    None => false,
+                })
+            };
+            let hidden = crate::chat_log::claude_parser::hidden_record(
+                flag("isCompactSummary")?,
+                flag("isVisibleInTranscriptOnly")?,
+            );
+            (
+                !hidden
+                    && matches!(
+                        kind.as_str(),
+                        "user" | "assistant" | "tool_use" | "tool_result"
+                    ),
+                if kind == "user" { "user" } else { "assistant" },
+            )
+        }
         AiTool::Codex => {
             let payload = json.field(root, "payload")?;
             let subtype = if let Some(payload) = payload {
@@ -848,7 +871,7 @@ pub fn cached_transcript_page(
 ) -> Result<Option<Page>> {
     let index = Index::open(&transcript_cache_path()?)?;
     let key = format!("{}:{tool:?}", path.display());
-    if index.current(&key, &fingerprint(path)?)? {
+    if index.current(&key, &transcript_revision(path)?)? {
         Ok(Some(index.page(&key, cleared, offset, limit, false)?))
     } else {
         Ok(None)
@@ -874,10 +897,11 @@ pub fn transcript_page(
     use std::os::unix::fs::MetadataExt;
     let mut index = Index::open(&transcript_cache_path()?)?;
     let key = format!("{}:{tool:?}", path.display());
-    let rev = fingerprint(path)?;
+    let rev = transcript_revision(path)?;
     if !index.current(&key, &rev)? {
         let meta = std::fs::metadata(path)?;
-        let identity = format!("{}:{}", meta.dev(), meta.ino());
+        // Rows parsed by another format are replaced, never appended to.
+        let identity = format!("{TRANSCRIPT_FORMAT}:{}:{}", meta.dev(), meta.ino());
         index.conn.execute_batch("CREATE TABLE IF NOT EXISTS history_sources(key TEXT PRIMARY KEY,identity TEXT NOT NULL,offset INTEGER NOT NULL,length INTEGER NOT NULL)")?;
         let previous: Option<(String, i64, i64)> = index
             .conn
@@ -998,7 +1022,7 @@ fn bound_revision(
         if binding.transcript_path.as_os_str().is_empty() || binding.pane.tool == "kiro" {
             "overlay".into()
         } else {
-            fingerprint(&binding.transcript_path)?
+            transcript_revision(&binding.transcript_path)?
         },
         events.history_revision(binding.storage_key(), 0)?
     ))
@@ -1072,8 +1096,17 @@ mod tests {
     use super::*;
     use crate::chat_log::ContentBlock;
 
+    /// Production runs history work one job at a time (`permit`). Tests that
+    /// write the shared transcript cache do the same, so SQLite never sees
+    /// competing writers.
+    fn transcript_cache_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn bound_history_reconciles_sent_user_message_with_native_echo() {
+        let _cache = transcript_cache_lock();
         use crate::chat_binding::{ChatBinding, PaneIdentity};
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("transcript.jsonl");
@@ -1336,6 +1369,7 @@ mod tests {
 
     #[test]
     fn transcript_index_retries_partial_lines_and_rebuilds_after_truncation() {
+        let _cache = transcript_cache_lock();
         use std::io::Write;
         let mut source = tempfile::NamedTempFile::new().unwrap();
         let record = |text: &str| {
@@ -1373,6 +1407,71 @@ mod tests {
         assert!(serde_json::to_string(&page.messages)
             .unwrap()
             .contains("replacement"));
+    }
+
+    fn claude_record(kind: &str, text: &str) -> String {
+        serde_json::json!({"type":kind,"timestamp":"2026-11-23T10:00:00Z",
+            "message":{"role":kind,"content":[{"type":"text","text":text}]}})
+        .to_string()
+    }
+
+    fn compaction_summary(text: &str) -> String {
+        serde_json::json!({"type":"user","timestamp":"2026-11-23T10:01:00Z",
+            "isCompactSummary":true,"isVisibleInTranscriptOnly":true,
+            "message":{"role":"user","content":text}})
+        .to_string()
+    }
+
+    #[test]
+    fn oversized_claude_compaction_summary_stays_out_of_history() {
+        let _cache = transcript_cache_lock();
+        use std::io::Write;
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        let summary = compaction_summary(&"synthetic summary ".repeat(20_000));
+        assert!(summary.len() > INLINE_RECORD_BYTES);
+        writeln!(source, "{}\n{summary}\n{}", claude_record("user", "before"), claude_record("assistant", "after")).unwrap();
+        let page = transcript_page(source.path(), &AiTool::Claude, None, 0, 30).unwrap();
+        assert_eq!(page.total, 2);
+        assert!(!serde_json::to_string(&page.messages).unwrap().contains("synthetic summary"));
+    }
+
+    #[test]
+    fn transcript_rows_cached_by_an_older_parser_are_rebuilt() {
+        let _cache = transcript_cache_lock();
+        use std::io::Write;
+        use std::os::unix::fs::MetadataExt;
+        // Rows and offsets exactly as the previous parser stored them, summary included.
+        let seed_legacy_cache = |path: &Path| {
+            let meta = std::fs::metadata(path).unwrap();
+            let key = format!("{}:{:?}", path.display(), AiTool::Claude);
+            let index = Index::open(&transcript_cache_path().unwrap()).unwrap();
+            index.conn.execute_batch("CREATE TABLE IF NOT EXISTS history_sources(key TEXT PRIMARY KEY,identity TEXT NOT NULL,offset INTEGER NOT NULL,length INTEGER NOT NULL)").unwrap();
+            index.conn.execute("DELETE FROM history_messages WHERE key=?", [&key]).unwrap();
+            for (seq, text) in ["before", "synthetic summary"].into_iter().enumerate() {
+                let body = serde_json::to_string(&user_at(0, text)).unwrap();
+                index.conn.execute("INSERT INTO history_messages(key,seq,time,body,body_key) VALUES (?,?,?,?,?)",
+                    params![key, seq as i64, 0, body, body_key(&body)]).unwrap();
+            }
+            index.conn.execute("INSERT OR REPLACE INTO history_sources VALUES (?,?,?,?)",
+                params![key, format!("{}:{}", meta.dev(), meta.ino()), meta.len() as i64, meta.len() as i64]).unwrap();
+            index.conn.execute("INSERT OR REPLACE INTO history_snapshots VALUES (?,?)",
+                params![key, fingerprint(path).unwrap()]).unwrap();
+        };
+        let shown = |path: &Path| {
+            let page = transcript_page(path, &AiTool::Claude, None, 0, 30).unwrap();
+            (page.total, serde_json::to_string(&page.messages).unwrap().contains("synthetic summary"))
+        };
+
+        let mut dormant = tempfile::NamedTempFile::new().unwrap();
+        writeln!(dormant, "{}\n{}", claude_record("user", "before"), compaction_summary("synthetic summary")).unwrap();
+        seed_legacy_cache(dormant.path());
+        assert_eq!(shown(dormant.path()), (1, false));
+
+        let mut growing = tempfile::NamedTempFile::new().unwrap();
+        writeln!(growing, "{}\n{}", claude_record("user", "before"), compaction_summary("synthetic summary")).unwrap();
+        seed_legacy_cache(growing.path());
+        writeln!(growing, "{}", claude_record("assistant", "after")).unwrap();
+        assert_eq!(shown(growing.path()), (2, false));
     }
 
     #[test]

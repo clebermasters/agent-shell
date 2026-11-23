@@ -14,6 +14,17 @@ struct RawLine {
     line_type: String,
     timestamp: Option<DateTime<Utc>>,
     message: Option<RawMessage>,
+    /// Claude Code's post-compaction summary. The terminal shows only a
+    /// "compacted" notice, so the chat should not show the summary either.
+    #[serde(default, rename = "isCompactSummary")]
+    compact_summary: Option<bool>,
+    #[serde(default, rename = "isVisibleInTranscriptOnly")]
+    transcript_only: Option<bool>,
+}
+
+/// Records Claude Code keeps for the model's context but never displays.
+pub fn hidden_record(compact_summary: bool, transcript_only: bool) -> bool {
+    compact_summary || transcript_only
 }
 
 #[derive(Deserialize)]
@@ -63,8 +74,8 @@ enum RawToolResultContent {
 
 /// Parse a single JSONL line from a Claude Code log file.
 ///
-/// Returns `None` for blank lines, summary entries, and malformed JSON
-/// (the latter also emits a tracing warning).
+/// Returns `None` for blank lines, summary entries, compaction summaries and
+/// malformed JSON (the latter also emits a tracing warning).
 pub fn parse_line(line: &str) -> Option<ChatMessage> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -85,6 +96,12 @@ pub fn parse_line(line: &str) -> Option<ChatMessage> {
         && raw.line_type != "tool_use"
         && raw.line_type != "tool_result"
     {
+        return None;
+    }
+    if hidden_record(
+        raw.compact_summary.unwrap_or(false),
+        raw.transcript_only.unwrap_or(false),
+    ) {
         return None;
     }
 
@@ -377,6 +394,17 @@ mod tests {
     fn skip_summary_lines() {
         let line = r#"{"uuid":"s","parentUuid":"x","timestamp":"2026-02-24T10:01:00Z","type":"summary","message":{"role":"assistant","content":"summary text"}}"#;
         assert!(parse_line(line).is_none());
+    }
+
+    #[test]
+    fn skip_compaction_summary() {
+        // After compacting, Claude Code logs the whole summary as a hidden user record.
+        let summary = r#"{"uuid":"c1","timestamp":"2026-02-24T10:10:00Z","type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation. Synthetic summary."}}"#;
+        assert!(parse_line(summary).is_none());
+        let transcript_only = r#"{"uuid":"c2","timestamp":"2026-02-24T10:10:01Z","type":"user","isVisibleInTranscriptOnly":true,"message":{"role":"user","content":[{"type":"text","text":"hidden"}]}}"#;
+        assert!(parse_line(transcript_only).is_none());
+        let visible = r#"{"uuid":"c3","timestamp":"2026-02-24T10:10:02Z","type":"user","isCompactSummary":false,"isVisibleInTranscriptOnly":false,"message":{"role":"user","content":"visible"}}"#;
+        assert_eq!(parse_line(visible).unwrap().role, "user");
     }
 
     #[test]

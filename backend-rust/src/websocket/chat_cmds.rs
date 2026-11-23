@@ -169,7 +169,7 @@ pub(super) fn bound_sync_revision(
     } else if binding.pane.tool == "opencode" {
         opencode_revision(&binding.transcript_path, &binding.conversation_id)?
     } else {
-        crate::history::fingerprint(&binding.transcript_path)?
+        crate::history::transcript_revision(&binding.transcript_path)?
     };
     Ok(format!(
         "sync-v2:{}:{source}:{}:{cleared:?}",
